@@ -1,5 +1,4 @@
 #include "asyncio/dynamicBuffer.h"
-#include "redblacktree.h"
 #include "asyncioInternal.h"
 
 #include <assert.h>
@@ -17,7 +16,7 @@
 
 #include "Debug.h"
 
-#define MAX_EVENTS 255
+#define MAX_EVENTS 256
 
 extern const char *poolId;
 
@@ -50,6 +49,7 @@ typedef struct asyncOpList {
 } asyncOpList;
 
 typedef struct fdStruct {
+  int used;
   int epollEvents;
   asyncOpList readOps;
   asyncOpList writeOps;
@@ -71,7 +71,10 @@ struct asyncOp {
 typedef struct epollBase {
   asyncBase B;
   int pipeFd[2];
-  TreePtr fdMap;
+
+  fdStruct *fdMap;
+  int fdMapSize;
+  
   int epollFd;
 } epollBase;
 
@@ -134,12 +137,9 @@ static int isWriteOperation(IoActionTy action)
           action == ioWriteMsg);
 }
 
-static int fdExists(TreePtr opMap, int fd)
+static int fdExists(epollBase *base, int fd)
 {
-  descrStruct keyFd = {fd, NULL};
-  treeNodePtr F = findNode(opMap, keyFd);
-
-  return (F != NULL);
+  return fd < base->fdMapSize && base->fdMap[fd].epollEvents;
 }
 
 static int getFd(asyncOp *op)
@@ -160,22 +160,21 @@ static int getFd(asyncOp *op)
 
 static void setEventsFd(epollBase *base, int fd, int event, setMode mode)
 {
-  descrStruct keyFd = {fd, NULL};
-  treeNodePtr F = findNode(base->fdMap, keyFd);
-  fdStruct *_fdStruct = (fdStruct*)F->keyValue.data;
+  fdStruct *fds = &base->fdMap[fd];
   if (mode == Add)
-    _fdStruct->epollEvents |= event;
+    fds->epollEvents |= event;
   else
-    _fdStruct->epollEvents &=~ event;
-  epollControl(base->epollFd,
-               EPOLL_CTL_MOD,
-               _fdStruct->epollEvents,
-               fd
-               );
+    fds->epollEvents &= (~event);
+  
+  epollControl(base->epollFd, EPOLL_CTL_MOD, fds->epollEvents, fd);
 }
 
 static void asyncOpLink(asyncOpList *list, asyncOp *op)
 {
+  epollBase *base = (epollBase*)op->info.object->base;
+  fdStruct *fds = &base->fdMap[getFd(op)];
+  fds->used = 1;
+  
   if (list->tail) {
     list->tail->next = op;
     op->prev = list->tail;
@@ -185,7 +184,7 @@ static void asyncOpLink(asyncOpList *list, asyncOp *op)
     op->prev = 0;
     op->next = 0;
     list->head = list->tail = op;
-    epollBase *base = (epollBase*)op->info.object->base;
+    
     if (isWriteOperation(op->info.currentAction))
       setEventsFd(base, getFd(op), EPOLLOUT, Add);
     else
@@ -197,6 +196,8 @@ static void asyncOpLink(asyncOpList *list, asyncOp *op)
 
 static void asyncOpUnlink(asyncOp *op)
 {
+  epollBase *base = (epollBase*)op->info.object->base;
+  
   if (op->list) {
     asyncOpList *list = op->list;
     if (list->head == op)
@@ -210,7 +211,6 @@ static void asyncOpUnlink(asyncOp *op)
       op->next->prev = op->prev;
 
     if (list->head == 0) {
-      epollBase *base = (epollBase*)op->info.object->base;
       if (isWriteOperation(op->info.currentAction))
         setEventsFd(base, getFd(op), EPOLLOUT, Del);
       else
@@ -230,25 +230,33 @@ static void initList(asyncOpList *list)
   list->tail = 0;
 }
 
-static asyncOpList *getFdOperations(TreePtr opMap, int fd, int isWrite)
+static asyncOpList *getFdOperations(epollBase *base, int fd, int isWrite)
 {
-  descrStruct keyFd = {fd, NULL};
-  fdStruct *_fdStruct;
-  treeNodePtr F = findNode(opMap, keyFd);
-  if (F == NULL) {
-    _fdStruct = malloc(sizeof(fdStruct));
-    initList(&_fdStruct->readOps);
-    initList(&_fdStruct->writeOps);
-    _fdStruct->epollEvents = 0;
-    keyFd.data = (void*)_fdStruct;
-    insertValue(opMap, keyFd);
+  int i;
+  fdStruct *fds;
+  if (fd >= base->fdMapSize) {
+    fds = &base->fdMap[fd];
   } else {
-    _fdStruct = (fdStruct*)F->keyValue.data;
+    int newfdMapSize = base->fdMapSize;
+    while (newfdMapSize < fd)
+      newfdMapSize *= 2;
+    
+    base->fdMap = realloc(base->fdMap, newfdMapSize*sizeof(fdStruct));
+    for (i = base->fdMapSize; i < newfdMapSize; i++)
+      base->fdMap[i].used = 0;
+    
+    base->fdMapSize = newfdMapSize;
+    fds = &base->fdMap[fd];
   }
-  return isWrite ? &_fdStruct->readOps : &_fdStruct->writeOps;
+  
+  if (!fds->used) {
+    initList(&fds->readOps);
+    initList(&fds->writeOps);
+    fds->used = 1;
+  }
+  
+  return isWrite ? &fds->readOps : &fds->writeOps;  
 }
-
-
 
 static void timerCb(int sig, siginfo_t *si, void *uc)
 {
@@ -313,14 +321,9 @@ static void startOperation(asyncOp *op,
       asyncOpUnlink(op);
       break;
     default :
-      if (!fdExists(localBase->fdMap, getFd(op)))
+      if (!fdExists(localBase, getFd(op)))
         epollControl(localBase->epollFd, EPOLL_CTL_ADD, 0, getFd(op));
-
-      asyncOpLink(getFdOperations(localBase->fdMap,
-                                  getFd(op),
-                                  isWriteOperation(action)),
-                  op
-                  );
+      asyncOpLink(getFdOperations(localBase, getFd(op), isWriteOperation(action)), op);
       break;
   }
 
@@ -340,8 +343,8 @@ asyncBase *epollNewAsyncBase()
     pipe(base->pipeFd);
     base->B.methodImpl = epollImpl;
 
-    base->fdMap = malloc(sizeof(Tree));
-    initTree(base->fdMap);
+    base->fdMap = (fdStruct*)calloc(MAX_EVENTS, sizeof(fdStruct));
+    base->fdMapSize = MAX_EVENTS;
 
     base->epollFd = epoll_create(MAX_EVENTS);
     if (base->epollFd == -1) {
@@ -395,13 +398,12 @@ static void finishOperation(asyncOp *op,
 
 
 static void processReadyFd(epollBase *base,
-                           TreePtr opMap,
                            int fd,
                            int isRead)
 {
   int available;
 
-  asyncOpList *list = getFdOperations(opMap, fd, !isRead);
+  asyncOpList *list = getFdOperations(base, fd, !isRead);
   asyncOp *op = list->head;
   if (!op)
     return;
@@ -542,9 +544,9 @@ void epollNextFinishedOperation(asyncBase *base)
         }
       } else {
         if (events[n].events & EPOLLIN)
-          processReadyFd(localBase, localBase->fdMap, events[n].data.fd, 1);
+          processReadyFd(localBase, events[n].data.fd, 1);
         else if (events[n].events & EPOLLOUT)
-          processReadyFd(localBase, localBase->fdMap, events[n].data.fd, 0);
+          processReadyFd(localBase, events[n].data.fd, 0);
       }
     }
   }

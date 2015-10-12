@@ -12,7 +12,6 @@
 #include <sys/types.h>
 
 #include <map>
-#include <queue>
 #include <stdio.h>
 
 extern const char *poolId;

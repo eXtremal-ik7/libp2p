@@ -1,9 +1,8 @@
 set(Sources asyncio.c
   cstl.c
-  fmalloc.c
+  objectPool.c
   dynamicBuffer.c
   timer.c
-  redblacktree.c
 )
 
 if (SSL_ENABLED)
