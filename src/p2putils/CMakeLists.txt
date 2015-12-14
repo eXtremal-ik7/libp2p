@@ -18,3 +18,8 @@ add_library(p2putils
   UriParse.cpp
   ${CMAKE_CURRENT_BINARY_DIR}/http.cpp
 )
+
+install(
+  TARGETS p2putils
+  ARCHIVE DESTINATION lib
+)

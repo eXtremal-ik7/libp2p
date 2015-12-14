@@ -354,14 +354,15 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
         component.data.data = p;
         component.data.size = state->dataRemaining;
         callback(&component, arg);
-        state->ptr = (char*)p;
+        state->ptr = (char*)p + state->dataRemaining;
         state->state = httpStLast;
       } else if (p != state->end) {
         size_t size = std::min(state->dataRemaining, (size_t)(state->end - p));
         component.type = httpDtDataFragment;
         component.data.data = p;
+        component.data.size = size;
         callback(&component, arg);
-        state->ptr = (char*)p;
+        state->ptr = (char*)p + size;
         state->firstFragment = false;
         state->dataRemaining -= size;
         return httpResultNeedMoreData;
