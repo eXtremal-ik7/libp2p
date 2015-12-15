@@ -45,12 +45,10 @@ typedef struct pipeMsg {
 typedef struct asyncOpList {
   asyncOp *head;
   asyncOp *tail;
-  int epollEvents;
 } asyncOpList;
 
 typedef struct fdStruct {
-  int used;
-  int epollEvents;
+  int initialized;
   asyncOpList readOps;
   asyncOpList writeOps;
 } fdStruct;
@@ -137,11 +135,6 @@ static int isWriteOperation(IoActionTy action)
           action == ioWriteMsg);
 }
 
-static int fdExists(epollBase *base, int fd)
-{
-  return fd < base->fdMapSize && base->fdMap[fd].epollEvents;
-}
-
 static int getFd(asyncOp *op)
 {
   switch (op->info.object->type) {
@@ -158,22 +151,58 @@ static int getFd(asyncOp *op)
   }
 }
 
-static void setEventsFd(epollBase *base, int fd, int event, setMode mode)
+
+static void initList(asyncOpList *list)
 {
-  fdStruct *fds = &base->fdMap[fd];
-  if (mode == Add)
-    fds->epollEvents |= event;
-  else
-    fds->epollEvents &= (~event);
-  
-  epollControl(base->epollFd, EPOLL_CTL_MOD, fds->epollEvents, fd);
+  list->head = 0;
+  list->tail = 0;
 }
 
-static void asyncOpLink(asyncOpList *list, asyncOp *op)
+static fdStruct *getFdStruct(epollBase *base, int fd)
 {
-  epollBase *base = (epollBase*)op->info.object->base;
-  fdStruct *fds = &base->fdMap[getFd(op)];
-  fds->used = 1;
+  int i;
+  fdStruct *fds;
+  if (fd < base->fdMapSize) {
+    fds = &base->fdMap[fd];
+  } else {
+    int newfdMapSize = base->fdMapSize;
+    while (newfdMapSize <= fd)
+      newfdMapSize *= 2;
+    
+    base->fdMap = realloc(base->fdMap, newfdMapSize*sizeof(fdStruct));
+    for (i = base->fdMapSize; i < newfdMapSize; i++)
+      base->fdMap[i].initialized = 0;
+    
+    base->fdMapSize = newfdMapSize;
+    fds = &base->fdMap[fd];
+  }
+  
+  if (!fds->initialized) {
+    initList(&fds->readOps);
+    initList(&fds->writeOps);
+    fds->initialized = 1;
+  }
+  
+  return fds;  
+}
+
+static void asyncOpLink(fdStruct *fds, asyncOp *op)
+{
+  asyncOpList *list;
+  asyncOpList *oppositeList;
+  int event;
+  int oppositeEvent;
+  if (isWriteOperation(op->info.currentAction)) {
+    list = &fds->writeOps;
+    oppositeList = &fds->readOps;
+    event = EPOLLOUT;
+    oppositeEvent = EPOLLIN;
+  } else {
+    list = &fds->readOps;    
+    oppositeList = &fds->writeOps;
+    event = EPOLLIN;
+    oppositeEvent = EPOLLOUT;
+  }
   
   if (list->tail) {
     list->tail->next = op;
@@ -184,11 +213,10 @@ static void asyncOpLink(asyncOpList *list, asyncOp *op)
     op->prev = 0;
     op->next = 0;
     list->head = list->tail = op;
-    
-    if (isWriteOperation(op->info.currentAction))
-      setEventsFd(base, getFd(op), EPOLLOUT, Add);
-    else
-      setEventsFd(base, getFd(op), EPOLLIN, Add);
+    epollBase *base = (epollBase*)op->info.object->base;
+    int action = oppositeList->head ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
+    int events = oppositeList->head ? event | oppositeEvent : event;
+    epollControl(base->epollFd, action, events, getFd(op));
   }
 
   op->list = list;
@@ -196,10 +224,20 @@ static void asyncOpLink(asyncOpList *list, asyncOp *op)
 
 static void asyncOpUnlink(asyncOp *op)
 {
-  epollBase *base = (epollBase*)op->info.object->base;
+  epollBase *base = (epollBase*)op->info.object->base;  
+  asyncOpList *list = op->list;
+  asyncOpList *oppositeList;
+  fdStruct *fds = getFdStruct(base, getFd(op));
+  int oppositeEvent;
+  if (isWriteOperation(op->info.currentAction)) {
+    oppositeList = &fds->readOps;
+    oppositeEvent = EPOLLIN;
+  } else {
+    oppositeList = &fds->writeOps;
+    oppositeEvent = EPOLLOUT;
+  }  
   
-  if (op->list) {
-    asyncOpList *list = op->list;
+  if (list) {
     if (list->head == op)
       list->head = op->next;
     if (list->tail == op)
@@ -211,51 +249,14 @@ static void asyncOpUnlink(asyncOp *op)
       op->next->prev = op->prev;
 
     if (list->head == 0) {
-      if (isWriteOperation(op->info.currentAction))
-        setEventsFd(base, getFd(op), EPOLLOUT, Del);
-      else
-        setEventsFd(base, getFd(op), EPOLLIN, Del);
+      int action = oppositeList->head ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
+      int events = oppositeList->head ? oppositeEvent : 0;
+      epollControl(base->epollFd, action, events, getFd(op));
     }
 
     op->list = 0;
     objectRelease(&op->info.object->base->pool, op, poolId);
   }
-}
-
-
-
-static void initList(asyncOpList *list)
-{
-  list->head = 0;
-  list->tail = 0;
-}
-
-static asyncOpList *getFdOperations(epollBase *base, int fd, int isWrite)
-{
-  int i;
-  fdStruct *fds;
-  if (fd >= base->fdMapSize) {
-    fds = &base->fdMap[fd];
-  } else {
-    int newfdMapSize = base->fdMapSize;
-    while (newfdMapSize < fd)
-      newfdMapSize *= 2;
-    
-    base->fdMap = realloc(base->fdMap, newfdMapSize*sizeof(fdStruct));
-    for (i = base->fdMapSize; i < newfdMapSize; i++)
-      base->fdMap[i].used = 0;
-    
-    base->fdMapSize = newfdMapSize;
-    fds = &base->fdMap[fd];
-  }
-  
-  if (!fds->used) {
-    initList(&fds->readOps);
-    initList(&fds->writeOps);
-    fds->used = 1;
-  }
-  
-  return isWrite ? &fds->readOps : &fds->writeOps;  
 }
 
 static void timerCb(int sig, siginfo_t *si, void *uc)
@@ -321,9 +322,7 @@ static void startOperation(asyncOp *op,
       asyncOpUnlink(op);
       break;
     default :
-      if (!fdExists(localBase, getFd(op)))
-        epollControl(localBase->epollFd, EPOLL_CTL_ADD, 0, getFd(op));
-      asyncOpLink(getFdOperations(localBase, getFd(op), isWriteOperation(action)), op);
+      asyncOpLink(getFdStruct(localBase, getFd(op)), op);      
       break;
   }
 
@@ -392,7 +391,6 @@ static void finishOperation(asyncOp *op,
     op->info.callback(&op->info);
   if (status != aosMonitoring)
     asyncOpUnlink(op);
-
 }
 
 
@@ -403,7 +401,8 @@ static void processReadyFd(epollBase *base,
 {
   int available;
 
-  asyncOpList *list = getFdOperations(base, fd, !isRead);
+  fdStruct *fds = getFdStruct(base, fd);
+  asyncOpList *list = isRead ? &fds->readOps : &fds->writeOps;
   asyncOp *op = list->head;
   if (!op)
     return;
