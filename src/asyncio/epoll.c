@@ -48,7 +48,6 @@ typedef struct asyncOpList {
 } asyncOpList;
 
 typedef struct fdStruct {
-  int initialized;
   asyncOpList readOps;
   asyncOpList writeOps;
 } fdStruct;
@@ -57,7 +56,6 @@ struct asyncOp {
   aioInfo info;
   timer_t timerId;
   int counter;
-  asyncOpList *list;
   asyncOp *prev;
   asyncOp *next;
   int useInternalBuffer;
@@ -151,13 +149,6 @@ static int getFd(asyncOp *op)
   }
 }
 
-
-static void initList(asyncOpList *list)
-{
-  list->head = 0;
-  list->tail = 0;
-}
-
 static fdStruct *getFdStruct(epollBase *base, int fd)
 {
   int i;
@@ -168,19 +159,12 @@ static fdStruct *getFdStruct(epollBase *base, int fd)
     int newfdMapSize = base->fdMapSize;
     while (newfdMapSize <= fd)
       newfdMapSize *= 2;
-    
+
     base->fdMap = realloc(base->fdMap, newfdMapSize*sizeof(fdStruct));
-    for (i = base->fdMapSize; i < newfdMapSize; i++)
-      base->fdMap[i].initialized = 0;
-    
+    memset(&base->fdMap[base->fdMapSize], 0, (newfdMapSize-base->fdMapSize)*sizeof(fdStruct));
     base->fdMapSize = newfdMapSize;
+    
     fds = &base->fdMap[fd];
-  }
-  
-  if (!fds->initialized) {
-    initList(&fds->readOps);
-    initList(&fds->writeOps);
-    fds->initialized = 1;
   }
   
   return fds;  
@@ -218,45 +202,46 @@ static void asyncOpLink(fdStruct *fds, asyncOp *op)
     int events = oppositeList->head ? event | oppositeEvent : event;
     epollControl(base->epollFd, action, events, getFd(op));
   }
-
-  op->list = list;
 }
 
 static void asyncOpUnlink(asyncOp *op)
 {
-  epollBase *base = (epollBase*)op->info.object->base;  
-  asyncOpList *list = op->list;
+  epollBase *base = (epollBase*)op->info.object->base;
+  int fd = getFd(op);
+  if (fd < 0)
+    return;
+  
+  fdStruct *fds = getFdStruct(base, fd);
+  asyncOpList *list;
   asyncOpList *oppositeList;
-  fdStruct *fds = getFdStruct(base, getFd(op));
   int oppositeEvent;
   if (isWriteOperation(op->info.currentAction)) {
+    list = &fds->writeOps;
     oppositeList = &fds->readOps;
     oppositeEvent = EPOLLIN;
   } else {
+    list = &fds->readOps;    
     oppositeList = &fds->writeOps;
     oppositeEvent = EPOLLOUT;
-  }  
-  
-  if (list) {
-    if (list->head == op)
-      list->head = op->next;
-    if (list->tail == op)
-      list->tail = op->prev;
-
-    if (op->prev)
-      op->prev->next = op->next;
-    if (op->next)
-      op->next->prev = op->prev;
-
-    if (list->head == 0) {
-      int action = oppositeList->head ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
-      int events = oppositeList->head ? oppositeEvent : 0;
-      epollControl(base->epollFd, action, events, getFd(op));
-    }
-
-    op->list = 0;
-    objectRelease(&op->info.object->base->pool, op, poolId);
   }
+
+  if (list->head == op)
+    list->head = op->next;
+  if (list->tail == op)
+    list->tail = op->prev;
+
+  if (op->prev)
+    op->prev->next = op->next;
+  if (op->next)
+    op->next->prev = op->prev;
+
+  if (list->head == 0) {
+    int action = oppositeList->head ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
+    int events = oppositeList->head ? oppositeEvent : 0;
+    epollControl(base->epollFd, action, events, getFd(op));
+  }
+
+  objectRelease(&op->info.object->base->pool, op, poolId);
 }
 
 static void timerCb(int sig, siginfo_t *si, void *uc)
@@ -579,7 +564,6 @@ asyncOp *epollNewAsyncOp(asyncBase *base)
     struct sigevent sEvent;
     op->internalBuffer = 0;
     op->internalBufferSize = 0;
-    op->list = 0;
     op->next = 0;
     op->prev = 0;
     sEvent.sigev_notify = SIGEV_SIGNAL;
@@ -690,5 +674,3 @@ void epollMonitorStop(asyncOp *op)
 {
   startOperation(op, ioMonitorStop, 0);
 }
-
-
