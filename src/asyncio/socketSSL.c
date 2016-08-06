@@ -64,7 +64,7 @@ static void finishSSLOp(SSLOp *Op, AsyncOpStatus status)
     SSLSocket *S = current->info.socket;
     switch (current->type) {
       case sslOpConnect :
-        asyncConnect(S->object, &current->address, current->usTimeout, connectProc, current);
+        aioConnect(S->object, &current->address, current->usTimeout, connectProc, current);
         break;
       case sslOpRead :
         asyncRead(S->object, S->sslReadBuffer, S->sslReadBufferSize, afNone, current->usTimeout, readProc, current);
@@ -200,7 +200,7 @@ void sslConnect(SSLSocket *socket,
   
   if (!socket->current) {
     socket->current = newOp;
-    asyncConnect(socket->object, address, usTimeout, connectProc, newOp);    
+    aioConnect(socket->object, address, usTimeout, connectProc, newOp);    
   } else {
     newOp->address = *address;
     newOp->usTimeout = usTimeout;

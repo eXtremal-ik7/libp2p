@@ -48,6 +48,7 @@ struct asyncBase {
   enum AsyncMethod method;
   struct asyncImpl methodImpl;
   struct ObjectPool pool;
+  int coroutineMode;
 #ifndef NDEBUG
   int opsCount;
 #endif

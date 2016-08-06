@@ -6,11 +6,13 @@
 #include <mswsock.h>
 #include <Windows.h>
 typedef SOCKET socketTy;
+#define INVALID_SOCKET INVALID_HANDLE_VALUE
 #elif defined(OS_COMMONUNIX)
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#define INVALID_SOCKET -1
 typedef int socketTy;
 #endif
 

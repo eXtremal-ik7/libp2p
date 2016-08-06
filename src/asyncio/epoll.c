@@ -128,9 +128,9 @@ static void epollControl(int epollFd, int action, int events, int fd)
 
 static int isWriteOperation(IoActionTy action)
 {
-  return (action == ioConnect ||
-          action == ioWrite ||
-          action == ioWriteMsg);
+  return (action == actConnect ||
+          action == actWrite ||
+          action == actWriteMsg);
 }
 
 static int getFd(asyncOp *op)
@@ -285,12 +285,12 @@ static void startOperation(asyncOp *op,
   epollBase *localBase = (epollBase *)op->info.object->base;
   op->info.currentAction = action;
 
-  if (op->info.currentAction == ioMonitor)
+  if (op->info.currentAction == actMonitor)
     op->info.status = aosMonitoring;
   else
     op->info.status = aosPending;
 
-  if (op->useInternalBuffer && (action == ioWrite || action == ioWriteMsg)) {
+  if (op->useInternalBuffer && (action == actWrite || action == actWriteMsg)) {
     if (op->internalBuffer == 0) {
       op->internalBuffer = malloc(op->info.transactionSize);
       op->internalBufferSize = op->info.transactionSize;
@@ -303,7 +303,7 @@ static void startOperation(asyncOp *op,
   }
 
   switch (action) {
-    case ioMonitorStop :
+    case actMonitorStop :
       asyncOpUnlink(op);
       break;
     default :
@@ -311,7 +311,7 @@ static void startOperation(asyncOp *op,
       break;
   }
 
-  if (action == ioMonitorStop || action == ioMonitor)
+  if (action == actMonitorStop || action == actMonitor)
     epollPostEmptyOperation((asyncBase *)localBase);
 
   if (usTimeout)
@@ -372,7 +372,9 @@ static void finishOperation(asyncOp *op,
   if (needStopTimer)
     stopTimer(op);
   op->info.status = status;
-  if (op->info.callback)
+  if (getCoroutineMode(op->info.object->base) == 1)
+    coroutineCall(op->info.coroutine);
+  else if (op->info.callback)
     op->info.callback(&op->info);
   if (status != aosMonitoring)
     asyncOpUnlink(op);
@@ -394,14 +396,14 @@ static void processReadyFd(epollBase *base,
   assert(fd == getFd(op) && "Lost asyncop found!");
   ioctl(fd, FIONREAD, &available);
   if (op->info.object->type == ioObjectSocket && available == 0 && isRead) {
-    if (op->info.currentAction != ioAccept) {
+    if (op->info.currentAction != actAccept) {
       finishOperation(op, aosDisconnected, 1);
       return;
     }
   }
 
   switch (op->info.currentAction) {
-    case ioConnect : {
+    case actConnect : {
       int error;
       socklen_t size = sizeof(error);
       getsockopt(op->info.object->hSocket,
@@ -409,7 +411,7 @@ static void processReadyFd(epollBase *base,
       finishOperation(op, (error == 0) ? aosSuccess : aosUnknownError, 1);
       break;
     }
-    case ioAccept : {
+    case actAccept : {
       struct sockaddr_in clientAddr;
       socklen_t clientAddrSize = sizeof(clientAddr);
       op->info.acceptSocket =
@@ -425,7 +427,7 @@ static void processReadyFd(epollBase *base,
       }
       break;
     }
-    case ioRead : {
+    case actRead : {
       int readyForRead = 0;
       uint8_t *ptr = (uint8_t *)op->info.buffer + op->info.bytesTransferred;
       readyForRead =
@@ -441,7 +443,7 @@ static void processReadyFd(epollBase *base,
         finishOperation(op, aosSuccess, 1);
       break;
     }
-    case ioWrite : {
+    case actWrite : {
       void *buffer = op->useInternalBuffer ?
                      op->internalBuffer : op->info.buffer;
       uint8_t *ptr = (uint8_t*)buffer + op->info.bytesTransferred;
@@ -461,14 +463,14 @@ static void processReadyFd(epollBase *base,
 
       break;
     }
-    case ioReadMsg : {
+    case actReadMsg : {
       void *ptr = dynamicBufferAlloc(op->info.dynamicArray, available);
       read(fd, ptr, available);
       op->info.bytesTransferred += available;
       finishOperation(op, aosSuccess, 1);
       break;
     }
-    case ioWriteMsg : {
+    case actWriteMsg : {
       struct sockaddr_in remoteAddress;
       void *ptr = op->useInternalBuffer ?
                   op->internalBuffer : op->info.buffer;
@@ -481,7 +483,7 @@ static void processReadyFd(epollBase *base,
       finishOperation(op, aosSuccess, 1);
       break;
     }
-    case ioMonitor : {
+    case actMonitor : {
       finishOperation(op, aosMonitoring, 0);
       break;
     }
@@ -625,32 +627,32 @@ void epollAsyncConnect(asyncOp *op,
     return;
   }
 
-  startOperation(op, ioConnect, usTimeout);
+  startOperation(op, actConnect, usTimeout);
 }
 
 
 void epollAsyncAccept(asyncOp *op, uint64_t usTimeout)
 {
-  startOperation(op, ioAccept, usTimeout);
+  startOperation(op, actAccept, usTimeout);
 }
 
 
 void epollAsyncRead(asyncOp *op, uint64_t usTimeout)
 {
-  startOperation(op, ioRead, usTimeout);
+  startOperation(op, actRead, usTimeout);
 }
 
 
 void epollAsyncWrite(asyncOp *op, uint64_t usTimeout)
 {
   op->useInternalBuffer = !(op->info.flags & afNoCopy);
-  startOperation(op, ioWrite, usTimeout);
+  startOperation(op, actWrite, usTimeout);
 }
 
 
 void epollAsyncReadMsg(asyncOp *op, uint64_t usTimeout)
 {
-  startOperation(op, ioReadMsg, usTimeout);
+  startOperation(op, actReadMsg, usTimeout);
 }
 
 
@@ -660,17 +662,17 @@ void epollAsyncWriteMsg(asyncOp *op,
 {
   op->useInternalBuffer = !(op->info.flags & afNoCopy);
   op->info.host = *address;
-  startOperation(op, ioWriteMsg, usTimeout);
+  startOperation(op, actWriteMsg, usTimeout);
 }
 
 
 void epollMonitor(asyncOp *op)
 {
-  startOperation(op, ioMonitor, 0);
+  startOperation(op, actMonitor, 0);
 }
 
 
 void epollMonitorStop(asyncOp *op)
 {
-  startOperation(op, ioMonitorStop, 0);
+  startOperation(op, actMonitorStop, 0);
 }

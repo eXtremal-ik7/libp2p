@@ -8,6 +8,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 
@@ -92,9 +93,9 @@ static struct asyncImpl selectImpl = {
 
 static int isWriteOperation(IoActionTy action)
 {
-  return (action == ioConnect ||
-          action == ioWrite ||
-          action == ioWriteMsg);
+  return (action == actConnect ||
+          action == actWrite ||
+          action == actWriteMsg);
 }
 
 
@@ -208,12 +209,12 @@ static void startOperation(asyncOp *op,
   selectBase *localBase = (selectBase*)op->info.object->base;
   op->info.currentAction = action;
   
-  if (op->info.currentAction == ioMonitor)
+  if (op->info.currentAction == actMonitor)
     op->info.status = aosMonitoring;
   else
     op->info.status = aosPending;
   
-  if (op->useInternalBuffer && (action == ioWrite || action == ioWriteMsg)) {
+  if (op->useInternalBuffer && (action == actWrite || action == actWriteMsg)) {
     if (op->internalBuffer == 0) {
       op->internalBuffer = malloc(op->info.transactionSize);
       op->internalBufferSize = op->info.transactionSize;      
@@ -230,7 +231,7 @@ static void startOperation(asyncOp *op,
     localBase->writeOps : localBase->readOps;
   
   switch (action) {
-    case ioMonitorStop :
+    case actMonitorStop :
       asyncOpUnlink(op);
       break;
     default :
@@ -238,7 +239,7 @@ static void startOperation(asyncOp *op,
       break;
   }
 
-  if (action == ioMonitorStop || action == ioMonitor)
+  if (action == actMonitorStop || action == actMonitor)
     selectPostEmptyOperation((asyncBase*)localBase);
   
   if (usTimeout)
@@ -254,8 +255,12 @@ extern "C" asyncBase *selectNewAsyncBase()
 
     pipe(base->pipeFd);    
     base->B.methodImpl = selectImpl;
-    
-    sAction.sa_flags = SA_SIGINFO | SA_RESTART;
+
+#ifdef OS_QNX    
+    sAction.sa_flags = SA_SIGINFO;
+#else
+    sAction.sa_flags = SA_SIGINFO | SA_RESTART;    
+#endif
     sAction.sa_sigaction = timerCb;
     sigemptyset(&sAction.sa_mask);
     if (sigaction(SIGRTMIN, &sAction, NULL) == -1) {
@@ -314,14 +319,14 @@ static void processReadyFds(selectBase *base,
     assert(fd == getFd(op) && "Lost asyncop found!");
     ioctl(fd, FIONREAD, &available);  
     if (op->info.object->type == ioObjectSocket && available == 0 && isRead) {
-      if (op->info.currentAction != ioAccept) {
+      if (op->info.currentAction != actAccept) {
         finishOperation(op, aosDisconnected, 1);
         continue;
       }
     }  
     
     switch (op->info.currentAction) {
-      case ioConnect : {
+      case actConnect : {
         int error;
         socklen_t size = sizeof(error);
         getsockopt(op->info.object->hSocket, 
@@ -330,7 +335,7 @@ static void processReadyFds(selectBase *base,
         break;
       }
               
-      case ioAccept : {
+      case actAccept : {
         struct sockaddr_in clientAddr;
         socklen_t clientAddrSize = sizeof(clientAddr);
         op->info.acceptSocket =
@@ -348,7 +353,7 @@ static void processReadyFds(selectBase *base,
         break;
       }
                 
-      case ioRead : {
+      case actRead : {
         int readyForRead = 0;
         uint8_t *ptr = (uint8_t*)op->info.buffer + op->info.bytesTransferred;
         readyForRead =
@@ -362,7 +367,7 @@ static void processReadyFds(selectBase *base,
         break;
       }
               
-      case ioWrite : {
+      case actWrite : {
         void *buffer = op->useInternalBuffer ?
           op->internalBuffer : op->info.buffer;
         uint8_t *ptr = (uint8_t*)buffer + op->info.bytesTransferred;
@@ -383,7 +388,7 @@ static void processReadyFds(selectBase *base,
         break;
       }
               
-      case ioReadMsg : {
+      case actReadMsg : {
         void *ptr = dynamicBufferAlloc(op->info.dynamicArray, available);
         read(fd, ptr, available);
         op->info.bytesTransferred += available;
@@ -391,7 +396,7 @@ static void processReadyFds(selectBase *base,
         break;
       }
 
-      case ioWriteMsg : {
+      case actWriteMsg : {
         struct sockaddr_in remoteAddress;
         void *ptr = op->useInternalBuffer ?
           op->internalBuffer : op->info.buffer;
@@ -404,7 +409,7 @@ static void processReadyFds(selectBase *base,
         finishOperation(op, aosSuccess, 1);
         break;
       }
-      case ioMonitor : {
+      case actMonitor : {
         finishOperation(op, aosMonitoring, 0);
         break;
       }
@@ -564,32 +569,32 @@ void selectAsyncConnect(asyncOp *op,
    return;
   }
 
-  startOperation(op, ioConnect, usTimeout);
+  startOperation(op, actConnect, usTimeout);
 }
 
 
 void selectAsyncAccept(asyncOp *op, uint64_t usTimeout)
 {
-  startOperation(op, ioAccept, usTimeout);
+  startOperation(op, actAccept, usTimeout);
 }
 
 
 void selectAsyncRead(asyncOp *op, uint64_t usTimeout)
 {
-  startOperation(op, ioRead, usTimeout);
+  startOperation(op, actRead, usTimeout);
 }
 
 
 void selectAsyncWrite(asyncOp *op, uint64_t usTimeout)
 {
   op->useInternalBuffer = !(op->info.flags & afNoCopy);
-  startOperation(op, ioWrite, usTimeout);
+  startOperation(op, actWrite, usTimeout);
 }
 
 
 void selectAsyncReadMsg(asyncOp *op, uint64_t usTimeout)
 {
-  startOperation(op, ioReadMsg, usTimeout);
+  startOperation(op, actReadMsg, usTimeout);
 }
 
 
@@ -599,17 +604,17 @@ void selectAsyncWriteMsg(asyncOp *op,
 {
   op->useInternalBuffer = !(op->info.flags & afNoCopy);  
   op->info.host = *address;
-  startOperation(op, ioWriteMsg, usTimeout);
+  startOperation(op, actWriteMsg, usTimeout);
 }
 
 
 void selectMonitor(asyncOp *op)
 {
-  startOperation(op, ioMonitor, 0);
+  startOperation(op, actMonitor, 0);
 }
 
 
 void selectMonitorStop(asyncOp *op)
 {
-  startOperation(op, ioMonitorStop, 0);
+  startOperation(op, actMonitorStop, 0);
 }

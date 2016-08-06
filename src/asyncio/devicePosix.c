@@ -64,6 +64,7 @@ int serialPortSetConfig(iodevTy port,
     case 115200:
       localSpeed = B115200;
       break;
+#ifndef OS_QNX
     case 230400:
       localSpeed = B230400;
       break;
@@ -74,6 +75,7 @@ int serialPortSetConfig(iodevTy port,
     case 921600:
       localSpeed = B921600;
       break;
+#endif
 #endif
     default :
       localSpeed = B9600;

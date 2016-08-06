@@ -1,3 +1,4 @@
+#include "config.h"
 #include "p2putils/uriParse.h"
 #include "p2putils/strExtras.h"
 #include <string.h>

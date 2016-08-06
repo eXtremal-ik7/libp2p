@@ -223,7 +223,7 @@ static void startOrContinueAction(asyncOp *op, size_t size)
   switch (op->info.object->type) {
     case ioObjectSocket :
       switch (op->info.currentAction) {
-        case ioConnect :
+        case actConnect :
           if (localBase->ConnectExPtr)
             localBase->ConnectExPtr(op->info.object->hSocket,
                                     opBuffer,
@@ -233,7 +233,7 @@ static void startOrContinueAction(asyncOp *op, size_t size)
                                     NULL,
                                     &op->overlapped->data);
           break;
-        case ioAccept :
+        case actAccept :
           op->info.acceptSocket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
           AcceptEx(op->info.object->hSocket,
                    op->info.acceptSocket,
@@ -244,21 +244,21 @@ static void startOrContinueAction(asyncOp *op, size_t size)
                    NULL,
                    &op->overlapped->data);
           break;
-        case ioRead :
-        case ioReadMsg : {
+        case actRead :
+        case actReadMsg : {
           DWORD flags = 0;
           wsabuf.buf = opBuffer;
           wsabuf.len = size;
           WSARecv(op->info.object->hSocket, &wsabuf, 1, NULL, &flags, &op->overlapped->data, NULL);
           break;
         }
-        case ioWrite :
+        case actWrite :
           wsabuf.buf = opBuffer;
           wsabuf.len = size;
           WSASend(op->info.object->hSocket, &wsabuf, 1, NULL, 0, &op->overlapped->data, NULL);
           break;
 
-        case ioWriteMsg : {
+        case actWriteMsg : {
           struct sockaddr_in remoteAddress;
           wsabuf.buf = opBuffer;
           wsabuf.len = size;
@@ -278,14 +278,14 @@ static void startOrContinueAction(asyncOp *op, size_t size)
 
     case ioObjectDevice :
       switch (op->info.currentAction) {
-        case ioRead :
-        case ioReadMsg : {
+        case actRead :
+        case actReadMsg : {
           BOOL result = ReadFile(op->info.object->hDevice,
                                  opBuffer, size, NULL,
                                  &op->overlapped->data);
           break;
        }
-        case ioWrite :
+        case actWrite :
           WriteFile(op->info.object->hDevice, opBuffer, size, NULL, &op->overlapped->data);
           break;
         default :
@@ -294,7 +294,7 @@ static void startOrContinueAction(asyncOp *op, size_t size)
       break;
     case ioObjectSocketSyn :
       switch (op->info.currentAction) {
-        case ioMonitor : { 
+        case actMonitor : { 
           if (WaitForSingleObject(localBase->mutexSockSyn, INFINITE) == WAIT_OBJECT_0) {   
             WSAEventSelect(
               op->info.object->hSocket,
@@ -310,7 +310,7 @@ static void startOrContinueAction(asyncOp *op, size_t size)
           }
         }
         break;
-        case ioMonitorStop : {
+        case actMonitorStop : {
           if (WaitForSingleObject(localBase->mutexSockSyn, INFINITE) == WAIT_OBJECT_0) {
             WSAEventSelect(
               op->info.object->hSocket,
@@ -346,13 +346,13 @@ static void newAction(asyncOp *op,
                       uint64_t usTimeout)
 {
   void *opBuffer = queryBuffer(op, size);
-  if (actionType == ioConnect ||
-      actionType == ioWrite ||
-      actionType == ioWriteMsg)
+  if (actionType == actConnect ||
+      actionType == actWrite ||
+      actionType == actWriteMsg)
     memcpy(opBuffer, buffer, size);
 
   op->info.currentAction = actionType;
-  if (op->info.currentAction == ioMonitor)
+  if (op->info.currentAction == actMonitor)
     op->info.status = aosMonitoring;
   else
     op->info.status = aosPending;
@@ -488,7 +488,7 @@ void iocpNextFinishedOperation(asyncBase *base)
         if (op->info.object->type == ioObjectSocket) {
           int error = WSAGetLastError();
           if (error == WSAEMSGSIZE) {
-            if (op->info.currentAction == ioReadMsg) {
+            if (op->info.currentAction == actReadMsg) {
               u_long remaining = 0;
               ioctlsocket(op->info.object->hSocket, FIONREAD, &remaining);
               startOrContinueAction(op, remaining);
@@ -504,7 +504,7 @@ void iocpNextFinishedOperation(asyncBase *base)
       } else {
         void *opBuffer = ((uint8_t*)op->overlapped) + sizeof(overlappedExtra); 
         op->info.status = aosSuccess;
-        if (op->info.currentAction == ioAccept) {
+        if (op->info.currentAction == actAccept) {
           struct sockaddr_in *localAddr = 0;
           struct sockaddr_in *remoteAddr = 0;
           INT localAddrLength;
@@ -522,7 +522,7 @@ void iocpNextFinishedOperation(asyncBase *base)
           } else {
             op->info.status = aosUnknownError;
           }
-        } else if (op->info.currentAction == ioRead) {
+        } else if (op->info.currentAction == actRead) {
           void *ptr = (uint8_t*)op->info.buffer + op->info.bytesTransferred;
           memcpy(ptr, opBuffer, bytesNum);
           op->info.bytesTransferred += bytesNum;
@@ -531,7 +531,7 @@ void iocpNextFinishedOperation(asyncBase *base)
             startOrContinueAction(op, op->info.transactionSize - op->info.bytesTransferred);
             continue;
           }
-        } else if (op->info.currentAction == ioReadMsg) {
+        } else if (op->info.currentAction == actReadMsg) {
           void *ptr = dynamicBufferAlloc(op->info.dynamicArray, bytesNum);
           memcpy(ptr, opBuffer, bytesNum);
           op->info.bytesTransferred += bytesNum;
@@ -622,7 +622,7 @@ void iocpAsyncConnect(asyncOp *op, const HostAddress *address, uint64_t usTimeou
   localAddress.sin_addr.s_addr = address->ipv4;
   localAddress.sin_port = address->port;
   newAction((asyncOp*)op,
-            ioConnect,
+            actConnect,
             &localAddress,
             sizeof(localAddress),
             usTimeout);
@@ -631,40 +631,40 @@ void iocpAsyncConnect(asyncOp *op, const HostAddress *address, uint64_t usTimeou
 
 void iocpAsyncAccept(asyncOp *op, uint64_t usTimeout)
 {
-  newAction(op, ioAccept, 0, 0, usTimeout);
+  newAction(op, actAccept, 0, 0, usTimeout);
 }
 
 
 void iocpAsyncRead(asyncOp *op, uint64_t usTimeout)
 {
-  newAction(op, ioRead, op->info.buffer, op->info.transactionSize, usTimeout);
+  newAction(op, actRead, op->info.buffer, op->info.transactionSize, usTimeout);
 }
 
 
 void iocpAsyncWrite(asyncOp *op, uint64_t usTimeout)
 {
-  newAction(op, ioWrite, op->info.buffer, op->info.transactionSize, usTimeout);  
+  newAction(op, actWrite, op->info.buffer, op->info.transactionSize, usTimeout);  
 }
 
 
 void iocpAsyncReadMsg(asyncOp *op, uint64_t usTimeout)
 {
-  newAction(op, ioReadMsg, 0, minimalBufferSize, usTimeout);
+  newAction(op, actReadMsg, 0, minimalBufferSize, usTimeout);
 }
 
 
 void iocpAsyncWriteMsg(asyncOp *op, const HostAddress *address, uint64_t usTimeout)
 {
   op->info.host = *address;
-  newAction(op, ioWriteMsg, op->info.buffer, op->info.transactionSize, usTimeout);
+  newAction(op, actWriteMsg, op->info.buffer, op->info.transactionSize, usTimeout);
 }
 
 void iocpMonitor(asyncOp *op)
 {
-  newAction((asyncOp*)op, ioMonitor, 0, minimalBufferSize, 0);
+  newAction((asyncOp*)op, actMonitor, 0, minimalBufferSize, 0);
 }
 
 void iocpMonitorStop(asyncOp *op)
 {
-  newAction((asyncOp*)op, ioMonitorStop, 0, minimalBufferSize, 0);
+  newAction((asyncOp*)op, actMonitorStop, 0, minimalBufferSize, 0);
 }

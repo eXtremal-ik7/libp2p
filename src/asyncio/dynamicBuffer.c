@@ -3,7 +3,7 @@
 #include <stdlib.h>
 
 
-static void dynamicBufferGrow(dynamicBuffer *buffer, size_t extra)
+void dynamicBufferGrow(dynamicBuffer *buffer, size_t extra)
 {
   size_t newMemorySize = buffer->allocatedSize;
   while (newMemorySize < buffer->offset + extra)

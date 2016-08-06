@@ -10,16 +10,16 @@ void readCb(aioInfo *info)
 {
   uint8_t *echoBuffer = (uint8_t*)info->arg;
   if (info->status == aosSuccess) {
-    asyncWrite(info->object, echoBuffer, info->bytesTransferred,
+    aioWrite(info->object, echoBuffer, info->bytesTransferred,
                afNone, 1000000, 0, 0);
-    asyncRead(info->object, echoBuffer, echoBufferSize,
+    aioRead(info->object, echoBuffer, echoBufferSize,
               afNone, 0, readCb, echoBuffer);
   } else if (info->status == aosDisconnected) {
     delete[] echoBuffer;
     fprintf(stderr, " * connection lost\n");
   } else {
     fprintf(stderr, " * receive error\n");
-    asyncRead(info->object, echoBuffer, echoBufferSize,
+    aioRead(info->object, echoBuffer, echoBufferSize,
               afNone, 0, readCb, echoBuffer);    
   }
 }
@@ -33,10 +33,10 @@ void acceptCb(aioInfo *info)
     uint8_t *echoBuffer = new uint8_t[echoBufferSize];
     aioObject *newSocketOp =
       newSocketIo(base, info->acceptSocket);
-    asyncRead(newSocketOp, echoBuffer, echoBufferSize,
+    aioRead(newSocketOp, echoBuffer, echoBufferSize,
               afNone, 0, readCb, echoBuffer);
   }
-  asyncAccept(info->object, 0, acceptCb, base);
+  aioAccept(info->object, 0, acceptCb, base);
 }
 
 
@@ -63,7 +63,7 @@ int main(int argc, char **argv)
   asyncBase *base = createAsyncBase(amOSDefault);
   aioObject *socketOp = newSocketIo(base, hSocket);
 
-  asyncAccept(socketOp, 0, acceptCb, base);
+  aioAccept(socketOp, 0, acceptCb, base);
   asyncLoop(base);
   return 0;
 }

@@ -22,15 +22,15 @@ typedef enum IoObjectTy {
 
 
 typedef enum IoActionTy {
-  ioNoAction = -1,
-  ioConnect = 0,
-  ioAccept,
-  ioRead,
-  ioWrite,
-  ioReadMsg,
-  ioWriteMsg,
-  ioMonitor,
-  ioMonitorStop
+  actNoAction = -1,
+  actConnect = 0,
+  actAccept,
+  actRead,
+  actWrite,
+  actReadMsg,
+  actWriteMsg,
+  actMonitor,
+  actMonitorStop
 } IoActionTy;
 
 
@@ -71,6 +71,7 @@ typedef struct asyncBase asyncBase;
 typedef struct aioObject aioObject;
 typedef struct asyncOp asyncOp;
 typedef struct aioInfo aioInfo;
+typedef struct coroutineTy coroutineTy;
 typedef void asyncCb(aioInfo *info);
 
 
@@ -78,7 +79,12 @@ struct aioInfo {
   aioObject *object;
   IoActionTy currentAction; 
   AsyncOpStatus status;
-  asyncCb *callback;
+  
+  union {
+    asyncCb *callback;
+    coroutineTy *coroutine;
+  };
+  
   void *arg;
 
   union {

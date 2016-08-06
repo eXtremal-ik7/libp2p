@@ -38,9 +38,9 @@ void pingTimerCb(aioInfo *info)
     char symbol = 32 + rand() % 96;
     printf("%02X:", (int)symbol);
     fflush(stdout);
-    asyncWrite(data->socket, &symbol, 1, afNone, 1000000, 0, 0);
-    asyncRead(data->socket, data->buffer, clientBufferSize,
-              afNone, 1000000, readCb, data);
+    aioWrite(data->socket, &symbol, 1, afNone, 1000000, 0, 0);
+    aioRead(data->socket, data->buffer, clientBufferSize,
+            afNone, 1000000, readCb, data);
   }
 }
 
@@ -79,12 +79,12 @@ int main(int argc, char **argv)
   asyncOp *stdInputOp = newUserEvent(base, pingTimerCb, &data);
 
   address.family = AF_INET;
-  address.ipv4 = inet_addr("127.0.0.1");
+  address.ipv4 = inet_addr("169.254.0.1");
   address.port = htons(9999);
   data.base = base;
   data.socket = socketOp;
   data.isConnected = false;    
-  asyncConnect(socketOp, &address, 3000000, connectCb, &data);
+  aioConnect(socketOp, &address, 3000000, connectCb, &data);
   userEventStartTimer(stdInputOp, 1000000, -1);
   asyncLoop(base);
   return 0;

@@ -56,7 +56,7 @@ static void finishHttpOp(HTTPOp *Op, AsyncOpStatus status)
         if (client->isHttps) {
           sslConnect(client->sslSocket, &current->address, current->usTimeout, httpsConnectProc, current);
         } else {
-          asyncConnect(client->plainSocket, &current->address, current->usTimeout, httpConnectProc, current);
+          aioConnect(client->plainSocket, &current->address, current->usTimeout, httpConnectProc, current);
         }
         break;
       case httpOpRequest :
@@ -229,7 +229,7 @@ void httpConnect(HTTPClient *client,
     if (client->isHttps) {
       sslConnect(client->sslSocket, address, usTimeout, httpsConnectProc, newOp);
     } else {
-      asyncConnect(client->plainSocket, address, usTimeout, httpConnectProc, newOp);
+      aioConnect(client->plainSocket, address, usTimeout, httpConnectProc, newOp);
     }
   } else {
     newOp->address = *address;

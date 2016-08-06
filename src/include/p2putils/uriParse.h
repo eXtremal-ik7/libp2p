@@ -1,6 +1,7 @@
 #ifndef __LIBP2P_URIPARSE_H_
 #define __LIBP2P_URIPARSE_H_
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <string>

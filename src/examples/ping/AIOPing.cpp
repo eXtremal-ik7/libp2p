@@ -124,7 +124,7 @@ void readCb(aioInfo *info)
     }
   }
   
-  asyncReadMsg(client->rawSocket, &client->buffer, 0, readCb, client);
+  aioReadMsg(client->rawSocket, &client->buffer, 0, readCb, client);
 }
 
 void pingTimerCb(aioInfo *info)
@@ -136,7 +136,7 @@ void pingTimerCb(aioInfo *info)
   clientData->data.icmp_cksum =
     InternetChksum((uint16_t*)&clientData->data, sizeof(icmp));
     
-  asyncWriteMsg(clientData->rawSocket,
+  aioWriteMsg(clientData->rawSocket,
                 &clientData->remoteAddress,
                 &clientData->data, sizeof(icmp),
                 afNone, 1000000, 0, 0);
@@ -241,7 +241,7 @@ int main(int argc, char **argv)
   client.rawSocket = newSocketIo(base, S);
 
   dynamicBufferInit(&client.buffer, 1024);
-  asyncReadMsg(client.rawSocket, &client.buffer, 0, readCb, &client);
+  aioReadMsg(client.rawSocket, &client.buffer, 0, readCb, &client);
   userEventStartTimer(printTimer, 100000, -1);
   userEventStartTimer(pingTimer, (uint64_t)(gInterval*1000000), -1);
   asyncLoop(base);

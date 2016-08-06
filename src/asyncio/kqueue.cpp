@@ -107,9 +107,9 @@ static struct asyncImpl kqueueImpl = {
 
 static int isWriteOperation(IoActionTy action)
 {
-  return (action == ioConnect ||
-          action == ioWrite ||
-          action == ioWriteMsg);
+  return (action == actConnect ||
+          action == actWrite ||
+          action == actWriteMsg);
 }
 
 static int getFd(asyncOp *op)
@@ -182,7 +182,7 @@ static void processReadyFd(opDequeTy *dequeptr, struct kevent *ev, int isRead)
   available = ev->data;
 
   switch (op->info.currentAction) {
-  case ioConnect : {
+  case actConnect : {
     int error;
     socklen_t size = sizeof(error);
     getsockopt(op->info.object->hSocket,
@@ -190,7 +190,7 @@ static void processReadyFd(opDequeTy *dequeptr, struct kevent *ev, int isRead)
     finishOperation(op, (error == 0) ? aosSuccess : aosUnknownError, 1);
     break;
   }
-  case ioAccept : {
+  case actAccept : {
     struct sockaddr_in clientAddr;
     socklen_t clientAddrSize = sizeof(clientAddr);
     op->info.acceptSocket =
@@ -206,7 +206,7 @@ static void processReadyFd(opDequeTy *dequeptr, struct kevent *ev, int isRead)
     }
     break;
   }
-  case ioRead : {
+  case actRead : {
     uint8_t *ptr = (uint8_t *)op->info.buffer + op->info.bytesTransferred;
     readyForRead =
         (op->info.transactionSize - op->info.bytesTransferred
@@ -221,7 +221,7 @@ static void processReadyFd(opDequeTy *dequeptr, struct kevent *ev, int isRead)
       finishOperation(op, aosSuccess, 1);
     break;
   }
-  case ioWrite : {
+  case actWrite : {
     uint8_t *ptr = op->useInternalBuffer ?
           (uint8_t*)op->internalBuffer : (uint8_t*)op->info.buffer;
     ptr += op->info.bytesTransferred;
@@ -241,14 +241,14 @@ static void processReadyFd(opDequeTy *dequeptr, struct kevent *ev, int isRead)
     }
     break;
   }
-  case ioReadMsg : {
+  case actReadMsg : {
     void *ptr = dynamicBufferAlloc(op->info.dynamicArray, available);
     read(ev->ident, ptr, available);
     op->info.bytesTransferred += available;
     finishOperation(op, aosSuccess, 1);
     break;
   }
-  case ioWriteMsg : {
+  case actWriteMsg : {
     struct sockaddr_in remoteAddress;
     uint8_t *ptr = op->useInternalBuffer ?
           (uint8_t*)op->internalBuffer : (uint8_t*)op->info.buffer;
@@ -269,7 +269,7 @@ static void processReadyFd(opDequeTy *dequeptr, struct kevent *ev, int isRead)
     }
     break;
   }
-  case ioMonitor : {
+  case actMonitor : {
     finishOperation(op, aosMonitoring, 0);
     break;
   }
@@ -343,12 +343,12 @@ static void startOperation(asyncOp *op,
   kqueueBase *localBase = (kqueueBase*)op->info.object->base;
   op->info.currentAction = action;
 
-  if (op->info.currentAction == ioMonitor)
+  if (op->info.currentAction == actMonitor)
     op->info.status = aosMonitoring;
   else
     op->info.status = aosPending;
 
-  if (op->useInternalBuffer && (action == ioWrite || action == ioWriteMsg)) {
+  if (op->useInternalBuffer && (action == actWrite || action == actWriteMsg)) {
     if (op->internalBuffer == 0) {
       op->internalBuffer = malloc(op->info.transactionSize);
       op->internalBufferSize = op->info.transactionSize;
@@ -372,7 +372,7 @@ static void startOperation(asyncOp *op,
         EVFILT_READ;
 
   switch (action) {
-    case ioMonitorStop :
+    case actMonitorStop :
       break;
     default :
       if (dequeptr->empty())
@@ -385,7 +385,7 @@ static void startOperation(asyncOp *op,
       break;
   }
 
-  if (action == ioMonitorStop || action == ioMonitor);
+  if (action == actMonitorStop || action == actMonitor);
 
   if (usTimeout) {
     kqueueStartTimer(op, usTimeout, 1);
@@ -554,33 +554,33 @@ void kqueueAsyncConnect(asyncOp *op,
     return;
   }
 
-  startOperation(op, ioConnect, usTimeout);
+  startOperation(op, actConnect, usTimeout);
 }
 
 void kqueueAsyncAccept(asyncOp *op, uint64_t usTimeout)
 {
-  startOperation(op, ioAccept, usTimeout);
+  startOperation(op, actAccept, usTimeout);
 }
 
 void kqueueAsyncRead(asyncOp *op, uint64_t usTimeout)
 {
-  startOperation(op, ioRead, usTimeout);
+  startOperation(op, actRead, usTimeout);
 }
 
 void kqueueAsyncWrite(asyncOp *op, uint64_t usTimeout)
 {
   op->useInternalBuffer = !(op->info.flags & afNoCopy);
-  startOperation(op, ioWrite, usTimeout);
+  startOperation(op, actWrite, usTimeout);
 }
 
 void kqueueMonitorStop(asyncOp *op)
 {
-  startOperation(op, ioMonitorStop, 0);
+  startOperation(op, actMonitorStop, 0);
 }
 
 void kqueueMonitor(asyncOp *op)
 {
-  startOperation(op, ioMonitor, 0);
+  startOperation(op, actMonitor, 0);
 }
 
 void kqueueAsyncWriteMsg(asyncOp *op,
@@ -589,10 +589,10 @@ void kqueueAsyncWriteMsg(asyncOp *op,
 {
   op->useInternalBuffer = !(op->info.flags & afNoCopy);
   op->info.host = *address;
-  startOperation(op, ioWriteMsg, usTimeout);
+  startOperation(op, actWriteMsg, usTimeout);
 }
 
 void kqueueAsyncReadMsg(asyncOp *op, uint64_t usTimeout)
 {
-  startOperation(op, ioReadMsg, usTimeout);
+  startOperation(op, actReadMsg, usTimeout);
 }

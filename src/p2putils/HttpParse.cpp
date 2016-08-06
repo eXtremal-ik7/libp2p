@@ -187,7 +187,7 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
 {
   HttpParserResultTy result;
   HttpComponent component;
-
+    
   if (state->state == httpStStartLine) {
     if ( (result = httpParseStartLine(state, callback, arg)) != httpResultOk)
       return result;
@@ -311,7 +311,7 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
         
           size_t chunkSize;
           if ( ( result = readHex(&p, state->end, &chunkSize)) != httpResultOk )
-            return result;    
+            return result;           
 
           if (readyChunkSize) {
             component.type = (chunkSize == 0) && state->firstFragment ? httpDtData : httpDtDataFragment;
