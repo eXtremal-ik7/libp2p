@@ -3,7 +3,15 @@
 #include <ucontext.h>
 #include "asyncio/coroutine.h"
 
-
+#include "config.h"
+#ifdef OS_LINUX
+// _longjmp causes uninitialized stack frame
+// TODO: why??
+void __libc_longjmp(jmp_buf env, int val);
+#define LONGJMP __libc_longjmp
+#else
+#define LONGJMP _longjmp
+#endif
 
 typedef struct coroutineTy {
   struct coroutineTy *prev;
@@ -33,9 +41,11 @@ static void fiberDestroy()
 
 static void fiberStart(void *arg)
 {
-  fiberContextTy *fiberArg = (fiberContextTy*)arg;
-  if (_setjmp(fiberArg->coroutine->context) != 0) {
-    fiberArg->proc(fiberArg->arg); 
+  fiberContextTy fiberArg = *((fiberContextTy*)arg);
+  free(arg);
+  
+  if (_setjmp(fiberArg.coroutine->context) != 0) {
+    fiberArg.proc(fiberArg.arg); 
     
     // change stack frame before its release
     // switch to temporary cleanup fiber    
@@ -83,15 +93,15 @@ coroutineTy *coroutineNew(coroutineProcTy entry, void *arg, unsigned stackSize)
     // Get point for 'longjmp' function
     // Switch back to caller fiber    
     ucontext_t callerCtx;
-    fiberContextTy fiberArg;
-    fiberArg.coroutine = coroutine;
-    fiberArg.proc = entry;
-    fiberArg.arg = arg;
+    fiberContextTy *fiberArg = malloc(sizeof(fiberContextTy));
+    fiberArg->coroutine = coroutine;
+    fiberArg->proc = entry;
+    fiberArg->arg = arg;
     coroutine->initialContext.uc_link = &callerCtx;
     makecontext(&coroutine->initialContext,
                 (void(*)())fiberStart,
                 sizeof(void*)/sizeof(int),
-                &fiberArg);
+                fiberArg);
     swapcontext(&callerCtx, &coroutine->initialContext);
   }
   
@@ -111,7 +121,7 @@ void coroutineCall(coroutineTy *coroutine)
     coroutine->prev = currentCoroutine;
     currentCoroutine = coroutine;
     if (_setjmp(coroutine->prev->context) == 0)
-      _longjmp(coroutine->context, 1);
+      LONGJMP(coroutine->context, 1);
   }
 }
 
@@ -121,6 +131,6 @@ void coroutineYield()
     coroutineTy *old = currentCoroutine;
     currentCoroutine = currentCoroutine->prev;
     if (_setjmp(old->context) == 0)
-      _longjmp(currentCoroutine->context, 1);
+      LONGJMP(currentCoroutine->context, 1);
   }
 }
