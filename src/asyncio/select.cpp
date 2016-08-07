@@ -53,7 +53,7 @@ void selectPostEmptyOperation(asyncBase *base);
 void selectNextFinishedOperation(asyncBase *base);
 aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data);
 asyncOp *selectNewAsyncOp(asyncBase *base);
-void selectDeleteOp(asyncOp *op);
+void selectDeleteObject(aioObject *object);
 void selectStartTimer(asyncOp *op, uint64_t usTimeout, int count);
 void selectStopTimer(asyncOp *op);
 void selectActivate(asyncOp *op);
@@ -76,7 +76,7 @@ static struct asyncImpl selectImpl = {
   selectNextFinishedOperation,
   selectNewAioObject,
   selectNewAsyncOp,
-  selectDeleteOp,
+  selectDeleteObject,
   selectStartTimer,
   selectStopTimer,
   selectActivate,
@@ -525,10 +525,10 @@ asyncOp *selectNewAsyncOp(asyncBase *base)
 }
 
 
-void selectDeleteOp(asyncOp *op)
+void selectDeleteObject(aioObject *object)
 {
-  asyncOpUnlink(op);
-  delete op;
+//   asyncOpUnlink(op);
+//   delete op;
 }
 
 

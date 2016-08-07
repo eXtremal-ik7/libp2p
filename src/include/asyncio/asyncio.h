@@ -16,7 +16,8 @@ iodevTy aioObjectDevice(aioObject *object);
 asyncBase *createAsyncBase(AsyncMethod method);
 aioObject *newSocketIo(asyncBase *base, socketTy hSocket);
 aioObject *newDeviceIo(asyncBase *base, iodevTy hDevice);
-aioObject *newSocketSynIo(asyncBase *base, socketTy hSocket);
+// aioObject *newSocketSynIo(asyncBase *base, socketTy hSocket);
+void deleteAioObject(aioObject *object);
 
 int getCoroutineMode(asyncBase *base);
 void setCoroutineMode(asyncBase *base, int enabled);

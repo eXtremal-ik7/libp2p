@@ -134,12 +134,10 @@ aioObject *newDeviceIo(asyncBase *base, iodevTy hDevice)
   return base->methodImpl.newAioObject(base, ioObjectDevice, &hDevice);  
 }
 
-
-void deleteOp(asyncOp *op)
+void deleteAioObject(aioObject *object)
 {
-  // TODO: implement!
+  object->base->methodImpl.deleteObject(object);
 }
-
 
 void userEventStartTimer(asyncOp *event, uint64_t usTimeout, int counter)
 {

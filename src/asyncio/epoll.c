@@ -78,7 +78,7 @@ void epollPostEmptyOperation(asyncBase *base);
 void epollNextFinishedOperation(asyncBase *base);
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data);
 asyncOp *epollNewAsyncOp(asyncBase *base);
-void epollDeleteOp(asyncOp *op);
+void epollDeleteObject(aioObject *object);
 void epollStartTimer(asyncOp *op, uint64_t usTimeout, int count);
 void epollStopTimer(asyncOp *op);
 void epollActivate(asyncOp *op);
@@ -100,7 +100,7 @@ static struct asyncImpl epollImpl = {
   epollNextFinishedOperation,
   epollNewAioObject,
   epollNewAsyncOp,
-  epollDeleteOp,
+  epollDeleteObject,
   epollStartTimer,
   epollStopTimer,
   epollActivate,
@@ -372,12 +372,17 @@ static void finishOperation(asyncOp *op,
   if (needStopTimer)
     stopTimer(op);
   op->info.status = status;
-  if (getCoroutineMode(op->info.object->base) == 1)
-    coroutineCall(op->info.coroutine);
-  else if (op->info.callback)
+  if (getCoroutineMode(op->info.object->base) == 1) {
+    coroutineTy *coroutine = op->info.coroutine;
+    if (status != aosMonitoring)
+      asyncOpUnlink(op);    
+    coroutineCall(coroutine);
+  } else if (op->info.callback) {
     op->info.callback(&op->info);
-  if (status != aosMonitoring)
-    asyncOpUnlink(op);
+    if (status != aosMonitoring)
+      asyncOpUnlink(op);    
+  }
+
 }
 
 
@@ -582,10 +587,56 @@ asyncOp *epollNewAsyncOp(asyncBase *base)
 }
 
 
-void epollDeleteOp(asyncOp *op)
+void epollDeleteObject(aioObject *object)
 {
-  asyncOpUnlink(op);
-  free(op);
+//   asyncOpUnlink(op);
+//   free(op);
+  int fd;
+  switch (object->type) {
+    case ioObjectDevice :
+      fd = object->hDevice;
+      break;
+    case ioObjectSocket :
+    case ioObjectSocketSyn :
+      fd = object->hSocket;
+      break;
+  }
+  
+  asyncOp *op;
+  fdStruct *fds = getFdStruct(object->base, fd);
+  
+  op = fds->readOps.head;
+  while (op) {
+    stopTimer(op);
+    op->info.status = aosUnknownError;
+    if (getCoroutineMode(op->info.object->base) == 1)
+      coroutineCall(op->info.coroutine);
+    else if (op->info.callback)
+      op->info.callback(&op->info);
+    
+    asyncOp *forRelease = op;
+    op = op->next;
+    objectRelease(&forRelease->info.object->base->pool, forRelease, poolId);    
+  }
+ 
+  op = fds->writeOps.head;
+  while (op) {
+    stopTimer(op);
+    op->info.status = aosUnknownError;
+    if (getCoroutineMode(op->info.object->base) == 1)
+      coroutineCall(op->info.coroutine);
+    else if (op->info.callback)
+      op->info.callback(&op->info);
+    op = op->next; 
+    
+    asyncOp *forRelease = op;
+    op = op->next;
+    objectRelease(&forRelease->info.object->base->pool, forRelease, poolId);        
+  }
+  
+  fprintf(stderr, "close %i\n", fd);
+  close(fd);
+  free(object);
 }
 
 
