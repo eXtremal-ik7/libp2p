@@ -54,7 +54,7 @@ static void finishHttpOp(HTTPOp *Op, AsyncOpStatus status)
     switch (current->type) {
       case httpOpConnect :
         if (client->isHttps) {
-          sslConnect(client->sslSocket, &current->address, current->usTimeout, httpsConnectProc, current);
+          aioSslConnect(client->sslSocket, &current->address, current->usTimeout, httpsConnectProc, current);
         } else {
           aioConnect(client->plainSocket, &current->address, current->usTimeout, httpConnectProc, current);
         }
@@ -157,7 +157,7 @@ void httpParseStart(HTTPOp *op)
         memcpy(client->inBuffer, httpDataPtr(&client->state), offset);
       
       if (client->isHttps)
-        sslRead(client->sslSocket,
+        aioSslRead(client->sslSocket,
                 client->inBuffer+offset,
                 client->inBufferSize-offset,
                 afNone,
@@ -165,13 +165,13 @@ void httpParseStart(HTTPOp *op)
                 httpsRequestProc,
                 op);
       else
-        asyncRead(client->plainSocket,
-                  client->inBuffer+offset,
-                  client->inBufferSize-offset,
-                  afNone,
-                  op->usTimeout,
-                  httpRequestProc,
-                  op);
+        aioRead(client->plainSocket,
+                client->inBuffer+offset,
+                client->inBufferSize-offset,
+                afNone,
+                op->usTimeout,
+                httpRequestProc,
+                op);
         
       client->inBufferOffset = offset;
       break;
@@ -215,11 +215,11 @@ HTTPClient *httpsClientNew(asyncBase *base, SSLSocket *socket)
   return client;
 }
 
-void httpConnect(HTTPClient *client,
-                 const HostAddress *address,
-                 uint64_t usTimeout,
-                 httpCb callback,
-                 void *arg)
+void aioHttpConnect(HTTPClient *client,
+                    const HostAddress *address,
+                    uint64_t usTimeout,
+                    httpCb callback,
+                    void *arg)
 {
   HTTPOp *newOp = allocHttpOp(client, httpOpConnect, 0, callback, arg);
   
@@ -227,7 +227,7 @@ void httpConnect(HTTPClient *client,
     client->current = newOp;
     client->tail = newOp;
     if (client->isHttps) {
-      sslConnect(client->sslSocket, address, usTimeout, httpsConnectProc, newOp);
+      aioSslConnect(client->sslSocket, address, usTimeout, httpsConnectProc, newOp);
     } else {
       aioConnect(client->plainSocket, address, usTimeout, httpConnectProc, newOp);
     }
@@ -239,7 +239,7 @@ void httpConnect(HTTPClient *client,
   }
 }
 
-void httpRequest(HTTPClient *client,
+void aioHttpRequest(HTTPClient *client,
                  const char *request,
                  size_t requestSize,
                  uint64_t usTimeout,
@@ -252,9 +252,9 @@ void httpRequest(HTTPClient *client,
   
   // send request immediately, wait response in queue
   if (client->isHttps)
-    sslWrite(client->sslSocket, (void*)request, requestSize, afNone, usTimeout, 0, 0);
+    aioSslWrite(client->sslSocket, (void*)request, requestSize, afNone, usTimeout, 0, 0);
   else
-    asyncWrite(client->plainSocket, (void*)request, requestSize, afNone, usTimeout, 0, 0);
+    aioWrite(client->plainSocket, (void*)request, requestSize, afNone, usTimeout, 0, 0);
 
   if (!client->tail) {
     client->current = newOp;
@@ -266,5 +266,69 @@ void httpRequest(HTTPClient *client,
     newOp->usTimeout = usTimeout;
     client->tail->next = newOp;
     client->tail = newOp;
+  }
+}
+
+
+int ioHttpConnect(HTTPClient *client, const HostAddress *address, uint64_t usTimeout)
+{
+  HTTPOp *newOp = allocHttpOp(client, httpOpConnect, 0, 0, 0);
+  
+  int result;
+  if (client->isHttps)
+    result = ioSslConnect(client->sslSocket, address, usTimeout);
+  else
+    result = ioConnect(client->plainSocket, address, usTimeout);
+  
+  releaseObject(newOp->info.client->base, newOp, httpPoolId);  
+  return result;
+}
+
+
+int ioHttpRequest(HTTPClient *client,
+                  const char *request,
+                  size_t requestSize,
+                  uint64_t usTimeout,
+                  httpParseCb parseCallback)
+{
+  HTTPOp *newOp = allocHttpOp(client, httpOpRequest, parseCallback, 0, 0);
+  
+  if (client->isHttps)
+    ioSslWrite(client->sslSocket, (void*)request, requestSize, afNone, usTimeout);
+  else
+    ioWrite(client->plainSocket, (void*)request, requestSize, afNone, usTimeout);  
+
+  dynamicBufferSeek(&client->out, SeekSet, 0);
+  httpInit(&client->state);  
+  
+  for (;;) {
+    switch (httpParse(&client->state, parseCallback, newOp)) {
+      case httpResultOk :
+        client->contentType = newOp->info.contentType;
+        client->body = newOp->info.body;
+        releaseObject(newOp->info.client->base, newOp, httpPoolId);
+        return newOp->info.resultCode;
+      case httpResultNeedMoreData : {
+        // copy 'tail' to begin of buffer
+        size_t offset = httpDataRemaining(&client->state);
+        if (offset)
+          memcpy(client->inBuffer, httpDataPtr(&client->state), offset);
+      
+        ssize_t bytesTransferred;
+        if (client->isHttps)
+          bytesTransferred =
+            ioSslRead(client->sslSocket, client->inBuffer+offset, client->inBufferSize-offset, afNone, usTimeout);
+        else
+          bytesTransferred =
+            ioRead(client->plainSocket, client->inBuffer+offset, client->inBufferSize-offset, afNone, usTimeout);
+            
+        client->inBufferOffset = offset;
+        httpSetBuffer(&client->state, client->inBuffer, client->inBufferOffset+bytesTransferred);
+        break;
+      }
+      case httpResultError :
+        releaseObject(newOp->info.client->base, newOp, httpPoolId);
+        return -1;
+    }
   }
 }

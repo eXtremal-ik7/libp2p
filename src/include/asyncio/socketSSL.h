@@ -64,13 +64,13 @@ SSLSocket *sslSocketNew(asyncBase *base);
 
 socketTy sslGetSocket(const SSLSocket *socket);
 
-void sslConnect(SSLSocket *socket,
+void aioSslConnect(SSLSocket *socket,
                 const HostAddress *address,
                 uint64_t usTimeout,
                 sslCb callback,
                 void *arg);
 
-void sslRead(SSLSocket *socket,
+void aioSslRead(SSLSocket *socket,
              void *buffer,
              size_t size,
              AsyncFlags flags,
@@ -78,13 +78,18 @@ void sslRead(SSLSocket *socket,
              sslCb callback,
              void *arg);
 
-void sslWrite(SSLSocket *socket,
+void aioSslWrite(SSLSocket *socket,
               void *buffer,
               size_t size,
               AsyncFlags flags,
               uint64_t usTimeout,
               sslCb callback,
               void *arg);
+
+
+int ioSslConnect(SSLSocket *socket, const HostAddress *address, uint64_t usTimeout);
+ssize_t ioSslRead(SSLSocket *socket, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
+ssize_t ioSslWrite(SSLSocket *socket, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
 
 #endif //__ASYNCIO_SOCKETSSL_H_
 

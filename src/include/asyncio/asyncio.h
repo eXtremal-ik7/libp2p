@@ -69,7 +69,7 @@ void aioWriteMsg(aioObject *op,
                  asyncCb callback,
                  void *arg);
 
-void ioConnect(aioObject *op, const HostAddress *address, uint64_t usTimeout);
+int ioConnect(aioObject *op, const HostAddress *address, uint64_t usTimeout);
 socketTy ioAccept(aioObject *op, uint64_t usTimeout);
 ssize_t ioRead(aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
 ssize_t ioReadMsg(aioObject *op, dynamicBuffer *buffer, uint64_t usTimeout);

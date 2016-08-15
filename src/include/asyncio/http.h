@@ -30,6 +30,9 @@ typedef struct HTTPClient {
   size_t inBufferOffset;
   dynamicBuffer out;
   
+  Raw contentType;
+  Raw body;  
+  
   HttpParserState state;
   HTTPOp *current;
   HTTPOp *tail;
@@ -64,20 +67,22 @@ void httpParseDefault(HttpComponent *component, void *arg);
 HTTPClient *httpClientNew(asyncBase *base, aioObject *socket);
 HTTPClient *httpsClientNew(asyncBase *base, SSLSocket *socket);
 
-void httpConnect(HTTPClient *client,
-                 const HostAddress *address,
-                 uint64_t usTimeout,
-                 httpCb callback,
-                 void *arg);
+void aioHttpConnect(HTTPClient *client,
+                    const HostAddress *address,
+                    uint64_t usTimeout,
+                    httpCb callback,
+                    void *arg);
 
-void httpRequest(HTTPClient *client,
-                 const char *request,
-                 size_t requestSize,
-                 uint64_t usTimeout,
-                 httpParseCb parseCallback,
-                 httpCb callback,
-                 void *arg);
+void aioHttpRequest(HTTPClient *client,
+                    const char *request,
+                    size_t requestSize,
+                    uint64_t usTimeout,
+                    httpParseCb parseCallback,
+                    httpCb callback,
+                    void *arg);
 
+int ioHttpConnect(HTTPClient *client, const HostAddress *address, uint64_t usTimeout);
+int ioHttpRequest(HTTPClient *client, const char *request, size_t requestSize, uint64_t usTimeout, httpParseCb parseCallback);
                 
 
 #ifdef __cplusplus

@@ -377,8 +377,9 @@ static void finishOperation(asyncOp *op,
     if (status != aosMonitoring)
       asyncOpUnlink(op);    
     coroutineCall(coroutine);
-  } else if (op->info.callback) {
-    op->info.callback(&op->info);
+  } else {
+    if (op->info.callback)
+      op->info.callback(&op->info);
     if (status != aosMonitoring)
       asyncOpUnlink(op);    
   }
@@ -589,8 +590,6 @@ asyncOp *epollNewAsyncOp(asyncBase *base)
 
 void epollDeleteObject(aioObject *object)
 {
-//   asyncOpUnlink(op);
-//   free(op);
   int fd;
   switch (object->type) {
     case ioObjectDevice :
@@ -633,8 +632,7 @@ void epollDeleteObject(aioObject *object)
     op = op->next;
     objectRelease(&forRelease->info.object->base->pool, forRelease, poolId);        
   }
-  
-  fprintf(stderr, "close %i\n", fd);
+
   close(fd);
   free(object);
 }

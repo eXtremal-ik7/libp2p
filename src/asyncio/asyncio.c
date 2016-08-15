@@ -281,11 +281,14 @@ void aioWriteMsg(aioObject *op,
 }
 
 
-void ioConnect(aioObject *op, const HostAddress *address, uint64_t usTimeout)
+int ioConnect(aioObject *op, const HostAddress *address, uint64_t usTimeout)
 {
   asyncOp *newOp = initAsyncOp(op, 0, 0, 0, 0, 0, afNone);
   op->base->methodImpl.connect(newOp, address, usTimeout);
+  
   coroutineYield();
+  aioInfo *info = (aioInfo*)newOp;
+  return (info->status == aosSuccess) ? 0 : -1;
 }
 
 
