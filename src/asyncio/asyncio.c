@@ -348,6 +348,13 @@ ssize_t ioWriteMsg(aioObject *op, const HostAddress *address, void *buffer, size
 }
 
 
+void ioSleep(asyncOp *event, uint64_t usTimeout)
+{
+  aioInfo *info = (aioInfo*)event;  
+  info->coroutine = coroutineCurrent();
+  ((aioInfo*)event)->object->base->methodImpl.startTimer(event, usTimeout, 1);
+  coroutineYield();
+}
 
 // asyncOp *asyncMonitor(aioObject *op, asyncCb callback, void *arg)
 // {

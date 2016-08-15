@@ -215,6 +215,13 @@ HTTPClient *httpsClientNew(asyncBase *base, SSLSocket *socket)
   return client;
 }
 
+void httpClientDelete(HTTPClient *client)
+{
+  dynamicBufferFree(&client->out);
+  free(client->inBuffer);
+  free(client);
+}
+
 void aioHttpConnect(HTTPClient *client,
                     const HostAddress *address,
                     uint64_t usTimeout,
@@ -293,10 +300,15 @@ int ioHttpRequest(HTTPClient *client,
 {
   HTTPOp *newOp = allocHttpOp(client, httpOpRequest, parseCallback, 0, 0);
   
+  int result;
   if (client->isHttps)
-    ioSslWrite(client->sslSocket, (void*)request, requestSize, afNone, usTimeout);
+    result = ioSslWrite(client->sslSocket, (void*)request, requestSize, afNone, usTimeout);
   else
-    ioWrite(client->plainSocket, (void*)request, requestSize, afNone, usTimeout);  
+    result = ioWrite(client->plainSocket, (void*)request, requestSize, afNone, usTimeout);  
+  if (result == -1) {
+    releaseObject(newOp->info.client->base, newOp, httpPoolId);
+    return -1;
+  }
 
   dynamicBufferSeek(&client->out, SeekSet, 0);
   httpInit(&client->state);  

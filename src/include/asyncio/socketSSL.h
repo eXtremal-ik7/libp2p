@@ -61,6 +61,7 @@ typedef struct SSLOp {
 
 
 SSLSocket *sslSocketNew(asyncBase *base);
+void sslSocketDelete(SSLSocket *socket);
 
 socketTy sslGetSocket(const SSLSocket *socket);
 

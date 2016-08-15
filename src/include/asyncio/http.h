@@ -66,6 +66,7 @@ void httpParseDefault(HttpComponent *component, void *arg);
 
 HTTPClient *httpClientNew(asyncBase *base, aioObject *socket);
 HTTPClient *httpsClientNew(asyncBase *base, SSLSocket *socket);
+void httpClientDelete(HTTPClient *client);
 
 void aioHttpConnect(HTTPClient *client,
                     const HostAddress *address,

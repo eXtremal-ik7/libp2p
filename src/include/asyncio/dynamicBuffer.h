@@ -29,6 +29,7 @@ typedef struct dynamicBuffer dynamicBuffer;
 
 void dynamicBufferInit(dynamicBuffer *buffer, size_t initialSize);
 void dynamicBufferInitForeign(dynamicBuffer *buffer, void *data, size_t size);
+void dynamicBufferFree(dynamicBuffer *buffer);
 
 void *dynamicBufferAlloc(dynamicBuffer *buffer, size_t size);
 void dynamicBufferClear(dynamicBuffer *buffer);

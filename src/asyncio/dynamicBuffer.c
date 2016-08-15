@@ -34,6 +34,11 @@ void dynamicBufferInit(dynamicBuffer *buffer, size_t initialSize)
   buffer->foreign = 0;
 }
 
+void dynamicBufferFree(dynamicBuffer *buffer)
+{
+  free(buffer->data);
+}
+
 
 void *dynamicBufferAlloc(dynamicBuffer *buffer, size_t size)
 {

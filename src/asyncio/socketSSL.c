@@ -181,6 +181,15 @@ SSLSocket *sslSocketNew(asyncBase *base)
   return S;
 }
 
+void sslSocketDelete(SSLSocket *socket)
+{
+  free(socket->sslReadBuffer);
+  deleteAioObject(socket->object);
+  SSL_free(socket->ssl);
+  SSL_CTX_free(socket->sslContext);
+  free(socket);
+}
+
 socketTy sslGetSocket(const SSLSocket *socket)
 {
   return socket->S;
