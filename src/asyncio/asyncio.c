@@ -28,6 +28,10 @@ void *intArg(intptr_t id)
   return (void*)id;
 }
 
+asyncBase *aioObjectBase(aioObject *object)
+{
+  return object->base;
+}
 
 socketTy aioObjectSocket(aioObject *object)
 {
@@ -76,21 +80,10 @@ asyncBase *createAsyncBase(AsyncMethod method)
   }
   
   initObjectPool(&base->pool);
-  base->coroutineMode = 0;
 #ifndef NDEBUG
   base->opsCount = 0;
 #endif
    return base;
-}
-
-int getCoroutineMode(asyncBase *base)
-{
-  return base->coroutineMode; 
-}
-
-void setCoroutineMode(asyncBase *base, int enabled)
-{
-  base->coroutineMode = enabled;
 }
 
 void asyncLoop(asyncBase *base)
@@ -178,6 +171,7 @@ void releaseObject(asyncBase *base, void *object, const void *type)
 
 
 static asyncOp *initAsyncOp(aioObject *object,
+                            int needYield,    
                             asyncCb callback,
                             void *arg,
                             void *buffer,
@@ -191,12 +185,14 @@ static asyncOp *initAsyncOp(aioObject *object,
   
   aioInfo *info = (aioInfo*)newOp;
   info->object = object;
-  if (getCoroutineMode(object->base) == 0)  {
+  if (needYield) {
+    info->coroutine = coroutineCurrent();
+  } else {
+    info->coroutine = 0;
     info->callback = callback;
     info->arg = arg;
-  } else {
-    info->coroutine = coroutineCurrent();
   }
+
   if (buffer)
     info->buffer = buffer;
   else if (dynamicArray)
@@ -214,7 +210,7 @@ void aioConnect(aioObject *op,
                 asyncCb callback,
                 void *arg)
 {
-  asyncOp *newOp = initAsyncOp(op, callback, arg, 0, 0, 0, afNone);
+  asyncOp *newOp = initAsyncOp(op, 0, callback, arg, 0, 0, 0, afNone);
   op->base->methodImpl.connect(newOp, address, usTimeout);
 }
 
@@ -224,7 +220,7 @@ void aioAccept(aioObject *op,
                asyncCb callback,
                void *arg)
 {
-  asyncOp *newOp = initAsyncOp(op, callback, arg, 0, 0, 0, afNone);
+  asyncOp *newOp = initAsyncOp(op, 0, callback, arg, 0, 0, 0, afNone);
   op->base->methodImpl.accept(newOp, usTimeout);
 }
 
@@ -237,7 +233,7 @@ void aioRead(aioObject *op,
              asyncCb callback,
              void *arg)
 {
-  asyncOp *newOp = initAsyncOp(op, callback, arg, buffer, 0, size, flags);
+  asyncOp *newOp = initAsyncOp(op, 0, callback, arg, buffer, 0, size, flags);
   op->base->methodImpl.read(newOp, usTimeout);
 }
 
@@ -250,7 +246,7 @@ void aioWrite(aioObject *op,
               asyncCb callback,
               void *arg)
 {
-  asyncOp *newOp = initAsyncOp(op, callback, arg, buffer, 0, size, flags);  
+  asyncOp *newOp = initAsyncOp(op, 0, callback, arg, buffer, 0, size, flags);  
   op->base->methodImpl.write(newOp, usTimeout);
 }
 
@@ -261,7 +257,7 @@ void aioReadMsg(aioObject *op,
                 asyncCb callback,
                 void *arg)
 {
-  asyncOp *newOp = initAsyncOp(op, callback, arg, 0, buffer, 0, afNone);
+  asyncOp *newOp = initAsyncOp(op, 0, callback, arg, 0, buffer, 0, afNone);
   op->base->methodImpl.readMsg(newOp, usTimeout);
 }
 
@@ -276,14 +272,14 @@ void aioWriteMsg(aioObject *op,
                  asyncCb callback,
                  void *arg)
 {
-  asyncOp *newOp = initAsyncOp(op, callback, arg, buffer, 0, size, flags);  
+  asyncOp *newOp = initAsyncOp(op, 0, callback, arg, buffer, 0, size, flags);  
   op->base->methodImpl.writeMsg(newOp, address, usTimeout);
 }
 
 
 int ioConnect(aioObject *op, const HostAddress *address, uint64_t usTimeout)
 {
-  asyncOp *newOp = initAsyncOp(op, 0, 0, 0, 0, 0, afNone);
+  asyncOp *newOp = initAsyncOp(op, 1, 0, 0, 0, 0, 0, afNone);
   op->base->methodImpl.connect(newOp, address, usTimeout);
   
   coroutineYield();
@@ -294,7 +290,7 @@ int ioConnect(aioObject *op, const HostAddress *address, uint64_t usTimeout)
 
 socketTy ioAccept(aioObject *op, uint64_t usTimeout)
 {
-  asyncOp *newOp = initAsyncOp(op, 0, 0, 0, 0, 0, afNone);
+  asyncOp *newOp = initAsyncOp(op, 1, 0, 0, 0, 0, 0, afNone);
   op->base->methodImpl.accept(newOp, usTimeout);
 
   coroutineYield();
@@ -305,7 +301,7 @@ socketTy ioAccept(aioObject *op, uint64_t usTimeout)
 
 ssize_t ioRead(aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-  asyncOp *newOp = initAsyncOp(op, 0, 0, buffer, 0, size, flags);
+  asyncOp *newOp = initAsyncOp(op, 1, 0, 0, buffer, 0, size, flags);
   op->base->methodImpl.read(newOp, usTimeout);
 
   coroutineYield();  
@@ -316,7 +312,7 @@ ssize_t ioRead(aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint6
 
 ssize_t ioWrite(aioObject *op, void *buffer, size_t size, AsyncFlags flags,uint64_t usTimeout)
 {
-  asyncOp *newOp = initAsyncOp(op, 0, 0, buffer, 0, size, flags);  
+  asyncOp *newOp = initAsyncOp(op, 1, 0, 0, buffer, 0, size, flags);  
   op->base->methodImpl.write(newOp, usTimeout);
 
   coroutineYield();  
@@ -327,7 +323,7 @@ ssize_t ioWrite(aioObject *op, void *buffer, size_t size, AsyncFlags flags,uint6
 
 ssize_t ioReadMsg(aioObject *op, dynamicBuffer *buffer,uint64_t usTimeout)
 {
-  asyncOp *newOp = initAsyncOp(op, 0, 0, 0, buffer, 0, afNone);
+  asyncOp *newOp = initAsyncOp(op, 1, 0, 0, 0, buffer, 0, afNone);
   op->base->methodImpl.readMsg(newOp, usTimeout);
 
   coroutineYield();  
@@ -339,7 +335,7 @@ ssize_t ioReadMsg(aioObject *op, dynamicBuffer *buffer,uint64_t usTimeout)
 
 ssize_t ioWriteMsg(aioObject *op, const HostAddress *address, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-  asyncOp *newOp = initAsyncOp(op, 0, 0, buffer, 0, size, flags);  
+  asyncOp *newOp = initAsyncOp(op, 1, 0, 0, buffer, 0, size, flags);  
   op->base->methodImpl.writeMsg(newOp, address, usTimeout);
     
   coroutineYield();  

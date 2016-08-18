@@ -80,11 +80,8 @@ struct aioInfo {
   IoActionTy currentAction; 
   AsyncOpStatus status;
   
-  union {
-    asyncCb *callback;
-    coroutineTy *coroutine;
-  };
-  
+  coroutineTy *coroutine;
+  asyncCb *callback;
   void *arg;
 
   union {

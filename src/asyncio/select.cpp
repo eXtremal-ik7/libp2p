@@ -1,3 +1,4 @@
+#include "asyncio/coroutine.h"
 #include "asyncio/dynamicBuffer.h"
 #include "asyncioInternal.h"
 #include <assert.h>
@@ -135,6 +136,9 @@ static void asyncOpLink(asyncOpList *list, asyncOp *op)
 
 static void asyncOpUnlink(asyncOp *op)
 {
+  if (!op->info.object)
+    return;  
+  
   if (op->list) {
     asyncOpList *list = op->list;
     if (list->head == op)
@@ -150,6 +154,7 @@ static void asyncOpUnlink(asyncOp *op)
     op->list = 0;
 //     cqueue_ptr_push(&op->info.object->base->asyncOps, op);
     objectRelease(&op->info.object->base->pool, op, poolId);
+    op->info.object = 0;
   }
 }
 
@@ -290,13 +295,24 @@ static void finishOperation(asyncOp *op,
                             AsyncOpStatus status,
                             int needStopTimer)
 {
+  coroutineTy *coroutine;
+  asyncCb *callback;
+  
   if (needStopTimer)
     stopTimer(op);
   op->info.status = status;
-  if (op->info.callback)
-    op->info.callback(&op->info);
-  if (status != aosMonitoring)
-    asyncOpUnlink(op);
+  if ( (coroutine = op->info.coroutine) ) {
+    // if (status != aosMonitoring)
+    asyncOpUnlink(op);    
+    coroutineCall(coroutine);
+  } else {
+    if ( (callback = op->info.callback) ) {
+      op->info.callback = 0;
+      callback(&op->info);
+    }
+    // if (status != aosMonitoring)
+    asyncOpUnlink(op);    
+  }
 }
 
 

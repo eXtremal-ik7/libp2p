@@ -9,6 +9,7 @@ extern "C" {
   
 intptr_t argAsInteger(void *arg);
 void *intArg(intptr_t id);
+asyncBase *aioObjectBase(aioObject *object);
 socketTy aioObjectSocket(aioObject *object);
 iodevTy aioObjectDevice(aioObject *object);
 
@@ -18,9 +19,6 @@ aioObject *newSocketIo(asyncBase *base, socketTy hSocket);
 aioObject *newDeviceIo(asyncBase *base, iodevTy hDevice);
 // aioObject *newSocketSynIo(asyncBase *base, socketTy hSocket);
 void deleteAioObject(aioObject *object);
-
-int getCoroutineMode(asyncBase *base);
-void setCoroutineMode(asyncBase *base, int enabled);
 
 asyncOp *newUserEvent(asyncBase *base, asyncCb callback, void *arg);
 void userEventStartTimer(asyncOp *event, uint64_t usTimeout, int counter);

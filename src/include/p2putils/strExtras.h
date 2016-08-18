@@ -1,6 +1,8 @@
 #ifndef __LIBP2P_STREXTRAS_H_
 #define __LIBP2P_STREXTRAS_H_
 
+#include <algorithm>
+
 template<typename IntType> IntType xhton(IntType X)
 {
   if (!is_bigendian()) {

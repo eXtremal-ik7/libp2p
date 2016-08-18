@@ -77,7 +77,6 @@ int main(int argc, char **argv)
   ctx.base = base;
   ctx.socket = socketOp;
 
-  setCoroutineMode(base, 1);  
   coroutineTy *listenerProc = coroutineNew(listener, &ctx, 0x10000);
   coroutineCall(listenerProc);
   asyncLoop(base);

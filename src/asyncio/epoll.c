@@ -1,3 +1,4 @@
+#include "asyncio/coroutine.h"
 #include "asyncio/dynamicBuffer.h"
 #include "asyncioInternal.h"
 
@@ -151,7 +152,6 @@ static int getFd(asyncOp *op)
 
 static fdStruct *getFdStruct(epollBase *base, int fd)
 {
-  int i;
   fdStruct *fds;
   if (fd < base->fdMapSize) {
     fds = &base->fdMap[fd];
@@ -206,6 +206,9 @@ static void asyncOpLink(fdStruct *fds, asyncOp *op)
 
 static void asyncOpUnlink(asyncOp *op)
 {
+  if (!op->info.object)
+    return;
+  
   epollBase *base = (epollBase*)op->info.object->base;
   int fd = getFd(op);
   if (fd < 0)
@@ -242,6 +245,7 @@ static void asyncOpUnlink(asyncOp *op)
   }
 
   objectRelease(&op->info.object->base->pool, op, poolId);
+  op->info.object = 0;  
 }
 
 static void timerCb(int sig, siginfo_t *si, void *uc)
@@ -345,7 +349,7 @@ asyncBase *epollNewAsyncBase()
       fprintf(stderr, " * epollNewAsyncBase: sigaction error\n");
     }
 
-    memset(&sAction, sizeof(sAction), 0);
+    memset(&sAction, 0, sizeof(sAction));
     sAction.sa_handler = SIG_IGN;
 
     if (sigaction(SIGPIPE, &sAction, NULL) == -1) {
@@ -368,22 +372,24 @@ static void finishOperation(asyncOp *op,
                             AsyncOpStatus status,
                             int needStopTimer)
 {
-
+  coroutineTy *coroutine;
+  asyncCb *callback;
+  
   if (needStopTimer)
     stopTimer(op);
   op->info.status = status;
-  if (getCoroutineMode(op->info.object->base) == 1) {
-    coroutineTy *coroutine = op->info.coroutine;
-    if (status != aosMonitoring)
-      asyncOpUnlink(op);    
+  if ( (coroutine = op->info.coroutine) ) {
+    // if (status != aosMonitoring)
+    asyncOpUnlink(op);    
     coroutineCall(coroutine);
   } else {
-    if (op->info.callback)
-      op->info.callback(&op->info);
-    if (status != aosMonitoring)
-      asyncOpUnlink(op);    
+    if ( (callback = op->info.callback) ) {
+      op->info.callback = 0;
+      callback(&op->info);
+    }
+    // if (status != aosMonitoring)
+    asyncOpUnlink(op);    
   }
-
 }
 
 
@@ -591,6 +597,7 @@ asyncOp *epollNewAsyncOp(asyncBase *base)
 void epollDeleteObject(aioObject *object)
 {
   int fd;
+  // TODO: what to do with user event objects ?
   switch (object->type) {
     case ioObjectDevice :
       fd = object->hDevice;
@@ -601,37 +608,43 @@ void epollDeleteObject(aioObject *object)
       break;
   }
   
-  asyncOp *op;
-  fdStruct *fds = getFdStruct(object->base, fd);
+  asyncOp *op;  
+  epollBase *base = (epollBase*)object->base;
+  fdStruct *fds = getFdStruct(base, fd);
   
   op = fds->readOps.head;
   while (op) {
     stopTimer(op);
     op->info.status = aosUnknownError;
-    if (getCoroutineMode(op->info.object->base) == 1)
+    if (op->info.coroutine)
       coroutineCall(op->info.coroutine);
     else if (op->info.callback)
       op->info.callback(&op->info);
-    
+   
     asyncOp *forRelease = op;
     op = op->next;
-    objectRelease(&forRelease->info.object->base->pool, forRelease, poolId);    
+    objectRelease(&base->B.pool, forRelease, poolId);    
+    forRelease->info.object = 0;    
   }
  
   op = fds->writeOps.head;
   while (op) {
     stopTimer(op);
     op->info.status = aosUnknownError;
-    if (getCoroutineMode(op->info.object->base) == 1)
+    if (op->info.coroutine)
       coroutineCall(op->info.coroutine);
     else if (op->info.callback)
       op->info.callback(&op->info);
-    op = op->next; 
-    
+
     asyncOp *forRelease = op;
-    op = op->next;
-    objectRelease(&forRelease->info.object->base->pool, forRelease, poolId);        
+    op = op->next;    
+    objectRelease(&base->B.pool, forRelease, poolId);        
+    forRelease->info.object = 0;    
   }
+  
+  fds->readOps.head = 0;
+  fds->writeOps.head = 0;
+  epollControl(base->epollFd, EPOLL_CTL_DEL, 0, fd);
 
   close(fd);
   free(object);
