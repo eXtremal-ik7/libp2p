@@ -105,6 +105,7 @@ asyncOp *newUserEvent(asyncBase *base, asyncCb callback, void *arg)
   info->object = malloc(sizeof(aioObject));
   info->object->base = base;
   info->object->type = ioObjectUserEvent;
+  info->coroutine = 0;
   info->callback = callback;
   info->arg = arg;
   return op;

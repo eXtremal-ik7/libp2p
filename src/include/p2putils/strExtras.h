@@ -2,6 +2,7 @@
 #define __LIBP2P_STREXTRAS_H_
 
 #include <algorithm>
+#include "config.h"
 
 template<typename IntType> IntType xhton(IntType X)
 {

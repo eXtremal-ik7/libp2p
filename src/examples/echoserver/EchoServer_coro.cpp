@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-struct listenerCtx {
+struct listenerContext {
   asyncBase *base;
   aioObject *socket;
 };
@@ -36,7 +36,7 @@ void *reader(void *arg)
 
 void *listener(void *arg)
 {
-  listenerCtx *ctx = (listenerCtx*)arg;
+  listenerContext *ctx = (listenerContext*)arg;
   while (true) {
     socketTy acceptSocket = ioAccept(ctx->socket, 0);
     if (acceptSocket != INVALID_SOCKET) {
@@ -73,7 +73,7 @@ int main(int argc, char **argv)
   asyncBase *base = createAsyncBase(amOSDefault);
   aioObject *socketOp = newSocketIo(base, hSocket);
   
-  listenerCtx ctx;
+  listenerContext ctx;
   ctx.base = base;
   ctx.socket = socketOp;
 

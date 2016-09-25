@@ -48,4 +48,5 @@ option(HTTP_ENABLED "HTTP protocol support" ON)
 
 add_subdirectory(asyncio)
 add_subdirectory(p2putils)
+add_subdirectory(p2p)
 add_subdirectory(examples)

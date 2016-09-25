@@ -6,7 +6,7 @@
 
 static void dbgPrint(const char *fmt, ...)
 {
-#ifndef NDEBUG
+#ifdef TRACE
   va_list arguments;
   va_start(arguments, fmt);
   vfprintf(stderr, fmt, arguments);
