@@ -1,4 +1,5 @@
 set(Sources asyncio.c
+  asyncOp.c
   cstl.c
   objectPool.c
   dynamicBuffer.c

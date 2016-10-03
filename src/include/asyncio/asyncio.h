@@ -20,10 +20,10 @@ aioObject *newDeviceIo(asyncBase *base, iodevTy hDevice);
 // aioObject *newSocketSynIo(asyncBase *base, socketTy hSocket);
 void deleteAioObject(aioObject *object);
 
-asyncOp *newUserEvent(asyncBase *base, asyncCb callback, void *arg);
-void userEventStartTimer(asyncOp *event, uint64_t usTimeout, int counter);
-void userEventStopTimer(asyncOp *event);
-void userEventActivate(asyncOp *event);
+aioObject *newUserEvent(asyncBase *base, asyncCb callback, void *arg);
+void userEventStartTimer(aioObject *event, uint64_t usTimeout, int counter);
+void userEventStopTimer(aioObject *event);
+void userEventActivate(aioObject *event);
 
 void aioConnect(aioObject *op,
                 const HostAddress *address,
@@ -74,7 +74,7 @@ ssize_t ioRead(aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint6
 ssize_t ioReadMsg(aioObject *op, dynamicBuffer *buffer, uint64_t usTimeout);
 ssize_t ioWrite(aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
 ssize_t ioWriteMsg(aioObject *op, const HostAddress *address, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
-void ioSleep(asyncOp *event, uint64_t usTimeout);
+void ioSleep(aioObject *event, uint64_t usTimeout);
 
 // asyncOp *asyncMonitor(aioObject *op, asyncCb callback, void *arg);
 // void asyncMonitorStop(asyncOp *op);

@@ -76,10 +76,10 @@ int main(int argc, char **argv)
 
   ClientData data;  
   aioObject *socketOp = newSocketIo(base, hSocket);
-  asyncOp *stdInputOp = newUserEvent(base, pingTimerCb, &data);
+  aioObject *stdInputOp = newUserEvent(base, pingTimerCb, &data);
 
   address.family = AF_INET;
-  address.ipv4 = inet_addr("169.254.0.1");
+  address.ipv4 = inet_addr("127.0.0.1");
   address.port = htons(9999);
   data.base = base;
   data.socket = socketOp;

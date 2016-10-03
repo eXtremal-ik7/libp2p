@@ -16,8 +16,6 @@
 #include <map>
 #include <stdio.h>
 
-extern const char *poolId;
-
 struct asyncOpList;
 
 struct asyncOp {
@@ -53,7 +51,7 @@ typedef struct selectBase {
 void selectPostEmptyOperation(asyncBase *base);
 void selectNextFinishedOperation(asyncBase *base);
 aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data);
-asyncOp *selectNewAsyncOp(asyncBase *base);
+asyncOp *selectNewAsyncOp(asyncBase *base, int needTimer);
 void selectDeleteObject(aioObject *object);
 void selectStartTimer(asyncOp *op, uint64_t usTimeout, int count);
 void selectStopTimer(asyncOp *op);
@@ -152,8 +150,7 @@ static void asyncOpUnlink(asyncOp *op)
       op->next->prev = op->prev;
 
     op->list = 0;
-//     cqueue_ptr_push(&op->info.object->base->asyncOps, op);
-    objectRelease(&op->info.object->base->pool, op, poolId);
+    objectRelease(&op->info.object->base->pool, op, op->info.root.poolId);
     op->info.object = 0;
   }
 }
@@ -247,7 +244,7 @@ static void startOperation(asyncOp *op,
   if (action == actMonitorStop || action == actMonitor)
     selectPostEmptyOperation((asyncBase*)localBase);
   
-  if (usTimeout)
+  if (op->timerId && usTimeout)
     startTimer(op, usTimeout, 0);
 }
 
@@ -298,7 +295,7 @@ static void finishOperation(asyncOp *op,
   coroutineTy *coroutine;
   asyncCb *callback;
   
-  if (needStopTimer)
+  if (op->timerId && needStopTimer)
     stopTimer(op);
   op->info.status = status;
   if ( (coroutine = op->info.coroutine) ) {
@@ -478,7 +475,7 @@ void selectNextFinishedOperation(asyncBase *base)
       int available;
       ioctl(localBase->pipeFd[0], FIONREAD, &available);
       asyncOp *op;
-      for (int i = 0; i < available/sizeof(op); i++) {
+      for (int i = 0; i < available/(int)sizeof(op); i++) {
         read(localBase->pipeFd[0], &op, sizeof(op));
         if (!op)
           return;
@@ -517,7 +514,7 @@ aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 }
 
 
-asyncOp *selectNewAsyncOp(asyncBase *base)
+asyncOp *selectNewAsyncOp(asyncBase *base, int needTimer)
 {
   asyncOp *op = new asyncOp;
   if (op) {
@@ -527,13 +524,17 @@ asyncOp *selectNewAsyncOp(asyncBase *base)
     op->list = 0;
     op->next = 0;
     op->prev = 0;
-    sEvent.sigev_notify = SIGEV_SIGNAL;
-    sEvent.sigev_signo = SIGRTMIN;
-    sEvent.sigev_value.sival_ptr = op;
-    if (timer_create(CLOCK_REALTIME, &sEvent, &op->timerId) == -1) {
-      fprintf(stderr,
-              " * newSelectOp: timer_create error %s\n",
-              strerror(errno));
+    if (needTimer) {
+      sEvent.sigev_notify = SIGEV_SIGNAL;
+      sEvent.sigev_signo = SIGRTMIN;
+      sEvent.sigev_value.sival_ptr = op;
+      if (timer_create(CLOCK_REALTIME, &sEvent, &op->timerId) == -1) {
+        fprintf(stderr,
+                " * newSelectOp: timer_create error %s\n",
+                strerror(errno));
+      }
+    } else {
+      op->timerId = 0;
     }
   }
 
@@ -550,6 +551,7 @@ void selectDeleteObject(aioObject *object)
 
 void selectStartTimer(asyncOp *op, uint64_t usTimeout, int count)
 {
+  // only for user event, 'op' must have timer
   op->counter = (count > 0) ? count : -1;
   startTimer(op, usTimeout, 1); 
 }
@@ -557,6 +559,7 @@ void selectStartTimer(asyncOp *op, uint64_t usTimeout, int count)
 
 void selectStopTimer(asyncOp *op)
 {
+  // only for user event, 'op' must have timer
   stopTimer(op);
 }
 

@@ -19,8 +19,6 @@
 
 #define MAX_EVENTS 256
 
-extern const char *poolId;
-
 enum pipeDescrs {
   Read = 0,
   Write
@@ -78,7 +76,7 @@ typedef struct epollBase {
 void epollPostEmptyOperation(asyncBase *base);
 void epollNextFinishedOperation(asyncBase *base);
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data);
-asyncOp *epollNewAsyncOp(asyncBase *base);
+asyncOp *epollNewAsyncOp(asyncBase *base, int needTimer);
 void epollDeleteObject(aioObject *object);
 void epollStartTimer(asyncOp *op, uint64_t usTimeout, int count);
 void epollStopTimer(asyncOp *op);
@@ -244,7 +242,7 @@ static void asyncOpUnlink(asyncOp *op)
     epollControl(base->epollFd, action, events, getFd(op));
   }
 
-  objectRelease(&op->info.object->base->pool, op, poolId);
+  objectRelease(&op->info.object->base->pool, op, op->info.root.poolId);
   op->info.object = 0;  
 }
 
@@ -318,8 +316,8 @@ static void startOperation(asyncOp *op,
   if (action == actMonitorStop || action == actMonitor)
     epollPostEmptyOperation((asyncBase *)localBase);
 
-  if (usTimeout)
-    startTimer(op, usTimeout, 0);
+  if (op->timerId && usTimeout)
+   startTimer(op, usTimeout, 0);
 }
 
 asyncBase *epollNewAsyncBase()
@@ -375,8 +373,11 @@ static void finishOperation(asyncOp *op,
   coroutineTy *coroutine;
   asyncCb *callback;
   
-  if (needStopTimer)
+  if (op->info.root.endTime)
+    removeFromTimeoutQueue(op->info.object->base, &op->info.root);
+  if (op->timerId && needStopTimer)
     stopTimer(op);
+
   op->info.status = status;
   if ( (coroutine = op->info.coroutine) ) {
     // if (status != aosMonitoring)
@@ -384,7 +385,7 @@ static void finishOperation(asyncOp *op,
     coroutineCall(coroutine);
   } else {
     if ( (callback = op->info.callback) ) {
-      op->info.callback = 0;
+//       op->info.callback = 0;
       callback(&op->info);
     }
     // if (status != aosMonitoring)
@@ -515,7 +516,8 @@ void epollNextFinishedOperation(asyncBase *base)
   while (1) {
     do {
       nfds = epoll_wait(localBase->epollFd, events, MAX_EVENTS, -1);
-    } while (nfds <= 0 && errno == EINTR);
+    } while (errno == EINTR);
+    processTimeoutQueue(base);
 
     for (n = 0; n < nfds; n++) {
       if (events[n].data.fd == localBase->pipeFd[Read]) {
@@ -571,7 +573,7 @@ aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
   return object;
 }
 
-asyncOp *epollNewAsyncOp(asyncBase *base)
+asyncOp *epollNewAsyncOp(asyncBase *base, int needTimer)
 {
   asyncOp *op = malloc(sizeof(asyncOp));
   if (op) {
@@ -580,13 +582,17 @@ asyncOp *epollNewAsyncOp(asyncBase *base)
     op->internalBufferSize = 0;
     op->next = 0;
     op->prev = 0;
-    sEvent.sigev_notify = SIGEV_SIGNAL;
-    sEvent.sigev_signo = SIGRTMIN;
-    sEvent.sigev_value.sival_ptr = op;
-    if (timer_create(CLOCK_REALTIME, &sEvent, &op->timerId) == -1) {
-      fprintf(stderr,
-              " * newepollOp: timer_create error %s\n",
-              strerror(errno));
+    if (needTimer) {
+      sEvent.sigev_notify = SIGEV_SIGNAL;
+      sEvent.sigev_signo = SIGRTMIN;
+      sEvent.sigev_value.sival_ptr = op;
+      if (timer_create(CLOCK_REALTIME, &sEvent, &op->timerId) == -1) {
+        fprintf(stderr,
+                " * newepollOp: timer_create error %s\n",
+                strerror(errno));
+      }
+    } else {
+      op->timerId = 0;
     }
   }
 
@@ -614,7 +620,10 @@ void epollDeleteObject(aioObject *object)
   
   op = fds->readOps.head;
   while (op) {
-    stopTimer(op);
+    if (op->info.root.endTime)
+      removeFromTimeoutQueue(op->info.object->base, &op->info.root);
+    if (op->timerId)
+      stopTimer(op);
     op->info.status = aosUnknownError;
     if (op->info.coroutine)
       coroutineCall(op->info.coroutine);
@@ -623,13 +632,16 @@ void epollDeleteObject(aioObject *object)
    
     asyncOp *forRelease = op;
     op = op->next;
-    objectRelease(&base->B.pool, forRelease, poolId);    
+    objectRelease(&base->B.pool, forRelease, op->info.root.poolId);    
     forRelease->info.object = 0;    
   }
  
   op = fds->writeOps.head;
   while (op) {
-    stopTimer(op);
+    if (op->info.root.endTime)
+      removeFromTimeoutQueue(op->info.object->base, &op->info.root);
+    if (op->timerId)
+      stopTimer(op);
     op->info.status = aosUnknownError;
     if (op->info.coroutine)
       coroutineCall(op->info.coroutine);
@@ -638,7 +650,7 @@ void epollDeleteObject(aioObject *object)
 
     asyncOp *forRelease = op;
     op = op->next;    
-    objectRelease(&base->B.pool, forRelease, poolId);        
+    objectRelease(&base->B.pool, forRelease, op->info.root.poolId);        
     forRelease->info.object = 0;    
   }
   
@@ -653,6 +665,7 @@ void epollDeleteObject(aioObject *object)
 
 void epollStartTimer(asyncOp *op, uint64_t usTimeout, int count)
 {
+  // only for user event, 'op' must have timer
   op->counter = (count > 0) ? count : -1;
   startTimer(op, usTimeout, 1);
 }
@@ -660,6 +673,7 @@ void epollStartTimer(asyncOp *op, uint64_t usTimeout, int count)
 
 void epollStopTimer(asyncOp *op)
 {
+  // only for user event, 'op' must have timer  
   stopTimer(op);
 }
 

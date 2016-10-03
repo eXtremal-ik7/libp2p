@@ -32,7 +32,7 @@ private:
   
 public:
   asyncBase *_base;
-  asyncOp *_event;
+  aioObject *_event;
   p2pNode *_node;  
   HostAddress _address;
   bool _connected;
@@ -48,7 +48,7 @@ public:
   bool createConnection();
   void destroyConnection();
   void connect();
-  void connectAfter(uint64_t timeout) { asyncOp *ev = newUserEvent(_base, clientNetworkWaitEnd, this); userEventStartTimer(ev, timeout, 1); }
+  void connectAfter(uint64_t timeout) { userEventStartTimer(_event, timeout, 1); }
   
   void accept(bool coroutineMode, p2pConnection *connectionArg);
   

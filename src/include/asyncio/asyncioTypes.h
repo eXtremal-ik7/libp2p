@@ -2,6 +2,7 @@
 #define __ASYNCTYPES_H_
 
 #include "config.h"
+#include "asyncio/asyncOp.h"
 #include "asyncio/socket.h"
 
 #if defined(OS_WINDOWS)
@@ -58,7 +59,8 @@ typedef enum AsyncOpStatus {
 typedef enum AsyncFlags {
   afNone = 0,
   afWaitAll = 1,
-  afNoCopy = 2
+  afNoCopy = 2,
+  afRealtime = 4
 } AsyncFlags;
 
 typedef enum AsyncMonitorState {
@@ -76,6 +78,7 @@ typedef void asyncCb(aioInfo *info);
 
 
 struct aioInfo {
+  aioOpRoot root;
   aioObject *object;
   IoActionTy currentAction; 
   AsyncOpStatus status;

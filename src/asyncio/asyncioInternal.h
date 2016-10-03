@@ -1,3 +1,4 @@
+#include "asyncio/asyncOp.h"
 #include "asyncio/asyncioTypes.h"
 #include "asyncio/objectPool.h"
 #include "cstl.h"
@@ -9,7 +10,7 @@ struct dynamicBuffer;
 typedef void postEmptyOperationTy(asyncBase*);
 typedef void nextFinishedOperationTy(asyncBase*);
 typedef aioObject *newAioObjectTy(asyncBase*, IoObjectTy, void*);
-typedef asyncOp *newAsyncOpTy(asyncBase*);
+typedef asyncOp *newAsyncOpTy(asyncBase*, int);
 typedef void deleteObjectTy(aioObject*);
 typedef void startTimerTy(asyncOp*, uint64_t, int);
 typedef void stopTimerTy(asyncOp*);
@@ -48,6 +49,7 @@ struct asyncBase {
   enum AsyncMethod method;
   struct asyncImpl methodImpl;
   struct ObjectPool pool;
+  OpRing timeGrid;
 #ifndef NDEBUG
   int opsCount;
 #endif
@@ -55,6 +57,7 @@ struct asyncBase {
 
 
 struct aioObject {
+  aioObjectRoot root;
   asyncBase *base;
   IoObjectTy type;
   union {
