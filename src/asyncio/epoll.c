@@ -19,6 +19,8 @@
 
 #define MAX_EVENTS 256
 
+void userEventTrigger(aioObject *event);
+
 enum pipeDescrs {
   Read = 0,
   Write
@@ -30,33 +32,21 @@ typedef enum pipeCmd {
   UserEvent
 } pipeCmd;
 
-typedef enum setMode {
-  Add = 0,
-  Del
-} setMode;
-
 
 typedef struct pipeMsg {
   pipeCmd cmd;
   void *data;
 } pipeMsg;
 
-typedef struct asyncOpList {
-  asyncOp *head;
-  asyncOp *tail;
-} asyncOpList;
-
 typedef struct fdStruct {
-  asyncOpList readOps;
-  asyncOpList writeOps;
+  aioObject *object;
+  int mask;
 } fdStruct;
 
 struct asyncOp {
   aioInfo info;
   timer_t timerId;
   int counter;
-  asyncOp *prev;
-  asyncOp *next;
   int useInternalBuffer;
   void *internalBuffer;
   size_t internalBufferSize;
@@ -170,80 +160,26 @@ static fdStruct *getFdStruct(epollBase *base, int fd)
 
 static void asyncOpLink(fdStruct *fds, asyncOp *op)
 {
-  asyncOpList *list;
-  asyncOpList *oppositeList;
-  int event;
-  int oppositeEvent;
-  if (isWriteOperation(op->info.currentAction)) {
-    list = &fds->writeOps;
-    oppositeList = &fds->readOps;
-    event = EPOLLOUT;
-    oppositeEvent = EPOLLIN;
-  } else {
-    list = &fds->readOps;    
-    oppositeList = &fds->writeOps;
-    event = EPOLLIN;
-    oppositeEvent = EPOLLOUT;
+  int oldMask = fds->mask;
+  fds->mask |= isWriteOperation(op->info.currentAction) ? EPOLLOUT : EPOLLIN;
+  if (oldMask != fds->mask) {
+    int action = oldMask ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
+    epollControl(((epollBase*)op->info.root.base)->epollFd, action, fds->mask, getFd(op));
   }
   
-  if (list->tail) {
-    list->tail->next = op;
-    op->prev = list->tail;
-    op->next = 0;
-    list->tail = op;
-  } else {
-    op->prev = 0;
-    op->next = 0;
-    list->head = list->tail = op;
-    epollBase *base = (epollBase*)op->info.object->base;
-    int action = oppositeList->head ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
-    int events = oppositeList->head ? event | oppositeEvent : event;
-    epollControl(base->epollFd, action, events, getFd(op));
-  }
+  fds->object = op->info.object;
 }
 
 static void asyncOpUnlink(asyncOp *op)
 {
-  if (!op->info.object)
-    return;
-  
-  epollBase *base = (epollBase*)op->info.object->base;
-  int fd = getFd(op);
-  if (fd < 0)
-    return;
-  
-  fdStruct *fds = getFdStruct(base, fd);
-  asyncOpList *list;
-  asyncOpList *oppositeList;
-  int oppositeEvent;
-  if (isWriteOperation(op->info.currentAction)) {
-    list = &fds->writeOps;
-    oppositeList = &fds->readOps;
-    oppositeEvent = EPOLLIN;
-  } else {
-    list = &fds->readOps;    
-    oppositeList = &fds->writeOps;
-    oppositeEvent = EPOLLOUT;
+  if (!op->info.root.executeQueue.next) {
+    epollBase *base = (epollBase*)op->info.root.base;
+    int fd = getFd(op);
+    fdStruct *fds = getFdStruct(base, fd);
+    fds->mask &= ~(isWriteOperation(op->info.currentAction) ? EPOLLOUT : EPOLLIN);
+    int action = fds->mask ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
+    epollControl(base->epollFd, action, fds->mask, fd);
   }
-
-  if (list->head == op)
-    list->head = op->next;
-  if (list->tail == op)
-    list->tail = op->prev;
-
-  if (op->prev)
-    op->prev->next = op->next;
-  if (op->next)
-    op->next->prev = op->prev;
-
-  if (list->head == 0) {
-    int action = oppositeList->head ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
-    int events = oppositeList->head ? oppositeEvent : 0;
-    epollControl(base->epollFd, action, events, getFd(op));
-  }
-
-  objectRelease(&op->info.object->base->pool, op, op->info.root.poolId);
-  op->info.object = 0;  
 }
 
 static void timerCb(int sig, siginfo_t *si, void *uc)
@@ -304,20 +240,7 @@ static void startOperation(asyncOp *op,
     memcpy(op->internalBuffer, op->info.buffer, op->info.transactionSize);
   }
 
-  switch (action) {
-    case actMonitorStop :
-      asyncOpUnlink(op);
-      break;
-    default :
-      asyncOpLink(getFdStruct(localBase, getFd(op)), op);      
-      break;
-  }
-
-  if (action == actMonitorStop || action == actMonitor)
-    epollPostEmptyOperation((asyncBase *)localBase);
-
-  if (op->timerId && usTimeout)
-   startTimer(op, usTimeout, 0);
+  asyncOpLink(getFdStruct(localBase, getFd(op)), op);
 }
 
 asyncBase *epollNewAsyncBase()
@@ -366,31 +289,10 @@ void epollPostEmptyOperation(asyncBase *base)
   write(localBase->pipeFd[Write], &msg, sizeof(pipeMsg));
 }
 
-static void finishOperation(asyncOp *op,
-                            AsyncOpStatus status,
-                            int needStopTimer)
+static void finish(asyncOp *op, AsyncOpStatus status)
 {
-  coroutineTy *coroutine;
-  asyncCb *callback;
-  
-  if (op->info.root.endTime)
-    removeFromTimeoutQueue(op->info.object->base, &op->info.root);
-  if (op->timerId && needStopTimer)
-    stopTimer(op);
-
-  op->info.status = status;
-  if ( (coroutine = op->info.coroutine) ) {
-    // if (status != aosMonitoring)
-    asyncOpUnlink(op);    
-    coroutineCall(coroutine);
-  } else {
-    if ( (callback = op->info.callback) ) {
-//       op->info.callback = 0;
-      callback(&op->info);
-    }
-    // if (status != aosMonitoring)
-    asyncOpUnlink(op);    
-  }
+  asyncOpUnlink(op);
+  finishOperation((aioOpRoot*)op, status, 1);
 }
 
 
@@ -402,15 +304,16 @@ static void processReadyFd(epollBase *base,
   int available;
 
   fdStruct *fds = getFdStruct(base, fd);
-  asyncOpList *list = isRead ? &fds->readOps : &fds->writeOps;
-  asyncOp *op = list->head;
+//   asyncOpList *list = isRead ? &fds->readOps : &fds->writeOps;
+//   asyncOp *op = list->head;
+  asyncOp *op = (asyncOp*)(isRead ? fds->object->root.readQueue.head : fds->object->root.writeQueue.head);
   if (!op)
     return;
   assert(fd == getFd(op) && "Lost asyncop found!");
   ioctl(fd, FIONREAD, &available);
   if (op->info.object->type == ioObjectSocket && available == 0 && isRead) {
     if (op->info.currentAction != actAccept) {
-      finishOperation(op, aosDisconnected, 1);
+      finish(op, aosDisconnected);
       return;
     }
   }
@@ -421,7 +324,7 @@ static void processReadyFd(epollBase *base,
       socklen_t size = sizeof(error);
       getsockopt(op->info.object->hSocket,
                  SOL_SOCKET, SO_ERROR, &error, &size);
-      finishOperation(op, (error == 0) ? aosSuccess : aosUnknownError, 1);
+      finish(op, (error == 0) ? aosSuccess : aosUnknownError);
       break;
     }
     case actAccept : {
@@ -434,9 +337,9 @@ static void processReadyFd(epollBase *base,
         op->info.host.family = 0;
         op->info.host.ipv4 = clientAddr.sin_addr.s_addr;
         op->info.host.port = clientAddr.sin_port;
-        finishOperation(op, aosSuccess, 1);
+        finish(op, aosSuccess);
       } else {
-        finishOperation(op, aosUnknownError, 1);
+        finish(op, aosUnknownError);
       }
       break;
     }
@@ -453,7 +356,7 @@ static void processReadyFd(epollBase *base,
       op->info.bytesTransferred += readyForRead;
       if (op->info.bytesTransferred == op->info.transactionSize ||
           !(op->info.flags & afWaitAll))
-        finishOperation(op, aosSuccess, 1);
+        finish(op, aosSuccess);
       break;
     }
     case actWrite : {
@@ -464,14 +367,14 @@ static void processReadyFd(epollBase *base,
       ssize_t bytesWritten = write(fd, ptr, remaining);
       if (bytesWritten == -1) {
         if (op->info.object->type == ioObjectSocket && errno == EPIPE) {
-          finishOperation(op, aosDisconnected, 1);
+          finish(op, aosDisconnected);
         } else {
-          finishOperation(op, aosUnknownError, 1);
+          finish(op, aosUnknownError);
         }
       } else {
         op->info.bytesTransferred += bytesWritten;
         if (op->info.bytesTransferred == op->info.transactionSize)
-          finishOperation(op, aosSuccess, 1);
+          finish(op, aosSuccess);
       }
 
       break;
@@ -480,7 +383,7 @@ static void processReadyFd(epollBase *base,
       void *ptr = dynamicBufferAlloc(op->info.dynamicArray, available);
       read(fd, ptr, available);
       op->info.bytesTransferred += available;
-      finishOperation(op, aosSuccess, 1);
+      finish(op, aosSuccess);
       break;
     }
     case actWriteMsg : {
@@ -493,11 +396,11 @@ static void processReadyFd(epollBase *base,
 
       sendto(fd, ptr, op->info.transactionSize, 0,
              (struct sockaddr *)&remoteAddress, sizeof(remoteAddress));
-      finishOperation(op, aosSuccess, 1);
+      finish(op, aosSuccess);
       break;
     }
     case actMonitor : {
-      finishOperation(op, aosMonitoring, 0);
+      finish(op, aosMonitoring);
       break;
     }
     default :
@@ -516,7 +419,8 @@ void epollNextFinishedOperation(asyncBase *base)
   while (1) {
     do {
       nfds = epoll_wait(localBase->epollFd, events, MAX_EVENTS, -1);
-    } while (errno == EINTR);
+    } while (nfds <= 0 && errno == EINTR);
+    
     processTimeoutQueue(base);
 
     for (n = 0; n < nfds; n++) {
@@ -533,12 +437,14 @@ void epollNextFinishedOperation(asyncBase *base)
               break;
             case Timeout :
               if (op->info.object->type == ioObjectUserEvent)
-                finishOperation(op, aosSuccess, op->counter == 0);
+                userEventTrigger(op->info.object);
+//                 finishOperation_epoll(op, aosSuccess, op->counter == 0);
               else
-                finishOperation(op, aosTimeout, 0);
+                finish(op, aosTimeout);
               break;
             case UserEvent :
-              finishOperation(op, aosSuccess, op->counter == 0);
+              userEventTrigger(op->info.object);
+//               finishOperation_epoll(op, aosSuccess, op->counter == 0);
               break;
           }
         }
@@ -580,8 +486,6 @@ asyncOp *epollNewAsyncOp(asyncBase *base, int needTimer)
     struct sigevent sEvent;
     op->internalBuffer = 0;
     op->internalBufferSize = 0;
-    op->next = 0;
-    op->prev = 0;
     if (needTimer) {
       sEvent.sigev_notify = SIGEV_SIGNAL;
       sEvent.sigev_signo = SIGRTMIN;
@@ -613,51 +517,12 @@ void epollDeleteObject(aioObject *object)
       fd = object->hSocket;
       break;
   }
-  
-  asyncOp *op;  
+
   epollBase *base = (epollBase*)object->base;
   fdStruct *fds = getFdStruct(base, fd);
-  
-  op = fds->readOps.head;
-  while (op) {
-    if (op->info.root.endTime)
-      removeFromTimeoutQueue(op->info.object->base, &op->info.root);
-    if (op->timerId)
-      stopTimer(op);
-    op->info.status = aosUnknownError;
-    if (op->info.coroutine)
-      coroutineCall(op->info.coroutine);
-    else if (op->info.callback)
-      op->info.callback(&op->info);
-   
-    asyncOp *forRelease = op;
-    op = op->next;
-    objectRelease(&base->B.pool, forRelease, op->info.root.poolId);    
-    forRelease->info.object = 0;    
-  }
- 
-  op = fds->writeOps.head;
-  while (op) {
-    if (op->info.root.endTime)
-      removeFromTimeoutQueue(op->info.object->base, &op->info.root);
-    if (op->timerId)
-      stopTimer(op);
-    op->info.status = aosUnknownError;
-    if (op->info.coroutine)
-      coroutineCall(op->info.coroutine);
-    else if (op->info.callback)
-      op->info.callback(&op->info);
-
-    asyncOp *forRelease = op;
-    op = op->next;    
-    objectRelease(&base->B.pool, forRelease, op->info.root.poolId);        
-    forRelease->info.object = 0;    
-  }
-  
-  fds->readOps.head = 0;
-  fds->writeOps.head = 0;
+  fds->object = 0;
+  fds->mask = 0;
   epollControl(base->epollFd, EPOLL_CTL_DEL, 0, fd);
-
   close(fd);
   free(object);
 }

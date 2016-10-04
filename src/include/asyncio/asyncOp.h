@@ -8,7 +8,13 @@ typedef struct aioObjectRoot aioObjectRoot;
 typedef struct aioOpRoot aioOpRoot;
 typedef struct asyncBase asyncBase;
 
-typedef void aioExceptionCb(int, void*, void*);
+typedef void aioStartProc(aioOpRoot*);
+typedef void aioFinishProc(aioOpRoot*, int);
+
+typedef struct List {
+  aioOpRoot *head;
+  aioOpRoot *tail;
+} List;
 
 typedef struct ListImpl {
   aioOpRoot *prev;
@@ -24,23 +30,24 @@ typedef struct OpRing {
 } OpRing;
 
 struct aioObjectRoot {
-  aioOpRoot *head;
-  aioOpRoot *tail;
+  List readQueue;
+  List writeQueue;
 };
 
 struct aioOpRoot {
   // constant members
   asyncBase *base;
   const char *poolId;
-  aioExceptionCb *exceptionCallback;  
+  aioStartProc *startMethod;
+  aioFinishProc *finishMethod;  
   
   ListImpl executeQueue;
   ListImpl timeoutQueue;
   aioObjectRoot *object;
   void *callback;
   void *arg;
-  int opCode;  
-  int threadId;
+  int opCode;
+  int flags;
   uint64_t endTime;
 };
 
@@ -53,11 +60,13 @@ void opRingPush(OpRing *buffer, aioOpRoot *op, uint64_t pt);
 
 
 // Must be thread-safe
-void addToExecuteQueue(aioObjectRoot *object, aioOpRoot *op);
-void removeFromExecuteQueue(aioOpRoot *op);
+int addToExecuteQueue(aioObjectRoot *object, aioOpRoot *op, int isWriteQueue);
+aioOpRoot *removeFromExecuteQueue(aioOpRoot *op);
 
 void addToTimeoutQueue(asyncBase *base, aioOpRoot *op);
 void removeFromTimeoutQueue(asyncBase *base, aioOpRoot *op);
 void processTimeoutQueue(asyncBase *base);
+
+void finishOperation(aioOpRoot *op, int status, int needRemoveFromTimeGrid);
 
 #endif //__ASYNCIO_ASYNCOP_H_

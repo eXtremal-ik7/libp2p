@@ -55,7 +55,7 @@ int main(int argc, char **argv)
   HostAddress address;
   address.family = AF_INET;
   address.ipv4 = INADDR_ANY;
-  address.port = htons(12200);
+  address.port = htons(9999);
   
   initializeSocketSubsystem();
   socketTy hSocket = socketCreate(AF_INET, SOCK_STREAM, IPPROTO_TCP, 1);

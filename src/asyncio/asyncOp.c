@@ -1,5 +1,6 @@
 #include "asyncio/asyncOp.h"
 #include "asyncioInternal.h"
+#include <assert.h>
 
 static inline uint64_t getPt(uint64_t endTime)
 {
@@ -35,6 +36,9 @@ aioOpRoot *opRingGet(OpRing *buffer, uint64_t pt)
 void opRingShift(OpRing *buffer, uint64_t newBegin)
 {
   uint64_t distance = newBegin - buffer->begin;
+  if (distance == 0)
+    return;
+  
   size_t newOffset = buffer->offset + distance;
   if (distance < buffer->size) {
     size_t d1;
@@ -88,18 +92,59 @@ void opRingPush(OpRing *buffer, aioOpRoot *op, uint64_t pt)
   }
   
   op->timeoutQueue.prev = 0;
-  op->timeoutQueue.next = oldOp;  
+  op->timeoutQueue.next = oldOp;
+  if (oldOp)
+    oldOp->timeoutQueue.prev = op;  
 }
 
 
-void addToExecuteQueue(aioObjectRoot *object, aioOpRoot *op)
+int addToExecuteQueue(aioObjectRoot *object, aioOpRoot *op, int isWriteQueue)
 {
+  // TODO: make thread safe
+  List *list = isWriteQueue ? &object->writeQueue : &object->readQueue;
+  op->executeQueue.prev = list->tail;
+  op->executeQueue.next = 0;
+  if (list->tail)
+    list->tail->executeQueue.next = op;
+  list->tail = op;
+  if (op->executeQueue.prev == 0) {
+    list->head = op;
+    return 1;
+  }
   
+  return 0;
 }
 
-void removeFromExecuteQueue(aioOpRoot *op)
+aioOpRoot *removeFromExecuteQueue(aioOpRoot *op)
 {
-  
+  // TODO: make thread safe
+  aioObjectRoot *object = op->object;  
+  if (op->executeQueue.next) {
+    op->executeQueue.next->executeQueue.prev = op->executeQueue.prev;
+  } else {
+    if (object->readQueue.tail == op)
+      object->readQueue.tail = op->executeQueue.prev;
+    else if (object->writeQueue.tail == op)
+      object->writeQueue.tail = op->executeQueue.prev;
+  }  
+
+  if (op->executeQueue.prev) {
+    op->executeQueue.prev->executeQueue.next = op->executeQueue.next;
+  } else {
+    if (object->readQueue.head == op) {
+      object->readQueue.head = op->executeQueue.next;
+      // Start next 'read' operation
+      if (object->readQueue.head)
+        return object->readQueue.head;
+    } else if (object->writeQueue.head == op) {
+      object->writeQueue.head = op->executeQueue.next;
+      // Start next 'write' operation
+      if (object->writeQueue.head)
+        return object->writeQueue.head;
+    }
+  }
+    
+  return 0;
 }
 
 
@@ -111,10 +156,12 @@ void addToTimeoutQueue(asyncBase *base, aioOpRoot *op)
 
 void removeFromTimeoutQueue(asyncBase *base, aioOpRoot *op)
 {
-  if (op->timeoutQueue.prev)
+  if (op->timeoutQueue.prev) {
     op->timeoutQueue.prev->timeoutQueue.next = op->timeoutQueue.next;
-  else
+  } else {
+    assert(opRingGet(&base->timeGrid, getPt(op->endTime)) == op && "opRing lost operation found");
     opRingPop(&base->timeGrid, getPt(op->endTime));
+  }
   if (op->timeoutQueue.next)
     op->timeoutQueue.next->timeoutQueue.prev = op->timeoutQueue.prev;
 }
@@ -127,23 +174,45 @@ void processTimeoutQueue(asyncBase *base)
   while (begin < currentTime) {
     aioOpRoot *op = opRingGet(&base->timeGrid, begin);
     while (op) {
-      aioOpRoot *current = op;
-      
-      // remove from execute queue
-      removeFromExecuteQueue(current);
-      
-      // destroy operation
-      int opCode = current->opCode;
-      void *callback = current->callback;
-      void *arg = current->arg;
-      aioExceptionCb *cb = current->exceptionCallback;
-      (*cb)(opCode, callback, arg);
-      op = current->timeoutQueue.next;
-      objectRelease(&base->pool, current, current->poolId);
+      aioOpRoot *next = op->timeoutQueue.next;
+      finishOperation(op, aosTimeout, 0);
+      op = next;
     }
       
     begin++;
   }
 
   opRingShift(&base->timeGrid, currentTime);
+}
+
+static inline void startOperation(aioOpRoot *op, asyncBase *previousOpBase)
+{
+  // TODO: use pipe for send operation to another async base
+  uint64_t timePt = ((uint64_t)time(0))*1000000;
+  if (op->endTime && op->endTime >= timePt)
+    op->startMethod(op);
+}
+
+void finishOperation(aioOpRoot *op, int status, int needRemoveFromTimeGrid)
+{
+  // TODO: normal timer check
+  if (op->poolId == "timer pool") {
+    // stop timer call 
+  } else if (op->endTime && needRemoveFromTimeGrid) {
+    removeFromTimeoutQueue(op->base, op);
+  }
+  
+  // Remove operation from execute queue
+  asyncBase *base = op->base;
+  asyncOp *nextOp = removeFromExecuteQueue(op);
+  
+  // Release operation
+  objectRelease(&op->base->pool, op, op->poolId);
+  
+  // Do callback if need
+  op->finishMethod(op, status);
+  
+  // Start next operation
+  if (nextOp)
+    startOperation(nextOp, base);
 }

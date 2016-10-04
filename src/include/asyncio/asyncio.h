@@ -84,6 +84,7 @@ void postQuitOperation(asyncBase *base);
 
 void *queryObject(asyncBase *base, const void *type);
 void releaseObject(asyncBase *base, void *object, const void *type);
+void userEventTrigger(aioObject *event);
 
 #ifdef __cplusplus
 }
