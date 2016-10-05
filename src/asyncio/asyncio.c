@@ -138,14 +138,8 @@ static asyncOp *initAsyncOp(aioObject *object,
   info->root.opCode = opCode;
   info->object = object;
   info->root.endTime = 0;
-  
-  if (needYield) {
-    info->coroutine = coroutineCurrent();
-  } else {
-    info->coroutine = 0;
-    info->callback = callback;
-    info->arg = arg;
-  }
+  info->callback = callback;
+  info->arg = arg;
   info->root.callback = callback;
   info->root.arg = arg;
 

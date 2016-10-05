@@ -1,6 +1,10 @@
 #ifndef __ASYNCIO_ASYNCOP_H_
 #define __ASYNCIO_ASYNCOP_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -68,5 +72,9 @@ void removeFromTimeoutQueue(asyncBase *base, aioOpRoot *op);
 void processTimeoutQueue(asyncBase *base);
 
 void finishOperation(aioOpRoot *op, int status, int needRemoveFromTimeGrid);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif //__ASYNCIO_ASYNCOP_H_

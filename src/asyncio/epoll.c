@@ -292,7 +292,7 @@ void epollPostEmptyOperation(asyncBase *base)
 static void finish(asyncOp *op, AsyncOpStatus status)
 {
   asyncOpUnlink(op);
-  finishOperation((aioOpRoot*)op, status, 1);
+  finishOperation(&op->info.root, status, 1);
 }
 
 
@@ -304,8 +304,6 @@ static void processReadyFd(epollBase *base,
   int available;
 
   fdStruct *fds = getFdStruct(base, fd);
-//   asyncOpList *list = isRead ? &fds->readOps : &fds->writeOps;
-//   asyncOp *op = list->head;
   asyncOp *op = (asyncOp*)(isRead ? fds->object->root.readQueue.head : fds->object->root.writeQueue.head);
   if (!op)
     return;
@@ -436,15 +434,16 @@ void epollNextFinishedOperation(asyncBase *base)
               return;
               break;
             case Timeout :
-              if (op->info.object->type == ioObjectUserEvent)
+              if (op->info.object->type == ioObjectUserEvent) {
+                if (op->counter == 0)
+                  stopTimer(op);
                 userEventTrigger(op->info.object);
-//                 finishOperation_epoll(op, aosSuccess, op->counter == 0);
-              else
+              } else {
                 finish(op, aosTimeout);
+              }
               break;
             case UserEvent :
               userEventTrigger(op->info.object);
-//               finishOperation_epoll(op, aosSuccess, op->counter == 0);
               break;
           }
         }

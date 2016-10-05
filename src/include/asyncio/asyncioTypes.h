@@ -82,8 +82,7 @@ struct aioInfo {
   aioObject *object;
   IoActionTy currentAction; 
   AsyncOpStatus status;
-  
-  coroutineTy *coroutine;
+
   asyncCb *callback;
   void *arg;
 
