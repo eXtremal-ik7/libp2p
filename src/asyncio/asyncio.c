@@ -19,6 +19,12 @@ asyncBase *epollNewAsyncBase();
 asyncBase *kqueueNewAsyncBase();
 #endif
 
+typedef struct coroReturnStruct {
+  coroutineTy *coroutine;
+  AsyncOpStatus status;
+  socketTy acceptSocket;
+  size_t bytesTransferred;
+} coroReturnStruct;
 
 void userEventTrigger(aioObject *event)
 {
@@ -33,7 +39,6 @@ void userEventTrigger(aioObject *event)
 
 static int startMethod(asyncOp *op)
 {
-  ssize_t result;
   switch (((aioOpRoot*)op)->opCode) {
     case actConnect :
     case actAccept :
@@ -61,7 +66,6 @@ static int startMethod(asyncOp *op)
 static void finishMethod(asyncOp *op, int status)
 {
   aioOpRoot *root = (aioOpRoot*)op;  
-  aioObject *object = root->object;
 
   // TODO: timer must be independent from OS I/O method used
   if (root->poolId == timerPoolId)
@@ -166,6 +170,14 @@ static asyncOp *initAsyncOp(aioObject *object,
   return newOp;
 }
 
+static void coroutineCb(aioInfo *info)
+{
+  coroReturnStruct *r = (coroReturnStruct*)info->arg;
+  r->status = info->status;
+  r->acceptSocket = info->acceptSocket;
+  r->bytesTransferred = info->bytesTransferred;
+  coroutineCall(r->coroutine);
+}
 
 
 intptr_t argAsInteger(void *arg)
@@ -407,82 +419,66 @@ void aioWriteMsg(aioObject *op,
 
 int ioConnect(aioObject *op, const HostAddress *address, uint64_t usTimeout)
 {
-  asyncOp *newOp = initAsyncOp(op, 1, 0, 0, 0, 0, 0, afNone, usTimeout, actConnect);
-  if (addToExecuteQueue((aioObjectRoot*)op, (aioOpRoot*)newOp, 1))
-    ((aioOpRoot*)newOp)->base->methodImpl.connect(newOp, address, 0);
-  
+  coroReturnStruct r = {coroutineCurrent()};
+  aioConnect(op, address, usTimeout, coroutineCb, &r);
   coroutineYield();
-  aioInfo *info = (aioInfo*)newOp;
-  return (info->status == aosSuccess) ? 0 : -1;
+  return r.status == aosSuccess ? 0 : -1;
 }
 
 
 socketTy ioAccept(aioObject *op, uint64_t usTimeout)
 {
-  asyncOp *newOp = initAsyncOp(op, 1, 0, 0, 0, 0, 0, afNone, usTimeout, actAccept);
-  if (addToExecuteQueue((aioObjectRoot*)op, (aioOpRoot*)newOp, 0))
-    ((aioOpRoot*)newOp)->base->methodImpl.accept(newOp, 0);
-
-  coroutineYield();
-  aioInfo *info = (aioInfo*)newOp;
-  return (info->status == aosSuccess) ? info->acceptSocket : -1;
+  coroReturnStruct r = {coroutineCurrent()};
+  aioAccept(op, usTimeout, coroutineCb, &r); 
+  coroutineYield();  
+  return r.status == aosSuccess ? r.acceptSocket : -1;
 }
 
 
 ssize_t ioRead(aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-  asyncOp *newOp = initAsyncOp(op, 1, 0, 0, buffer, 0, size, flags, usTimeout, actRead);
-  if (addToExecuteQueue((aioObjectRoot*)op, (aioOpRoot*)newOp, 0))
-    startMethod(newOp);  
-
-  coroutineYield();  
-  aioInfo *info = (aioInfo*)newOp;
-  return (info->status == aosSuccess) ? info->bytesTransferred : -1;
+  coroReturnStruct r = {coroutineCurrent()};  
+  aioRead(op, buffer, size, flags, usTimeout, coroutineCb, &r);
+  coroutineYield();
+  return r.status == aosSuccess ? r.bytesTransferred : -1;  
 }
 
 
-ssize_t ioWrite(aioObject *op, void *buffer, size_t size, AsyncFlags flags,uint64_t usTimeout)
+ssize_t ioWrite(aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-  asyncOp *newOp = initAsyncOp(op, 1, 0, 0, buffer, 0, size, flags, usTimeout, actWrite);  
-  if (addToExecuteQueue((aioObjectRoot*)op, (aioOpRoot*)newOp, 1))
-    startMethod(newOp);  
-
-  coroutineYield();  
-  aioInfo *info = (aioInfo*)newOp;
-  return (info->status == aosSuccess) ? info->bytesTransferred : -1;
+  coroReturnStruct r = {coroutineCurrent()};  
+  aioWrite(op, buffer, size, flags, usTimeout, coroutineCb, &r);
+  coroutineYield();
+  return r.status == aosSuccess ? r.bytesTransferred : -1;
 }
 
 
 ssize_t ioReadMsg(aioObject *op, dynamicBuffer *buffer,uint64_t usTimeout)
 {
-  asyncOp *newOp = initAsyncOp(op, 1, 0, 0, 0, buffer, 0, afNone, usTimeout, actReadMsg);
-  if (addToExecuteQueue((aioObjectRoot*)op, (aioOpRoot*)newOp, 0))
-    startMethod(newOp);  
-
-  coroutineYield();  
-  aioInfo *info = (aioInfo*)newOp;
-  return (info->status == aosSuccess) ? info->bytesTransferred : -1;
+  coroReturnStruct r = {coroutineCurrent()};  
+  aioReadMsg(op, buffer, usTimeout, coroutineCb, &r);
+  coroutineYield();
+  return r.status == aosSuccess ? r.bytesTransferred : -1;
 }
 
 
 
 ssize_t ioWriteMsg(aioObject *op, const HostAddress *address, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-  asyncOp *newOp = initAsyncOp(op, 1, 0, 0, buffer, 0, size, flags, usTimeout, actWriteMsg);  
-  if (addToExecuteQueue((aioObjectRoot*)op, (aioOpRoot*)newOp, 1))
-    startMethod(newOp); 
-    
-  coroutineYield();  
-  aioInfo *info = (aioInfo*)newOp;
-  return (info->status == aosSuccess) ? info->bytesTransferred : -1; 
+  coroReturnStruct r = {coroutineCurrent()};  
+  aioWriteMsg(op, address, buffer, size, flags, usTimeout, coroutineCb, &r);
+  coroutineYield();
+  return r.status == aosSuccess ? r.bytesTransferred : -1;
 }
 
 
 void ioSleep(aioObject *event, uint64_t usTimeout)
 {
+  coroReturnStruct r = {coroutineCurrent()};  
   asyncOp *op = (asyncOp*)event->root.readQueue.head;
   aioInfo *info = (aioInfo*)op;
-  info->coroutine = coroutineCurrent();
+  event->root.readQueue.head->callback = coroutineCb;
+  info->arg = &r;
   info->object->base->methodImpl.startTimer(op, usTimeout, 1);
   coroutineYield();
 }

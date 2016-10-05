@@ -461,7 +461,7 @@ void epollNextFinishedOperation(asyncBase *base)
 
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
-  aioObject *object = malloc(sizeof(aioObject));
+  aioObject *object = calloc(sizeof(aioObject), 1);
   object->base = base;
   object->type = type;
   switch (object->type) {
