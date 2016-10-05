@@ -100,18 +100,16 @@ void printHelpMessage(const char *appName)
 }
 
 
-void readCb(aioInfo *info)
+void readCb(AsyncOpStatus status, aioObject *rawSocket, dynamicBuffer *buffer, size_t transferred, void *arg)
 {
-  ICMPClientData *client = (ICMPClientData*)info->arg;
-  if (info->status == aosSuccess &&
-      info->bytesTransferred >= (sizeof(ip) + sizeof(icmp))) {
-    dynamicBufferSeek(&client->buffer, SeekSet, 0);
-    uint8_t *ptr = (uint8_t*)dynamicBufferPtr(&client->buffer);
+  ICMPClientData *client = (ICMPClientData*)arg;
+  if (status == aosSuccess && transferred >= (sizeof(ip) + sizeof(icmp))) {
+    dynamicBufferSeek(buffer, SeekSet, 0);
+    uint8_t *ptr = (uint8_t*)dynamicBufferPtr(buffer);
     icmp *receivedIcmp = (icmp*)(ptr + sizeof(ip));
 
-    if (receivedIcmp->icmp_type == ICMP_ECHOREPLY) {
-      std::map<unsigned, timeMark>::iterator F =
-        client->times.find(receivedIcmp->icmp_id);
+    if (receivedIcmp->icmp_type == ICMP_ECHOREPLY) {     
+      std::map<unsigned, timeMark>::iterator F = client->times.find(receivedIcmp->icmp_id);
       if (F != client->times.end()) {
         double diff = (double)usDiff(F->second, getTimeMark());
         fprintf(stdout,
@@ -124,12 +122,12 @@ void readCb(aioInfo *info)
     }
   }
   
-  aioReadMsg(client->rawSocket, &client->buffer, 0, readCb, client);
+  aioReadMsg(rawSocket, buffer, 0, readCb, client);
 }
 
-void pingTimerCb(aioInfo *info)
+void pingTimerCb(aioObject *event, void *arg)
 {
-  ICMPClientData *clientData = (ICMPClientData*)info->arg;
+  ICMPClientData *clientData = (ICMPClientData*)arg;
   clientData->id++;
   clientData->data.icmp_id = clientData->id;
   clientData->data.icmp_cksum = 0;
@@ -144,10 +142,10 @@ void pingTimerCb(aioInfo *info)
 }
 
 
-void printTimerCb(aioInfo *info)
+void printTimerCb(aioObject *event, void *arg)
 {
   std::vector<uint32_t> forDelete;
-  ICMPClientData *clientData = (ICMPClientData*)info->arg;
+  ICMPClientData *clientData = (ICMPClientData*)arg;
   for (std::map<unsigned, timeMark>::iterator I = clientData->times.begin(),
        IE = clientData->times.end(); I != IE; ++I) {
     uint64_t diff = usDiff(I->second, getTimeMark());

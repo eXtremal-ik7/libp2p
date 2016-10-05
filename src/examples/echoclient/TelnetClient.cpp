@@ -15,14 +15,14 @@ struct ClientData {
 };
 
 
-void readCb(aioInfo *info)
+void readCb(AsyncOpStatus status, aioObject *object, void *buffer, size_t size, size_t transferred, void *arg)
 {
-  ClientData *data = (ClientData*)info->arg;  
-  if (info->status == aosSuccess) {
-    for (uint8_t *p = data->buffer, *pe = p+info->bytesTransferred; p < pe; p++)
+  ClientData *data = (ClientData*)arg;  
+  if (status == aosSuccess) {
+    for (uint8_t *p = data->buffer, *pe = p+transferred; p < pe; p++)
       printf("%02X", (unsigned)*p);
     printf("\n");
-  } else if (info->status == aosDisconnected) {
+  } else if (status == aosDisconnected) {
     fprintf(stderr, "connection lost!\n");
     postQuitOperation(data->base);
   } else {
@@ -31,9 +31,9 @@ void readCb(aioInfo *info)
 }
 
 
-void pingTimerCb(aioInfo *info)
+void pingTimerCb(aioObject *event, void *arg)
 {
-  ClientData *data = (ClientData*)info->arg;
+  ClientData *data = (ClientData*)arg;
   if (data->isConnected) {
     char symbol = 32 + rand() % 96;
     printf("%02X:", (int)symbol);
@@ -45,10 +45,10 @@ void pingTimerCb(aioInfo *info)
 }
 
 
-void connectCb(aioInfo *info)
+void connectCb(AsyncOpStatus status, aioObject *object, void *arg)
 {
-  ClientData *data = (ClientData*)info->arg;
-  if (info->status == aosSuccess) {
+  ClientData *data = (ClientData*)arg;
+  if (status == aosSuccess) {
     fprintf(stderr, "connected\n");
     data->isConnected = true;
   } else {

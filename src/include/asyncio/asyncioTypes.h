@@ -83,9 +83,6 @@ struct aioInfo {
   IoActionTy currentAction; 
   AsyncOpStatus status;
 
-  asyncCb *callback;
-  void *arg;
-
   union {
     struct dynamicBuffer *dynamicArray;
     void *buffer;

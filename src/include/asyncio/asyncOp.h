@@ -10,6 +10,7 @@ extern "C" {
 
 typedef struct aioObjectRoot aioObjectRoot;
 typedef struct aioOpRoot aioOpRoot;
+typedef struct asyncOp asyncOp;
 typedef struct asyncBase asyncBase;
 
 typedef void aioStartProc(aioOpRoot*);

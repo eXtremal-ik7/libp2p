@@ -4,8 +4,15 @@ extern "C" {
 
 #include "asyncio/asyncioTypes.h"
 #include "asyncio/dynamicBuffer.h"
+#include "asyncio/socket.h"
 #include <stddef.h>
 #include <stdint.h>
+  
+typedef void aioEventCb(aioObject *event, void *arg);
+typedef void aioConnectCb(AsyncOpStatus status, aioObject *object, void *arg);
+typedef void aioAcceptCb(AsyncOpStatus status, aioObject *listener, socketTy socket, void *arg);
+typedef void aioCb(AsyncOpStatus status, aioObject *object, void *buffer, size_t size, size_t transferred, void *arg);
+typedef void aioMsgCb(AsyncOpStatus status, aioObject *object, dynamicBuffer *buffer, size_t transferred, void *arg);
   
 intptr_t argAsInteger(void *arg);
 void *intArg(intptr_t id);
@@ -20,7 +27,7 @@ aioObject *newDeviceIo(asyncBase *base, iodevTy hDevice);
 // aioObject *newSocketSynIo(asyncBase *base, socketTy hSocket);
 void deleteAioObject(aioObject *object);
 
-aioObject *newUserEvent(asyncBase *base, asyncCb callback, void *arg);
+aioObject *newUserEvent(asyncBase *base, aioEventCb callback, void *arg);
 void userEventStartTimer(aioObject *event, uint64_t usTimeout, int counter);
 void userEventStopTimer(aioObject *event);
 void userEventActivate(aioObject *event);
@@ -28,12 +35,12 @@ void userEventActivate(aioObject *event);
 void aioConnect(aioObject *op,
                 const HostAddress *address,
                 uint64_t usTimeout,
-                asyncCb callback,
+                aioConnectCb callback,
                 void *arg);
 
 void aioAccept(aioObject *op,
                uint64_t usTimeout,
-               asyncCb callback,
+               aioAcceptCb callback,
                void *arg);
 
 void aioRead(aioObject *op,
@@ -41,13 +48,13 @@ void aioRead(aioObject *op,
              size_t size,
              AsyncFlags flags,
              uint64_t usTimeout,
-             asyncCb callback,
+             aioCb callback,
              void *arg);
 
 void aioReadMsg(aioObject *op,
                 dynamicBuffer *buffer,
                 uint64_t usTimeout,
-                asyncCb callback,
+                aioMsgCb callback,
                 void *arg);
 
 void aioWrite(aioObject *op,
@@ -55,7 +62,7 @@ void aioWrite(aioObject *op,
               size_t size,
               AsyncFlags flags,
               uint64_t usTimeout,
-              asyncCb callback,
+              aioCb callback,
               void *arg);
 
 void aioWriteMsg(aioObject *op,
@@ -64,7 +71,7 @@ void aioWriteMsg(aioObject *op,
                  size_t size,
                  AsyncFlags flags,
                  uint64_t usTimeout,
-                 asyncCb callback,
+                 aioCb callback,
                  void *arg);
 
 

@@ -1,3 +1,6 @@
+#ifndef __ASYNCIO_SOCKET_H_
+#define __ASYNCIO_SOCKET_H_
+
 #include "config.h"
 #include <stdint.h>
 
@@ -33,3 +36,5 @@ socketTy socketCreate(int af, int type, int protocol, int isAsync);
 int socketBind(socketTy hSocket, const HostAddress *address);
 int socketListen(socketTy hSocket);
 void socketReuseAddr(socketTy hSocket);
+
+#endif //__ASYNCIO_SOCKET_H_

@@ -1,6 +1,9 @@
 #include "asyncio/asyncOp.h"
 #include "asyncioInternal.h"
 #include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
 
 static inline uint64_t getPt(uint64_t endTime)
 {
@@ -9,12 +12,11 @@ static inline uint64_t getPt(uint64_t endTime)
 
 void opRingInit(OpRing *buffer, size_t size, uint64_t begin)
 {
-  buffer->data = malloc(size*sizeof(void*));
+  buffer->data = calloc(size, sizeof(void*));
   buffer->size = size;
   buffer->begin = begin;
   buffer->offset = 0;
   buffer->other = 0;
-  memset(buffer->data, 0, sizeof(void*)*size);
 }
 
 uint64_t opRingBegin(OpRing *buffer)
