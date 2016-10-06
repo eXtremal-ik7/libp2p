@@ -74,24 +74,16 @@ typedef struct aioObject aioObject;
 typedef struct asyncOp asyncOp;
 typedef struct aioInfo aioInfo;
 typedef struct coroutineTy coroutineTy;
-typedef void asyncCb(aioInfo *info);
 
 
 struct aioInfo {
   aioOpRoot root;
-  aioObject *object;
-  IoActionTy currentAction; 
-  AsyncOpStatus status;
-
-  asyncCb *callback;
-  void *arg;
 
   union {
     struct dynamicBuffer *dynamicArray;
     void *buffer;
   };
 
-  AsyncFlags flags;
   size_t transactionSize;
   size_t bytesTransferred;
   socketTy acceptSocket;

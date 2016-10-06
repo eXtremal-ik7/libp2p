@@ -10,9 +10,8 @@ extern "C" {
   
 typedef void aioEventCb(asyncBase *base, aioObject *event, void *arg);
 typedef void aioConnectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg);
-typedef void aioAcceptCb(AsyncOpStatus status, asyncBase *base, aioObject *listener, socketTy socket, void *arg);
+typedef void aioAcceptCb(AsyncOpStatus status, asyncBase *base, aioObject *listener, HostAddress client, socketTy socket, void *arg);
 typedef void aioCb(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg);
-// typedef void aioMsgCb(AsyncOpStatus status, aioObject *object, dynamicBuffer *buffer, size_t transferred, void *arg);
   
 intptr_t argAsInteger(void *arg);
 void *intArg(intptr_t id);

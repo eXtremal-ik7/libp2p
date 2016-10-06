@@ -21,9 +21,10 @@ typedef enum {
   sslOpWrite
 } SSLOpTy;
 
-void connectProc(aioInfo *info);
-void readProc(aioInfo *info);
-void writeProc(aioInfo *info);
+static void socketConnectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg);
+void connectProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg);
+void readProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg);
+void writeProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg);
 
 static SSLOp *allocSSLOp(SSLSocket *socket,
                          sslCb callback,
@@ -64,7 +65,7 @@ static void finishSSLOp(SSLOp *Op, AsyncOpStatus status)
     SSLSocket *S = current->info.socket;
     switch (current->type) {
       case sslOpConnect :
-        aioConnect(S->object, &current->address, current->usTimeout, connectProc, current);
+        aioConnect(S->object, &current->address, current->usTimeout, socketConnectCb, current);
         break;
       case sslOpRead :
         aioRead(S->object, S->sslReadBuffer, S->sslReadBufferSize, afNone, current->usTimeout, readProc, current);
@@ -86,13 +87,13 @@ size_t copyFromOut(SSLSocket *S, SSLOp *Op)
 }
 
 
-void connectProc(aioInfo *info)
+void connectProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
 {
-  SSLOp *Op = (SSLOp*)info->arg;
+  SSLOp *Op = (SSLOp*)arg;
   SSLSocket *S = Op->info.socket;
-  if (info->status == aosSuccess) {
+  if (status == aosSuccess) {
     if (Op->state == sslStReadNewFrame) {
-      BIO_write(S->bioIn, S->sslReadBuffer, info->bytesTransferred);
+      BIO_write(S->bioIn, S->sslReadBuffer, transferred);
       Op->state = sslStConnecting;
     }
 
@@ -111,17 +112,22 @@ void connectProc(aioInfo *info)
       finishSSLOp(Op, aosUnknownError);          
     }
   } else {
-    finishSSLOp(Op, info->status);
+    finishSSLOp(Op, status);
   }
 }
 
-void readProc(aioInfo *info)
+static void socketConnectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg)
 {
-  SSLOp *Op = (SSLOp*)info->arg;
+  connectProc(status, base, object, 0, arg);
+}
+
+void readProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
+{
+  SSLOp *Op = (SSLOp*)arg;
   SSLSocket *S = Op->info.socket;
-  if (info->status == aosSuccess) {
+  if (status == aosSuccess) {
     if (Op->state == sslStReadNewFrame) {
-      BIO_write(S->bioIn, S->sslReadBuffer, info->bytesTransferred);
+      BIO_write(S->bioIn, S->sslReadBuffer, transferred);
       Op->state = sslStReading;
     }
     
@@ -144,19 +150,19 @@ void readProc(aioInfo *info)
       aioRead(S->object, S->sslReadBuffer, S->sslReadBufferSize, afNone, 3000000, readProc, Op);
     }    
   } else {
-    finishSSLOp(Op, info->status);
+    finishSSLOp(Op, status);
   }
 }
 
 
 
-void writeProc(aioInfo *info)
+void writeProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
 {
-  SSLOp *Op = (SSLOp*)info->arg;
-  if (info->status == aosSuccess) {
+  SSLOp *Op = (SSLOp*)arg;
+  if (status == aosSuccess) {
     finishSSLOp(Op, aosSuccess);
   } else {
-    finishSSLOp(Op, info->status);
+    finishSSLOp(Op, status);
   }
 }
 
@@ -209,7 +215,7 @@ void aioSslConnect(SSLSocket *socket,
   
   if (!socket->current) {
     socket->current = newOp;
-    aioConnect(socket->object, address, usTimeout, connectProc, newOp);    
+    aioConnect(socket->object, address, usTimeout, socketConnectCb, newOp);    
   } else {
     newOp->address = *address;
     newOp->usTimeout = usTimeout;

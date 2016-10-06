@@ -95,23 +95,28 @@ static struct asyncImpl selectImpl = {
 };
 
 
-static int isWriteOperation(IoActionTy action)
+static int isWriteOperation(int action)
 {
   return (action == actConnect ||
           action == actWrite ||
           action == actWriteMsg);
 }
 
+static aioObject *getObject(asyncOp *op)
+{
+  return (aioObject*)op->info.root.object;
+}
 
 static int getFd(asyncOp *op)
 {
-  switch (op->info.object->type) {
+  aioObject *object = getObject(op);
+  switch (object->type) {
     case ioObjectDevice :
-      return op->info.object->hDevice;
+      return object->hDevice;
       break;
     case ioObjectSocket :
     case ioObjectSocketSyn :
-      return op->info.object->hSocket;
+      return object->hSocket;
       break;
     default :
       return -1;
@@ -134,19 +139,19 @@ static fdStruct *getFdOperations(OpLinksMap &opMap, int fd)
 
 static void asyncOpLink(fdStruct *list, asyncOp *op)
 {
-  list->mask |= isWriteOperation(op->info.currentAction) ? mtWrite : mtRead;
-  list->object = op->info.object;
+  list->mask |= isWriteOperation(op->info.root.opCode) ? mtWrite : mtRead;
+  list->object = getObject(op);
 }
 
 
 static void asyncOpUnlink(asyncOp *op)
 {
   if (!op->info.root.executeQueue.next) {
-    selectBase *localBase = (selectBase*)op->info.object->base;
-    OpLinksMap &links = isWriteOperation(op->info.currentAction) ?
+    selectBase *localBase = (selectBase*)op->info.root.base;
+    OpLinksMap &links = isWriteOperation(op->info.root.opCode) ?
       localBase->writeOps : localBase->readOps;
     fdStruct *list = getFdOperations(links, getFd(op));
-    list->mask &= ~(isWriteOperation(op->info.currentAction) ? mtWrite : mtRead);
+    list->mask &= ~(isWriteOperation(op->info.root.opCode) ? mtWrite : mtRead);
   }
 }
 
@@ -157,7 +162,7 @@ static void asyncOpUnlink(asyncOp *op)
 static void timerCb(int sig, siginfo_t *si, void *uc)
 {
   asyncOp *op = (asyncOp*)si->si_value.sival_ptr;
-  selectBase *base = (selectBase*)op->info.object->base;
+  selectBase *base = (selectBase*)op->info.root.base;
   
   if (op->counter > 0)
     op->counter--;
@@ -193,14 +198,8 @@ static void startOperation(asyncOp *op,
                            IoActionTy action,
                            uint64_t usTimeout)
 {
-  selectBase *localBase = (selectBase*)op->info.object->base;
-  op->info.currentAction = action;
-  
-  if (op->info.currentAction == actMonitor)
-    op->info.status = aosMonitoring;
-  else
-    op->info.status = aosPending;
-  
+  selectBase *localBase = (selectBase*)op->info.root.base;
+
   if (op->useInternalBuffer && (action == actWrite || action == actWriteMsg)) {
     if (op->internalBuffer == 0) {
       op->internalBuffer = malloc(op->info.transactionSize);
@@ -278,25 +277,25 @@ static void processReadyFds(selectBase *base,
   
     int available;
     fdStruct *list = getFdOperations(links, fd);
-    asyncOp *op = (asyncOp*)(isRead ? list->object->root.readQueue.head : list->object->root.writeQueue.head);    
+    aioObject *object = list->object;
+    asyncOp *op = (asyncOp*)(isRead ? object->root.readQueue.head : object->root.writeQueue.head);    
     if (!op)
       continue;
   
     assert(fd == getFd(op) && "Lost asyncop found!");
     ioctl(fd, FIONREAD, &available);  
-    if (op->info.object->type == ioObjectSocket && available == 0 && isRead) {
-      if (op->info.currentAction != actAccept) {
+    if (object->type == ioObjectSocket && available == 0 && isRead) {
+      if (op->info.root.opCode != actAccept) {
         finish(op, aosDisconnected);
         continue;
       }
     }  
     
-    switch (op->info.currentAction) {
+    switch (op->info.root.opCode) {
       case actConnect : {
         int error;
         socklen_t size = sizeof(error);
-        getsockopt(op->info.object->hSocket, 
-                   SOL_SOCKET, SO_ERROR, &error, &size);
+        getsockopt(object->hSocket, SOL_SOCKET, SO_ERROR, &error, &size);
         finish(op, (error == 0) ? aosSuccess : aosUnknownError);
         break;
       }
@@ -328,7 +327,7 @@ static void processReadyFds(selectBase *base,
         read(fd, ptr, readyForRead);
         op->info.bytesTransferred += readyForRead;
         if (op->info.bytesTransferred == op->info.transactionSize ||
-            !(op->info.flags & afWaitAll))
+            !(op->info.root.flags & afWaitAll))
           finish(op, aosSuccess);
         break;
       }
@@ -340,7 +339,7 @@ static void processReadyFds(selectBase *base,
         size_t remaining = op->info.transactionSize - op->info.bytesTransferred;
         ssize_t bytesWritten = write(fd, ptr, remaining);
         if (bytesWritten == -1) {
-          if (op->info.object->type == ioObjectSocket && errno == EPIPE) {
+          if (object->type == ioObjectSocket && errno == EPIPE) {
             finish(op, aosDisconnected);
           } else {
             finish(op, aosUnknownError);
@@ -433,10 +432,11 @@ void selectNextFinishedOperation(asyncBase *base)
           return;
     
         if (op) {
-          if (op->info.object->type == ioObjectUserEvent) {
+          aioObject *object = getObject(op);
+          if (object->type == ioObjectUserEvent) {
             if (op->counter == 0)
               stopTimer(op);
-            userEventTrigger(op->info.object);
+            userEventTrigger(object);
           } else {
             finish(op, aosTimeout);   
           }
@@ -496,32 +496,15 @@ asyncOp *selectNewAsyncOp(asyncBase *base, int needTimer)
 
 void selectDeleteObject(aioObject *object)
 {
-  selectBase *base = (selectBase*)object->base;
-  int fd;
   switch (object->type) {
     case ioObjectDevice :
-      fd = object->hDevice;
+      close(object->hDevice);
       break;
     case ioObjectSocket :
     case ioObjectSocketSyn :
-      fd = object->hSocket;
+      close(object->hSocket);
       break;
-    default :
-      fd = -1;
-      break;      
-  }  
-  
-  fdStruct *fds;
-  // read operations
-  fds = getFdOperations(base->readOps, fd);
-  fds->object = 0;
-  fds->mask = 0;
-  // write operations
-  fds = getFdOperations(base->writeOps, fd);
-  fds->object = 0;
-  fds->mask = 0;  
-  close(fd);
-  free(object);  
+  }
 }
 
 
@@ -542,7 +525,7 @@ void selectStopTimer(asyncOp *op)
 
 void selectActivate(asyncOp *op)
 {
-  selectBase *localBase = (selectBase*)op->info.object->base;
+  selectBase *localBase = (selectBase*)op->info.root.base;
   write(localBase->pipeFd[1], op, sizeof(op));
 }
 
@@ -555,9 +538,7 @@ void selectAsyncConnect(asyncOp *op,
   localAddress.sin_family = address->family;
   localAddress.sin_addr.s_addr = address->ipv4;
   localAddress.sin_port = address->port;
-  int err = connect(op->info.object->hSocket,
-                    (sockaddr*)&localAddress,
-                    sizeof(localAddress));
+  int err = connect(getObject(op)->hSocket, (sockaddr*)&localAddress, sizeof(localAddress));
 
   if (err == -1 && errno != EINPROGRESS) {
     fprintf(stderr, "connect error, errno: %s\n", strerror(errno));
@@ -582,7 +563,7 @@ void selectAsyncRead(asyncOp *op, uint64_t usTimeout)
 
 void selectAsyncWrite(asyncOp *op, uint64_t usTimeout)
 {
-  op->useInternalBuffer = !(op->info.flags & afNoCopy);
+  op->useInternalBuffer = !(op->info.root.flags & afNoCopy);
   startOperation(op, actWrite, usTimeout);
 }
 
@@ -597,7 +578,7 @@ void selectAsyncWriteMsg(asyncOp *op,
                          const HostAddress *address,
                          uint64_t usTimeout)
 {
-  op->useInternalBuffer = !(op->info.flags & afNoCopy);  
+  op->useInternalBuffer = !(op->info.root.flags & afNoCopy);  
   op->info.host = *address;
   startOperation(op, actWriteMsg, usTimeout);
 }

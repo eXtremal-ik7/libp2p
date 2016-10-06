@@ -21,8 +21,8 @@ struct p2pEventHandler {
 
 struct p2pPeer {
 private:
-  static void clientNetworkWaitEnd(aioInfo *info);  
-  static void clientNetworkConnectCb(aioInfo *info);
+  static void clientNetworkWaitEnd(asyncBase *base, aioObject *event, void *arg);  
+  static void clientNetworkConnectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg);
   static void clientP2PConnectCb(p2pInfo *info);  
   static void clientReceiver(p2pInfo *info);  
   static p2pErrorTy nodeAcceptCb(p2pConnectData *data, p2pInfo *info);
@@ -91,7 +91,7 @@ private:
   
 private:  
   static void handler(aioInfo *info);
-  static void listener(aioInfo *info);
+  static void listener(AsyncOpStatus status, asyncBase *base, aioObject *listener, HostAddress client, socketTy socket, void *arg);
 
   p2pNode(asyncBase *base, const char *clusterName, bool coroutineMode) :
     _base(base), _clusterName(clusterName), _coroutineMode(coroutineMode),

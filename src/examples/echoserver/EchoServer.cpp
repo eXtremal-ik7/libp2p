@@ -22,7 +22,7 @@ void readCb(AsyncOpStatus status, asyncBase *base, aioObject *socket, size_t tra
 }
 
 
-void acceptCb(AsyncOpStatus status, asyncBase *base, aioObject *listener, socketTy acceptSocket, void *arg)
+void acceptCb(AsyncOpStatus status, asyncBase *base, aioObject *listener, HostAddress client, socketTy acceptSocket, void *arg)
 {
   if (status == aosSuccess) {
     fprintf(stderr, " * new client\n");

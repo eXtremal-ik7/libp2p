@@ -7,10 +7,10 @@
 // Default p2p connection timeout = 1 second
 #define P2P_CONNECT_TIMEOUT 1000000
 
-void p2pNode::handler(aioInfo *info)
-{
-  p2pConnection *peer = (p2pConnection*)info->arg;
-}
+// void p2pNode::handler(aioInfo *info)
+// {
+//   p2pConnection *peer = (p2pConnection*)info->arg;
+// }
 
 
 void p2pPeer::clientReceiver(p2pInfo *info)
@@ -79,22 +79,22 @@ void p2pPeer::clientP2PConnectCb(p2pInfo *info)
   }
 }
 
-void p2pPeer::clientNetworkWaitEnd(aioInfo *info)
+void p2pPeer::clientNetworkWaitEnd(asyncBase *base, aioObject *event, void *arg)
 { 
-  ((p2pPeer*)info->arg)->connect();
+  ((p2pPeer*)arg)->connect();
 }
 
-void p2pPeer::clientNetworkConnectCb(aioInfo *info)
+void p2pPeer::clientNetworkConnectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg)
 {
-  p2pPeer *peer = (p2pPeer*)info->arg;
-  if (info->status == aosSuccess) {
+  p2pPeer *peer = (p2pPeer*)arg;
+  if (status == aosSuccess) {
     // TODO: pass real auth data
     p2pConnectData data;
     data.login = "pool";
     data.password = "pool";
     data.application = "pool_rpc";    
     aiop2pConnect(peer->connection, P2P_CONNECT_TIMEOUT, &data, clientP2PConnectCb, peer);
-  } else if (info->status == aosTimeout) {
+  } else if (status == aosTimeout) {
     // Try reconnect immediately
     peer->connect();
   } else {
@@ -297,18 +297,18 @@ p2pPeer *p2pNode::ioRequest(void *data, size_t size, uint64_t timeout)
 
 
 
-void p2pNode::listener(aioInfo *info)
+void p2pNode::listener(AsyncOpStatus status, asyncBase *base, aioObject *listenSocket, HostAddress client, socketTy clientSocket, void *arg)
 {
-  p2pNode *node = (p2pNode*)info->arg;
+  p2pNode *node = (p2pNode*)arg;
   
-  if (info->status == aosSuccess) {
-    aioObject *socket = newSocketIo(node->_base, info->acceptSocket);
-    p2pConnection *connection = p2pConnectionNew(socket);
-    p2pPeer *peer = new p2pPeer(node->_base, node, &info->host);
+  if (status == aosSuccess) {
+    aioObject *object = newSocketIo(node->_base, clientSocket);
+    p2pConnection *connection = p2pConnectionNew(object);
+    p2pPeer *peer = new p2pPeer(node->_base, node, &client);
     peer->accept(node->_coroutineMode, connection);
   }
   
-  aioAccept(node->_listenerSocket, 0, listener, node);
+  aioAccept(listenSocket, 0, listener, node);
 }
 
 

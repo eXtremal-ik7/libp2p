@@ -74,7 +74,7 @@ static void finishMethod(aioOpRoot *root, int status)
         ((aioConnectCb*)root->callback)(status, root->base, object, root->arg);
         break;
       case actAccept :
-        ((aioAcceptCb*)root->callback)(status, root->base, object, op->acceptSocket, root->arg);          
+        ((aioAcceptCb*)root->callback)(status, root->base, object, op->host, op->acceptSocket, root->arg);          
         break;
       case actRead :
         ((aioCb*)root->callback)(status, root->base, object, op->bytesTransferred, root->arg);          
@@ -127,10 +127,7 @@ static asyncOp *initAsyncOp(aioObject *object,
   info->root.object = &object->root;
   info->root.flags = flags;
   info->root.opCode = opCode;
-  info->object = object;
   info->root.endTime = 0;
-  info->callback = callback;
-  info->arg = arg;
   info->root.callback = callback;
   info->root.arg = arg;
 
@@ -139,7 +136,6 @@ static asyncOp *initAsyncOp(aioObject *object,
   else if (dynamicArray)
     info->dynamicArray = dynamicArray;
   info->transactionSize = transactionSize;
-  info->flags = flags;
   info->bytesTransferred = 0;
   if (timeout) {
     if (needTimer) {
@@ -168,7 +164,7 @@ static void coroutineConnectCb(AsyncOpStatus status, asyncBase *base, aioObject 
   coroutineCall(r->coroutine);
 }
 
-static void coroutineAcceptCb(AsyncOpStatus status, asyncBase *base, aioObject *listener, socketTy socket, void *arg)
+static void coroutineAcceptCb(AsyncOpStatus status, asyncBase *base, aioObject *listener, HostAddress address, socketTy socket, void *arg)
 {
   coroReturnStruct *r = (coroReturnStruct*)arg;
   r->status = status;
@@ -482,10 +478,9 @@ void ioSleep(aioObject *event, uint64_t usTimeout)
 {
   coroReturnStruct r = {coroutineCurrent()};  
   asyncOp *op = (asyncOp*)event->root.readQueue.head;
-  aioInfo *info = (aioInfo*)op;
   event->root.readQueue.head->callback = coroutineEventCb;
   event->root.readQueue.head->arg = &r;
-  info->object->base->methodImpl.startTimer(op, usTimeout, 1);
+  event->root.readQueue.head->base->methodImpl.startTimer(op, usTimeout, 1);
   coroutineYield();
 }
 

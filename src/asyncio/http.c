@@ -8,8 +8,8 @@ typedef enum {
   httpOpRequest
 } HttpOpTy;
 
-void httpConnectProc(aioInfo *info);
-void httpRequestproc(aioInfo *info);
+void httpConnectProc(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg);
+void httpRequestproc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg);
 
 void httpsConnectProc(SSLInfo *info);
 void httpsRequestProc(SSLInfo *info);
@@ -68,9 +68,9 @@ static void finishHttpOp(HTTPOp *Op, AsyncOpStatus status)
   }
 }
 
-void httpConnectProc(aioInfo *info)
+void httpConnectProc(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg)
 {
-  finishHttpOp((HTTPOp*)info->arg, info->status);
+  finishHttpOp((HTTPOp*)arg, status);
 }
 
 void httpsConnectProc(SSLInfo *info)
@@ -78,15 +78,15 @@ void httpsConnectProc(SSLInfo *info)
   finishHttpOp((HTTPOp*)info->arg, info->status);
 }
 
-void httpRequestProc(aioInfo *info)
+void httpRequestProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
 {
-  if (info->status == aosSuccess) {
-    HTTPOp *Op = (HTTPOp*)info->arg;
+  if (status == aosSuccess) {
+    HTTPOp *Op = (HTTPOp*)arg;
     HTTPClient *client = Op->info.client;
-    httpSetBuffer(&client->state, client->inBuffer, client->inBufferOffset+info->bytesTransferred);
-    httpParseStart((HTTPOp*)info->arg);
+    httpSetBuffer(&client->state, client->inBuffer, client->inBufferOffset+transferred);
+    httpParseStart((HTTPOp*)arg);
   } else {
-    finishHttpOp((HTTPOp*)info->arg, info->status);
+    finishHttpOp((HTTPOp*)arg, status);
   }  
 }
 

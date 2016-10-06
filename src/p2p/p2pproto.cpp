@@ -27,8 +27,8 @@ enum p2pPeerState {
   stWaitErrorSend
 };
 
-void p2pRecvProc(aioInfo *info);
-void p2pRecvStreamProc(aioInfo *info);
+void p2pRecvProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg);
+void p2pRecvStreamProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg);
 
 static int p2pStatusFromError(p2pErrorTy error)
 {
@@ -177,10 +177,10 @@ void aiop2pConnect(p2pConnection *connection, uint64_t timeout, p2pConnectData *
   aiop2pRecv(connection, timeout, &op->info.connection->stream, 1024, connectProc, op);
 }
 
-void p2pRecvProc(aioInfo *info)
+void p2pRecvProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
 {
-  p2pOp *op = (p2pOp*)info->arg;
-  if (info->status == aosSuccess) {
+  p2pOp *op = (p2pOp*)arg;
+  if (status == aosSuccess) {
     if (op->state == stWaitHeader) {
       // TODO: correct processing zero-sized messages
       size_t msgSize = op->info.header.size;
@@ -194,14 +194,14 @@ void p2pRecvProc(aioInfo *info)
       finishP2POp(op, aosSuccess);
     }
   } else {
-    finishP2POp(op, info->status);
+    finishP2POp(op, status);
   }
 }
 
-void p2pRecvStreamProc(aioInfo *info)
+void p2pRecvStreamProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
 {
-  p2pOp *op = (p2pOp*)info->arg;
-  if (info->status == aosSuccess) {
+  p2pOp *op = (p2pOp*)arg;
+  if (status == aosSuccess) {
     p2pConnection *connection = op->info.connection;
     if (op->state == stWaitHeader) {
       size_t msgSize = op->info.header.size;
@@ -217,13 +217,13 @@ void p2pRecvStreamProc(aioInfo *info)
       finishP2POp(op, aosSuccess);
     }
   } else {
-    finishP2POp(op, info->status);
+    finishP2POp(op, status);
   }
 }
 
-void sendProc(aioInfo *info)
+void sendProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
 {
-  finishP2POp((p2pOp*)info->arg, info->status);
+  finishP2POp((p2pOp*)arg, status);
 }
 
 void aiop2pRecv(p2pConnection *connection, uint64_t timeout, void *buffer, size_t bufferSize, p2pCb callback, void *arg)
