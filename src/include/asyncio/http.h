@@ -12,13 +12,15 @@ extern "C" {
 #include "asyncio/socketSSL.h"
 #include "p2putils/HttpParse.h"
   
+typedef struct HTTPClient HTTPClient;
 typedef struct HTTPInfo HTTPInfo;
 typedef struct HTTPOp HTTPOp;
-  
-typedef void httpCb(HTTPInfo*);
+
+typedef void httpConnectCb(AsyncOpStatus, asyncBase*, HTTPClient*, void*);
+typedef void httpRequestCb(AsyncOpStatus, asyncBase*, HTTPClient*, int, void*);
 
 typedef struct HTTPClient {
-  asyncBase *base;  
+  aioObjectRoot root;
   int isHttps;
   union {
     aioObject *plainSocket;
@@ -28,37 +30,21 @@ typedef struct HTTPClient {
   uint8_t *inBuffer;
   size_t inBufferSize;
   size_t inBufferOffset;
-  dynamicBuffer out;
-  
-  Raw contentType;
-  Raw body;  
-  
+  dynamicBuffer out; 
   HttpParserState state;
-  HTTPOp *current;
-  HTTPOp *tail;
+  
+  // out
+  Raw contentType;
+  Raw body;    
 } HTTPClient;
 
-typedef struct HTTPInfo {
-  HTTPClient *client;
-  AsyncOpStatus status;  
-  void *arg;
-  
+
+typedef struct HTTPOp {
+  asyncOpRoot root;
   int resultCode;
   Raw contentType;
   Raw body;
-} HTTPInfo;
-
-typedef struct HTTPOp {
-  HTTPInfo info;
-
-  int type;
-  AsyncOpStatus status;
-  httpParseCb *parseCallback;  
-  httpCb *callback; 
-  
-  HTTPOp *next;
-  HostAddress address;
-  uint64_t usTimeout;  
+  httpParseCb *parseCallback;
 } HTTPOp;
 
 
@@ -68,22 +54,24 @@ HTTPClient *httpClientNew(asyncBase *base, aioObject *socket);
 HTTPClient *httpsClientNew(asyncBase *base, SSLSocket *socket);
 void httpClientDelete(HTTPClient *client);
 
-void aioHttpConnect(HTTPClient *client,
+void aioHttpConnect(asyncBase *base,
+                    HTTPClient *client,
                     const HostAddress *address,
                     uint64_t usTimeout,
-                    httpCb callback,
+                    httpConnectCb callback,
                     void *arg);
 
-void aioHttpRequest(HTTPClient *client,
+void aioHttpRequest(asyncBase *base,
+                    HTTPClient *client,
                     const char *request,
                     size_t requestSize,
                     uint64_t usTimeout,
                     httpParseCb parseCallback,
-                    httpCb callback,
+                    httpRequestCb callback,
                     void *arg);
 
-int ioHttpConnect(HTTPClient *client, const HostAddress *address, uint64_t usTimeout);
-int ioHttpRequest(HTTPClient *client, const char *request, size_t requestSize, uint64_t usTimeout, httpParseCb parseCallback);
+int ioHttpConnect(asyncBase *base, HTTPClient *client, const HostAddress *address, uint64_t usTimeout);
+int ioHttpRequest(asyncBase *base, HTTPClient *client, const char *request, size_t requestSize, uint64_t usTimeout, httpParseCb parseCallback);
                 
 
 #ifdef __cplusplus
