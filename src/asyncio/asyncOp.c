@@ -24,7 +24,7 @@ uint64_t opRingBegin(OpRing *buffer)
   return buffer->begin;
 }
 
-aioOpRoot *opRingGet(OpRing *buffer, uint64_t pt)
+asyncOpRoot *opRingGet(OpRing *buffer, uint64_t pt)
 {
   uint64_t distance = pt - buffer->begin;
   if (distance < buffer->size) {
@@ -80,9 +80,9 @@ void opRingPop(OpRing *buffer, uint64_t pt)
   }
 }
 
-void opRingPush(OpRing *buffer, aioOpRoot *op, uint64_t pt)
+void opRingPush(OpRing *buffer, asyncOpRoot *op, uint64_t pt)
 {
-  aioOpRoot *oldOp;
+  asyncOpRoot *oldOp;
   uint64_t distance = pt-buffer->begin;
   if (distance < buffer->size) {
     size_t index = (buffer->offset + distance) % buffer->size;
@@ -100,7 +100,7 @@ void opRingPush(OpRing *buffer, aioOpRoot *op, uint64_t pt)
 }
 
 
-int addToExecuteQueue(aioObjectRoot *object, aioOpRoot *op, int isWriteQueue)
+int addToExecuteQueue(aioObjectRoot *object, asyncOpRoot *op, int isWriteQueue)
 {
   // TODO: make thread safe
   List *list = isWriteQueue ? &object->writeQueue : &object->readQueue;
@@ -117,7 +117,7 @@ int addToExecuteQueue(aioObjectRoot *object, aioOpRoot *op, int isWriteQueue)
   return 0;
 }
 
-aioOpRoot *removeFromExecuteQueue(aioOpRoot *op)
+asyncOpRoot *removeFromExecuteQueue(asyncOpRoot *op)
 {
   // TODO: make thread safe
   aioObjectRoot *object = op->object;  
@@ -150,13 +150,13 @@ aioOpRoot *removeFromExecuteQueue(aioOpRoot *op)
 }
 
 
-void addToTimeoutQueue(asyncBase *base, aioOpRoot *op)
+void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op)
 {
   opRingPush(&base->timeGrid, op, getPt(op->endTime));
 }
 
 
-void removeFromTimeoutQueue(asyncBase *base, aioOpRoot *op)
+void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op)
 {
   if (op->timeoutQueue.prev) {
     op->timeoutQueue.prev->timeoutQueue.next = op->timeoutQueue.next;
@@ -174,9 +174,9 @@ void processTimeoutQueue(asyncBase *base)
   uint64_t currentTime = time(0);
   uint64_t begin = opRingBegin(&base->timeGrid);
   while (begin < currentTime) {
-    aioOpRoot *op = opRingGet(&base->timeGrid, begin);
+    asyncOpRoot *op = opRingGet(&base->timeGrid, begin);
     while (op) {
-      aioOpRoot *next = op->timeoutQueue.next;
+      asyncOpRoot *next = op->timeoutQueue.next;
       finishOperation(op, aosTimeout, 0);
       op = next;
     }
@@ -187,7 +187,7 @@ void processTimeoutQueue(asyncBase *base)
   opRingShift(&base->timeGrid, currentTime);
 }
 
-static inline void startOperation(aioOpRoot *op, asyncBase *previousOpBase)
+static inline void startOperation(asyncOpRoot *op, asyncBase *previousOpBase)
 {
   // TODO: use pipe for send operation to another async base
   uint64_t timePt = ((uint64_t)time(0))*1000000;
@@ -195,7 +195,7 @@ static inline void startOperation(aioOpRoot *op, asyncBase *previousOpBase)
     op->startMethod(op);
 }
 
-void finishOperation(aioOpRoot *op, int status, int needRemoveFromTimeGrid)
+void finishOperation(asyncOpRoot *op, int status, int needRemoveFromTimeGrid)
 {
   // TODO: normal timer check
   if (op->poolId == "timer pool") {
@@ -206,7 +206,7 @@ void finishOperation(aioOpRoot *op, int status, int needRemoveFromTimeGrid)
   
   // Remove operation from execute queue
   asyncBase *base = op->base;
-  asyncOp *nextOp = removeFromExecuteQueue(op);
+  asyncOpRoot *nextOp = removeFromExecuteQueue(op);
   
   // Release operation
   objectRelease(&op->base->pool, op, op->poolId);

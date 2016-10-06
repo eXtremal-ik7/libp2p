@@ -29,42 +29,43 @@ typedef struct coroReturnStruct {
 void userEventTrigger(aioObject *event)
 {
   // timer must be already stopped if need
-  aioOpRoot *root = event->root.readQueue.head;
+  asyncOpRoot *root = event->root.readQueue.head;
   if (root->callback)
     ((aioEventCb*)root->callback)(root->base, event, root->arg);
 }
 
-static void startMethod(aioOpRoot *op)
+static void startMethod(asyncOpRoot *root)
 {
-  switch (((aioOpRoot*)op)->opCode) {
+  asyncOp *op = (asyncOp*)root;
+  switch (root->opCode) {
     case actConnect :
     case actAccept :
       // Connect and accept operations can't be queued
       // TODO: return error
       break; 
     case actRead :
-      ((aioOpRoot*)op)->base->methodImpl.read((asyncOp*)op, 0);
+      root->base->methodImpl.read(op, 0);
       break;      
     case actWrite :
-      ((aioOpRoot*)op)->base->methodImpl.write((asyncOp*)op, 0);      
+      root->base->methodImpl.write(op, 0);      
       break;      
     case actReadMsg :
-      ((aioOpRoot*)op)->base->methodImpl.readMsg((asyncOp*)op, 0);      
+      root->base->methodImpl.readMsg(op, 0);      
       break;      
     case actWriteMsg :
-      ((aioOpRoot*)op)->base->methodImpl.writeMsg((asyncOp*)op, &((aioInfo*)op)->host, 0);
+      root->base->methodImpl.writeMsg(op, &op->host, 0);
       break;
   }
 }
 
 
-static void finishMethod(aioOpRoot *root, int status)
+static void finishMethod(asyncOpRoot *root, int status)
 {
-  aioInfo *op = (aioInfo*)root;
+  asyncOp *op = (asyncOp*)root;
   
   // TODO: timer must be independent from OS I/O method used
   if (root->poolId == timerPoolId)
-    root->base->methodImpl.stopTimer((asyncOp*)root);
+    root->base->methodImpl.stopTimer(op);
     
   // Do callback if need
   if (root->callback) {
@@ -103,48 +104,43 @@ static asyncOp *initAsyncOp(aioObject *object,
                             uint64_t timeout,
                             int opCode)
 {
-  aioInfo *info;
-  
   int needTimer = (object->type == ioObjectUserEvent) || (flags & afRealtime);
   const char *pool = needTimer ? timerPoolId : poolId;
   
   asyncOp *newOp = queryObject(object->base, pool);
   if (!newOp) {
     newOp = object->base->methodImpl.newAsyncOp(object->base, needTimer);
-    info = (aioInfo*)newOp;
-    info->root.base = object->base;
-    info->root.poolId = pool;
-    info->root.startMethod = startMethod;
-    info->root.finishMethod = finishMethod;
-  } else {
-    info = (aioInfo*)newOp;
+    newOp->root.base = object->base;
+    newOp->root.poolId = pool;
+    newOp->root.startMethod = startMethod;
+    newOp->root.finishMethod = finishMethod;
   }
   
-  info->root.executeQueue.prev = 0;
-  info->root.executeQueue.next = 0;  
-  info->root.timeoutQueue.prev = 0;
-  info->root.timeoutQueue.next = 0;  
-  info->root.object = &object->root;
-  info->root.flags = flags;
-  info->root.opCode = opCode;
-  info->root.endTime = 0;
-  info->root.callback = callback;
-  info->root.arg = arg;
+  newOp->root.executeQueue.prev = 0;
+  newOp->root.executeQueue.next = 0;  
+  newOp->root.timeoutQueue.prev = 0;
+  newOp->root.timeoutQueue.next = 0;  
+  newOp->root.object = &object->root;
+  newOp->root.flags = flags;
+  newOp->root.opCode = opCode;
+  newOp->root.endTime = 0;
+  newOp->root.callback = callback;
+  newOp->root.arg = arg;
 
   if (buffer)
-    info->buffer = buffer;
+    newOp->buffer = buffer;
   else if (dynamicArray)
-    info->dynamicArray = dynamicArray;
-  info->transactionSize = transactionSize;
-  info->bytesTransferred = 0;
+    newOp->dynamicArray = dynamicArray;
+  newOp->transactionSize = transactionSize;
+  newOp->bytesTransferred = 0;
   if (timeout) {
     if (needTimer) {
       // start timer for this operation
-      info->root.base->methodImpl.startTimer(newOp, timeout, 1);
+      newOp->root.base->methodImpl.startTimer(newOp, timeout, 1);
     } else {
       // add operation to timeout grid
-      info->root.endTime = ((uint64_t)time(0))*1000000ULL + timeout;
-      addToTimeoutQueue(object->base, &info->root);
+      newOp->root.endTime = ((uint64_t)time(0))*1000000ULL + timeout;
+      addToTimeoutQueue(object->base, &newOp->root);
     }
   }
   
@@ -268,7 +264,8 @@ aioObject *newUserEvent(asyncBase *base, aioEventCb callback, void *arg)
   aioObject *object = malloc(sizeof(aioObject));
   object->base = base;
   object->type = ioObjectUserEvent;  
-  object->root.readQueue.head = initAsyncOp(object, callback, arg, 0, 0, 0, 0, 0, actNoAction);
+  object->root.readQueue.head =
+    (asyncOpRoot*)initAsyncOp(object, callback, arg, 0, 0, 0, 0, 0, actNoAction);
   return object;
 }
 
@@ -292,7 +289,7 @@ aioObject *newDeviceIo(asyncBase *base, iodevTy hDevice)
 void deleteAioObject(aioObject *object)
 {
   if (object->type == ioObjectUserEvent) {
-    aioOpRoot *op = object->root.readQueue.head;
+    asyncOpRoot *op = object->root.readQueue.head;
     objectRelease(&op->base->pool, op, op->poolId);
   }
     
@@ -301,21 +298,21 @@ void deleteAioObject(aioObject *object)
 
 void userEventStartTimer(aioObject *event, uint64_t usTimeout, int counter)
 {
-  aioOpRoot *op = event->root.readQueue.head;  
+  asyncOpRoot *op = event->root.readQueue.head;  
   op->base->methodImpl.startTimer((asyncOp*)op, usTimeout, counter);
 }
 
 
 void userEventStopTimer(aioObject *event)
 {
-  aioOpRoot *op = event->root.readQueue.head;    
+  asyncOpRoot *op = event->root.readQueue.head;    
   op->base->methodImpl.stopTimer((asyncOp*)op);
 }
 
 
 void userEventActivate(aioObject *event)
 {
-  aioOpRoot *op = event->root.readQueue.head;    
+  asyncOpRoot *op = event->root.readQueue.head;    
   op->base->methodImpl.activate((asyncOp*)op);
 }
 
@@ -346,8 +343,8 @@ void aioConnect(aioObject *op,
                 void *arg)
 {
   asyncOp *newOp = initAsyncOp(op, callback, arg, 0, 0, 0, afNone, usTimeout, actConnect);
-  if (addToExecuteQueue((aioObjectRoot*)op, (aioOpRoot*)newOp, 1))
-    ((aioOpRoot*)newOp)->base->methodImpl.connect(newOp, address, 0);
+  if (addToExecuteQueue((aioObjectRoot*)op, (asyncOpRoot*)newOp, 1))
+    ((asyncOpRoot*)newOp)->base->methodImpl.connect(newOp, address, 0);
 }
 
 
@@ -357,8 +354,8 @@ void aioAccept(aioObject *op,
                void *arg)
 {
   asyncOp *newOp = initAsyncOp(op, callback, arg, 0, 0, 0, afNone, usTimeout, actAccept);
-  if (addToExecuteQueue((aioObjectRoot*)op, (aioOpRoot*)newOp, 0))
-    ((aioOpRoot*)newOp)->base->methodImpl.accept(newOp, 0);
+  if (addToExecuteQueue((aioObjectRoot*)op, (asyncOpRoot*)newOp, 0))
+    ((asyncOpRoot*)newOp)->base->methodImpl.accept(newOp, 0);
 }
 
 
@@ -371,8 +368,8 @@ void aioRead(aioObject *op,
              void *arg)
 {
   asyncOp *newOp = initAsyncOp(op, callback, arg, buffer, 0, size, flags, usTimeout, actRead);
-  if (addToExecuteQueue((aioObjectRoot*)op, (aioOpRoot*)newOp, 0))
-    startMethod(newOp);  
+  if (addToExecuteQueue((aioObjectRoot*)op, (asyncOpRoot*)newOp, 0))
+    startMethod(&newOp->root);  
 }
 
 
@@ -385,8 +382,8 @@ void aioWrite(aioObject *op,
               void *arg)
 {
   asyncOp *newOp = initAsyncOp(op, callback, arg, buffer, 0, size, flags, usTimeout, actWrite);  
-  if (addToExecuteQueue((aioObjectRoot*)op, (aioOpRoot*)newOp, 1))
-    startMethod(newOp);  
+  if (addToExecuteQueue((aioObjectRoot*)op, (asyncOpRoot*)newOp, 1))
+    startMethod(&newOp->root);  
 }
 
 
@@ -397,8 +394,8 @@ void aioReadMsg(aioObject *op,
                 void *arg)
 {
   asyncOp *newOp = initAsyncOp(op, callback, arg, 0, buffer, 0, afNone, usTimeout, actReadMsg);
-  if (addToExecuteQueue((aioObjectRoot*)op, (aioOpRoot*)newOp, 0))
-    startMethod(newOp);  
+  if (addToExecuteQueue((aioObjectRoot*)op, (asyncOpRoot*)newOp, 0))
+    startMethod(&newOp->root);  
 }
 
 
@@ -413,9 +410,9 @@ void aioWriteMsg(aioObject *op,
                  void *arg)
 {
   asyncOp *newOp = initAsyncOp(op, callback, arg, buffer, 0, size, flags, usTimeout, actWriteMsg);  
-  ((aioInfo*)newOp)->host = *address;
-  if (addToExecuteQueue((aioObjectRoot*)op, (aioOpRoot*)newOp, 1))
-    startMethod(newOp);  
+  newOp->host = *address;
+  if (addToExecuteQueue((aioObjectRoot*)op, (asyncOpRoot*)newOp, 1))
+    startMethod(&newOp->root);  
 }
 
 

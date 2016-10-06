@@ -18,16 +18,14 @@
 
 extern "C" void userEventTrigger(aioObject *event);
 
-struct fdStruct;
-
-struct asyncOp {
-  aioInfo info;
+typedef struct selectOp {
+  asyncOp info;
   timer_t timerId;
   int counter;
   int useInternalBuffer;
   void *internalBuffer;
   size_t internalBufferSize;
-};
+} selectOp;
 
 
 typedef enum {
@@ -58,21 +56,17 @@ void selectNextFinishedOperation(asyncBase *base);
 aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data);
 asyncOp *selectNewAsyncOp(asyncBase *base, int needTimer);
 void selectDeleteObject(aioObject *object);
-void selectStartTimer(asyncOp *op, uint64_t usTimeout, int count);
-void selectStopTimer(asyncOp *op);
-void selectActivate(asyncOp *op);
-void selectAsyncConnect(asyncOp *op,
-                        const HostAddress *address,
-                        uint64_t usTimeout);
-void selectAsyncAccept(asyncOp *op, uint64_t usTimeout);
-void selectAsyncRead(asyncOp *op, uint64_t usTimeout);
-void selectAsyncWrite(asyncOp *op, uint64_t usTimeout);
-void selectAsyncReadMsg(asyncOp *op, uint64_t usTimeout);
-void selectAsyncWriteMsg(asyncOp *op,
-                         const HostAddress *address,
-                         uint64_t usTimeout);
-void selectMonitor(asyncOp *op);
-void selectMonitorStop(asyncOp *op);
+void selectStartTimer(selectOp *op, uint64_t usTimeout, int count);
+void selectStopTimer(selectOp *op);
+void selectActivate(selectOp *op);
+void selectAsyncConnect(selectOp *op, const HostAddress *address, uint64_t usTimeout);
+void selectAsyncAccept(selectOp *op, uint64_t usTimeout);
+void selectAsyncRead(selectOp *op, uint64_t usTimeout);
+void selectAsyncWrite(selectOp *op, uint64_t usTimeout);
+void selectAsyncReadMsg(selectOp *op, uint64_t usTimeout);
+void selectAsyncWriteMsg(selectOp *op, const HostAddress *address, uint64_t usTimeout);
+void selectMonitor(selectOp *op);
+void selectMonitorStop(selectOp *op);
 
 
 static struct asyncImpl selectImpl = {
@@ -81,17 +75,17 @@ static struct asyncImpl selectImpl = {
   selectNewAioObject,
   selectNewAsyncOp,
   selectDeleteObject,
-  selectStartTimer,
-  selectStopTimer,
-  selectActivate,
-  selectAsyncConnect,
-  selectAsyncAccept,
-  selectAsyncRead,
-  selectAsyncWrite,
-  selectAsyncReadMsg,
-  selectAsyncWriteMsg,
-  selectMonitor,
-  selectMonitorStop
+  (startTimerTy*)selectStartTimer,
+  (stopTimerTy*)selectStopTimer,
+  (activateTy*)selectActivate,
+  (asyncConnectTy*)selectAsyncConnect,
+  (asyncAcceptTy*)selectAsyncAccept,
+  (asyncReadTy*)selectAsyncRead,
+  (asyncWriteTy*)selectAsyncWrite,
+  (asyncReadMsgTy*)selectAsyncReadMsg,
+  (asyncWriteMsgTy*)selectAsyncWriteMsg,
+  (asyncMonitorTy*)selectMonitor,
+  (asyncMonitorStopTy*)selectMonitorStop
 };
 
 
@@ -102,12 +96,12 @@ static int isWriteOperation(int action)
           action == actWriteMsg);
 }
 
-static aioObject *getObject(asyncOp *op)
+static aioObject *getObject(selectOp *op)
 {
   return (aioObject*)op->info.root.object;
 }
 
-static int getFd(asyncOp *op)
+static int getFd(selectOp *op)
 {
   aioObject *object = getObject(op);
   switch (object->type) {
@@ -137,14 +131,14 @@ static fdStruct *getFdOperations(OpLinksMap &opMap, int fd)
 }
 
 
-static void asyncOpLink(fdStruct *list, asyncOp *op)
+static void asyncOpLink(fdStruct *list, selectOp *op)
 {
   list->mask |= isWriteOperation(op->info.root.opCode) ? mtWrite : mtRead;
   list->object = getObject(op);
 }
 
 
-static void asyncOpUnlink(asyncOp *op)
+static void asyncOpUnlink(selectOp *op)
 {
   if (!op->info.root.executeQueue.next) {
     selectBase *localBase = (selectBase*)op->info.root.base;
@@ -161,7 +155,7 @@ static void asyncOpUnlink(asyncOp *op)
 
 static void timerCb(int sig, siginfo_t *si, void *uc)
 {
-  asyncOp *op = (asyncOp*)si->si_value.sival_ptr;
+  selectOp *op = (selectOp*)si->si_value.sival_ptr;
   selectBase *base = (selectBase*)op->info.root.base;
   
   if (op->counter > 0)
@@ -170,7 +164,7 @@ static void timerCb(int sig, siginfo_t *si, void *uc)
 }
 
 
-static void startTimer(asyncOp *op, uint64_t usTimeout, int periodic)
+static void startTimer(selectOp *op, uint64_t usTimeout, int periodic)
 {
   struct itimerspec its;  
   its.it_value.tv_sec = usTimeout / 1000000;
@@ -183,7 +177,7 @@ static void startTimer(asyncOp *op, uint64_t usTimeout, int periodic)
 }
 
 
-static void stopTimer(asyncOp *op)
+static void stopTimer(selectOp *op)
 {
   struct itimerspec its;   
   op->counter = 0;
@@ -194,7 +188,7 @@ static void stopTimer(asyncOp *op)
 }
 
 
-static void startOperation(asyncOp *op,
+static void startOperation(selectOp *op,
                            IoActionTy action,
                            uint64_t usTimeout)
 {
@@ -258,7 +252,7 @@ void selectPostEmptyOperation(asyncBase *base)
 }
 
 
-static void finish(asyncOp *op, AsyncOpStatus status)
+static void finish(selectOp *op, AsyncOpStatus status)
 {
   asyncOpUnlink(op);
   finishOperation(&op->info.root, status, 1);
@@ -278,7 +272,7 @@ static void processReadyFds(selectBase *base,
     int available;
     fdStruct *list = getFdOperations(links, fd);
     aioObject *object = list->object;
-    asyncOp *op = (asyncOp*)(isRead ? object->root.readQueue.head : object->root.writeQueue.head);    
+    selectOp *op = (selectOp*)(isRead ? object->root.readQueue.head : object->root.writeQueue.head);    
     if (!op)
       continue;
   
@@ -425,7 +419,7 @@ void selectNextFinishedOperation(asyncBase *base)
     if (FD_ISSET(localBase->pipeFd[0], &readFds)) {
       int available;
       ioctl(localBase->pipeFd[0], FIONREAD, &available);
-      asyncOp *op;
+      selectOp *op;
       for (int i = 0; i < available/(int)sizeof(op); i++) {
         read(localBase->pipeFd[0], &op, sizeof(op));
         if (!op)
@@ -463,6 +457,8 @@ aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data)
     case ioObjectSocketSyn :
       object->hSocket = *(socketTy*)data;
       break;
+    default :
+      break;
   }
 
   return object;
@@ -471,7 +467,7 @@ aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 
 asyncOp *selectNewAsyncOp(asyncBase *base, int needTimer)
 {
-  asyncOp *op = new asyncOp;
+  selectOp *op = new selectOp;
   if (op) {
     struct sigevent sEvent;
     op->internalBuffer = 0;
@@ -490,7 +486,7 @@ asyncOp *selectNewAsyncOp(asyncBase *base, int needTimer)
     }
   }
 
-  return op;
+  return (asyncOp*)op;
 }
 
 
@@ -504,11 +500,13 @@ void selectDeleteObject(aioObject *object)
     case ioObjectSocketSyn :
       close(object->hSocket);
       break;
+    default :
+      break;
   }
 }
 
 
-void selectStartTimer(asyncOp *op, uint64_t usTimeout, int count)
+void selectStartTimer(selectOp *op, uint64_t usTimeout, int count)
 {
   // only for user event, 'op' must have timer
   op->counter = (count > 0) ? count : -1;
@@ -516,21 +514,21 @@ void selectStartTimer(asyncOp *op, uint64_t usTimeout, int count)
 }
 
 
-void selectStopTimer(asyncOp *op)
+void selectStopTimer(selectOp *op)
 {
   // only for user event, 'op' must have timer
   stopTimer(op);
 }
 
 
-void selectActivate(asyncOp *op)
+void selectActivate(selectOp *op)
 {
   selectBase *localBase = (selectBase*)op->info.root.base;
   write(localBase->pipeFd[1], op, sizeof(op));
 }
 
 
-void selectAsyncConnect(asyncOp *op,
+void selectAsyncConnect(selectOp *op,
                         const HostAddress *address,
                         uint64_t usTimeout)
 {
@@ -549,32 +547,32 @@ void selectAsyncConnect(asyncOp *op,
 }
 
 
-void selectAsyncAccept(asyncOp *op, uint64_t usTimeout)
+void selectAsyncAccept(selectOp *op, uint64_t usTimeout)
 {
   startOperation(op, actAccept, usTimeout);
 }
 
 
-void selectAsyncRead(asyncOp *op, uint64_t usTimeout)
+void selectAsyncRead(selectOp *op, uint64_t usTimeout)
 {
   startOperation(op, actRead, usTimeout);
 }
 
 
-void selectAsyncWrite(asyncOp *op, uint64_t usTimeout)
+void selectAsyncWrite(selectOp *op, uint64_t usTimeout)
 {
   op->useInternalBuffer = !(op->info.root.flags & afNoCopy);
   startOperation(op, actWrite, usTimeout);
 }
 
 
-void selectAsyncReadMsg(asyncOp *op, uint64_t usTimeout)
+void selectAsyncReadMsg(selectOp *op, uint64_t usTimeout)
 {
   startOperation(op, actReadMsg, usTimeout);
 }
 
 
-void selectAsyncWriteMsg(asyncOp *op,
+void selectAsyncWriteMsg(selectOp *op,
                          const HostAddress *address,
                          uint64_t usTimeout)
 {
@@ -584,13 +582,13 @@ void selectAsyncWriteMsg(asyncOp *op,
 }
 
 
-void selectMonitor(asyncOp *op)
+void selectMonitor(selectOp *op)
 {
   startOperation(op, actMonitor, 0);
 }
 
 
-void selectMonitorStop(asyncOp *op)
+void selectMonitorStop(selectOp *op)
 {
   startOperation(op, actMonitorStop, 0);
 }

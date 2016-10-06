@@ -65,3 +65,17 @@ struct aioObject {
     socketTy hSocket;
   };
 };
+
+struct asyncOp {
+  asyncOpRoot root;
+
+  union {
+    struct dynamicBuffer *dynamicArray;
+    void *buffer;
+  };
+
+  size_t transactionSize;
+  size_t bytesTransferred;
+  socketTy acceptSocket;
+  HostAddress host;
+};

@@ -9,29 +9,29 @@ extern "C" {
 #include <stdint.h>
 
 typedef struct aioObjectRoot aioObjectRoot;
-typedef struct aioOpRoot aioOpRoot;
+typedef struct asyncOpRoot asyncOpRoot;
 typedef struct asyncOp asyncOp;
 typedef struct asyncBase asyncBase;
 
-typedef void aioStartProc(aioOpRoot*);
-typedef void aioFinishProc(aioOpRoot*, int);
+typedef void aioStartProc(asyncOpRoot*);
+typedef void aioFinishProc(asyncOpRoot*, int);
 
 typedef struct List {
-  aioOpRoot *head;
-  aioOpRoot *tail;
+  asyncOpRoot *head;
+  asyncOpRoot *tail;
 } List;
 
 typedef struct ListImpl {
-  aioOpRoot *prev;
-  aioOpRoot *next;
+  asyncOpRoot *prev;
+  asyncOpRoot *next;
 } ListImpl;
 
 typedef struct OpRing {
-  aioOpRoot **data;
+  asyncOpRoot **data;
   size_t size;
   size_t offset;
   uint64_t begin;
-  aioOpRoot *other;
+  asyncOpRoot *other;
 } OpRing;
 
 struct aioObjectRoot {
@@ -39,7 +39,7 @@ struct aioObjectRoot {
   List writeQueue;
 };
 
-struct aioOpRoot {
+struct asyncOpRoot {
   // constant members
   asyncBase *base;
   const char *poolId;
@@ -58,21 +58,21 @@ struct aioOpRoot {
 
 void opRingInit(OpRing *buffer, size_t size, uint64_t begin);
 uint64_t opRingBegin(OpRing *buffer);
-aioOpRoot *opRingGet(OpRing *buffer, uint64_t pt);
+asyncOpRoot *opRingGet(OpRing *buffer, uint64_t pt);
 void opRingShift(OpRing *buffer, uint64_t newBegin);
 void opRingPop(OpRing *buffer, uint64_t pt);
-void opRingPush(OpRing *buffer, aioOpRoot *op, uint64_t pt);
+void opRingPush(OpRing *buffer, asyncOpRoot *op, uint64_t pt);
 
 
 // Must be thread-safe
-int addToExecuteQueue(aioObjectRoot *object, aioOpRoot *op, int isWriteQueue);
-aioOpRoot *removeFromExecuteQueue(aioOpRoot *op);
+int addToExecuteQueue(aioObjectRoot *object, asyncOpRoot *op, int isWriteQueue);
+asyncOpRoot *removeFromExecuteQueue(asyncOpRoot *op);
 
-void addToTimeoutQueue(asyncBase *base, aioOpRoot *op);
-void removeFromTimeoutQueue(asyncBase *base, aioOpRoot *op);
+void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op);
+void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op);
 void processTimeoutQueue(asyncBase *base);
 
-void finishOperation(aioOpRoot *op, int status, int needRemoveFromTimeGrid);
+void finishOperation(asyncOpRoot *op, int status, int needRemoveFromTimeGrid);
 
 #ifdef __cplusplus
 }

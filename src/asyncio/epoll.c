@@ -15,8 +15,6 @@
 #include <stdio.h>
 #include <sys/epoll.h>
 
-#include "Debug.h"
-
 #define MAX_EVENTS 256
 
 void userEventTrigger(aioObject *event);
@@ -43,14 +41,14 @@ typedef struct fdStruct {
   int mask;
 } fdStruct;
 
-struct asyncOp {
-  aioInfo info;
+typedef struct epollOp {
+  asyncOp info;
   timer_t timerId;
   int counter;
   int useInternalBuffer;
   void *internalBuffer;
   size_t internalBufferSize;
-};
+} epollOp;
 
 
 typedef struct epollBase {
@@ -68,21 +66,21 @@ void epollNextFinishedOperation(asyncBase *base);
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data);
 asyncOp *epollNewAsyncOp(asyncBase *base, int needTimer);
 void epollDeleteObject(aioObject *object);
-void epollStartTimer(asyncOp *op, uint64_t usTimeout, int count);
-void epollStopTimer(asyncOp *op);
-void epollActivate(asyncOp *op);
-void epollAsyncConnect(asyncOp *op,
+void epollStartTimer(epollOp *op, uint64_t usTimeout, int count);
+void epollStopTimer(epollOp *op);
+void epollActivate(epollOp *op);
+void epollAsyncConnect(epollOp *op,
                        const HostAddress *address,
                        uint64_t usTimeout);
-void epollAsyncAccept(asyncOp *op, uint64_t usTimeout);
-void epollAsyncRead(asyncOp *op, uint64_t usTimeout);
-void epollAsyncWrite(asyncOp *op, uint64_t usTimeout);
-void epollAsyncReadMsg(asyncOp *op, uint64_t usTimeout);
-void epollAsyncWriteMsg(asyncOp *op,
+void epollAsyncAccept(epollOp *op, uint64_t usTimeout);
+void epollAsyncRead(epollOp *op, uint64_t usTimeout);
+void epollAsyncWrite(epollOp *op, uint64_t usTimeout);
+void epollAsyncReadMsg(epollOp *op, uint64_t usTimeout);
+void epollAsyncWriteMsg(epollOp *op,
                         const HostAddress *address,
                         uint64_t usTimeout);
-void epollMonitor(asyncOp *op);
-void epollMonitorStop(asyncOp *op);
+void epollMonitor(epollOp *op);
+void epollMonitorStop(epollOp *op);
 
 static struct asyncImpl epollImpl = {
   epollPostEmptyOperation,
@@ -90,17 +88,17 @@ static struct asyncImpl epollImpl = {
   epollNewAioObject,
   epollNewAsyncOp,
   epollDeleteObject,
-  epollStartTimer,
-  epollStopTimer,
-  epollActivate,
-  epollAsyncConnect,
-  epollAsyncAccept,
-  epollAsyncRead,
-  epollAsyncWrite,
-  epollAsyncReadMsg,
-  epollAsyncWriteMsg,
-  epollMonitor,
-  epollMonitorStop
+  (startTimerTy*)epollStartTimer,
+  (stopTimerTy*)epollStopTimer,
+  (activateTy*)epollActivate,
+  (asyncConnectTy*)epollAsyncConnect,
+  (asyncAcceptTy*)epollAsyncAccept,
+  (asyncReadTy*)epollAsyncRead,
+  (asyncWriteTy*)epollAsyncWrite,
+  (asyncReadMsgTy*)epollAsyncReadMsg,
+  (asyncWriteMsgTy*)epollAsyncWriteMsg,
+  (asyncMonitorTy*)epollMonitor,
+  (asyncMonitorStopTy*)epollMonitorStop
 };
 
 static void epollControl(int epollFd, int action, int events, int fd)
@@ -122,12 +120,12 @@ static int isWriteOperation(IoActionTy action)
           action == actWriteMsg);
 }
 
-static aioObject *getObject(asyncOp *op)
+static aioObject *getObject(epollOp *op)
 {
   return (aioObject*)op->info.root.object;
 }
 
-static int getFd(asyncOp *op)
+static int getFd(epollOp *op)
 {
   aioObject *object = getObject(op);
   switch (object->type) {
@@ -164,7 +162,7 @@ static fdStruct *getFdStruct(epollBase *base, int fd)
   return fds;  
 }
 
-static void asyncOpLink(fdStruct *fds, asyncOp *op)
+static void asyncOpLink(fdStruct *fds, epollOp *op)
 {
   int oldMask = fds->mask;
   fds->mask |= isWriteOperation(op->info.root.opCode) ? EPOLLOUT : EPOLLIN;
@@ -173,10 +171,10 @@ static void asyncOpLink(fdStruct *fds, asyncOp *op)
     epollControl(((epollBase*)op->info.root.base)->epollFd, action, fds->mask, getFd(op));
   }
   
-  fds->object = op->info.root.object;
+  fds->object = getObject(op);
 }
 
-static void asyncOpUnlink(asyncOp *op)
+static void asyncOpUnlink(epollOp *op)
 {
   if (!op->info.root.executeQueue.next) {
     epollBase *base = (epollBase*)op->info.root.base;
@@ -190,7 +188,7 @@ static void asyncOpUnlink(asyncOp *op)
 
 static void timerCb(int sig, siginfo_t *si, void *uc)
 {
-  asyncOp *op = (asyncOp *)si->si_value.sival_ptr;
+  epollOp *op = (epollOp*)si->si_value.sival_ptr;
   epollBase *base = (epollBase *)op->info.root.base;
 
   pipeMsg msg = {Timeout, (void *)op};
@@ -200,7 +198,7 @@ static void timerCb(int sig, siginfo_t *si, void *uc)
   write(base->pipeFd[Write], &msg, sizeof(pipeMsg));
 }
 
-static void startTimer(asyncOp *op, uint64_t usTimeout, int periodic)
+static void startTimer(epollOp *op, uint64_t usTimeout, int periodic)
 {
   struct itimerspec its;
   its.it_value.tv_sec = usTimeout / 1000000;
@@ -212,7 +210,7 @@ static void startTimer(asyncOp *op, uint64_t usTimeout, int periodic)
   }
 }
 
-static void stopTimer(asyncOp *op)
+static void stopTimer(epollOp *op)
 {
   struct itimerspec its;
   op->counter = 0;
@@ -222,7 +220,7 @@ static void stopTimer(asyncOp *op)
   }
 }
 
-static void startOperation(asyncOp *op,
+static void startOperation(epollOp *op,
                            IoActionTy action,
                            uint64_t usTimeout)
 {
@@ -289,7 +287,7 @@ void epollPostEmptyOperation(asyncBase *base)
   write(localBase->pipeFd[Write], &msg, sizeof(pipeMsg));
 }
 
-static void finish(asyncOp *op, AsyncOpStatus status)
+static void finish(epollOp *op, AsyncOpStatus status)
 {
   asyncOpUnlink(op);
   finishOperation(&op->info.root, status, 1);
@@ -305,7 +303,7 @@ static void processReadyFd(epollBase *base,
 
   fdStruct *fds = getFdStruct(base, fd);
   aioObject *object = fds->object;
-  asyncOp *op = (asyncOp*)(isRead ? object->root.readQueue.head : object->root.writeQueue.head);
+  epollOp *op = (epollOp*)(isRead ? object->root.readQueue.head : object->root.writeQueue.head);
   if (!op)
     return;
   assert(fd == getFd(op) && "Lost asyncop found!");
@@ -412,7 +410,6 @@ void epollNextFinishedOperation(asyncBase *base)
   struct epoll_event events[MAX_EVENTS];
   epollBase *localBase = (epollBase *)base;
   pipeMsg msg;
-  asyncOp *op;
 
   while (1) {
     do {
@@ -426,10 +423,11 @@ void epollNextFinishedOperation(asyncBase *base)
         int available;
         ioctl(localBase->pipeFd[Read], FIONREAD, &available);
         for (i = 0; i < available / sizeof(pipeMsg); i++) {
+          epollOp *op;
           aioObject *object;
           read(localBase->pipeFd[Read], &msg, sizeof(pipeMsg));
 
-          op = (asyncOp *)msg.data;
+          op = (epollOp*)msg.data;
           object = getObject(op);
           switch (msg.cmd) {
             case Reset :
@@ -482,7 +480,7 @@ aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 
 asyncOp *epollNewAsyncOp(asyncBase *base, int needTimer)
 {
-  asyncOp *op = malloc(sizeof(asyncOp));
+  epollOp *op = malloc(sizeof(epollOp));
   if (op) {
     struct sigevent sEvent;
     op->internalBuffer = 0;
@@ -501,7 +499,7 @@ asyncOp *epollNewAsyncOp(asyncBase *base, int needTimer)
     }
   }
 
-  return op;
+  return (asyncOp*)op;
 }
 
 
@@ -515,11 +513,13 @@ void epollDeleteObject(aioObject *object)
     case ioObjectSocketSyn :
       close(object->hSocket);
       break;
+    default :
+      break;
   }
 }
 
 
-void epollStartTimer(asyncOp *op, uint64_t usTimeout, int count)
+void epollStartTimer(epollOp *op, uint64_t usTimeout, int count)
 {
   // only for user event, 'op' must have timer
   op->counter = (count > 0) ? count : -1;
@@ -527,14 +527,14 @@ void epollStartTimer(asyncOp *op, uint64_t usTimeout, int count)
 }
 
 
-void epollStopTimer(asyncOp *op)
+void epollStopTimer(epollOp *op)
 {
   // only for user event, 'op' must have timer  
   stopTimer(op);
 }
 
 
-void epollActivate(asyncOp *op)
+void epollActivate(epollOp *op)
 {
   pipeMsg msg = {UserEvent, (void *)op};
   epollBase *localBase = (epollBase *)op->info.root.base;
@@ -542,7 +542,7 @@ void epollActivate(asyncOp *op)
 }
 
 
-void epollAsyncConnect(asyncOp *op,
+void epollAsyncConnect(epollOp *op,
                        const HostAddress *address,
                        uint64_t usTimeout)
 {
@@ -561,32 +561,32 @@ void epollAsyncConnect(asyncOp *op,
 }
 
 
-void epollAsyncAccept(asyncOp *op, uint64_t usTimeout)
+void epollAsyncAccept(epollOp *op, uint64_t usTimeout)
 {
   startOperation(op, actAccept, usTimeout);
 }
 
 
-void epollAsyncRead(asyncOp *op, uint64_t usTimeout)
+void epollAsyncRead(epollOp *op, uint64_t usTimeout)
 {
   startOperation(op, actRead, usTimeout);
 }
 
 
-void epollAsyncWrite(asyncOp *op, uint64_t usTimeout)
+void epollAsyncWrite(epollOp *op, uint64_t usTimeout)
 {
   op->useInternalBuffer = !(op->info.root.flags & afNoCopy);
   startOperation(op, actWrite, usTimeout);
 }
 
 
-void epollAsyncReadMsg(asyncOp *op, uint64_t usTimeout)
+void epollAsyncReadMsg(epollOp *op, uint64_t usTimeout)
 {
   startOperation(op, actReadMsg, usTimeout);
 }
 
 
-void epollAsyncWriteMsg(asyncOp *op,
+void epollAsyncWriteMsg(epollOp *op,
                         const HostAddress *address,
                         uint64_t usTimeout)
 {
@@ -596,13 +596,13 @@ void epollAsyncWriteMsg(asyncOp *op,
 }
 
 
-void epollMonitor(asyncOp *op)
+void epollMonitor(epollOp *op)
 {
   startOperation(op, actMonitor, 0);
 }
 
 
-void epollMonitorStop(asyncOp *op)
+void epollMonitorStop(epollOp *op)
 {
   startOperation(op, actMonitorStop, 0);
 }

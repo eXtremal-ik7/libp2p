@@ -72,23 +72,6 @@ typedef enum AsyncMonitorState {
 typedef struct asyncBase asyncBase;
 typedef struct aioObject aioObject;
 typedef struct asyncOp asyncOp;
-typedef struct aioInfo aioInfo;
 typedef struct coroutineTy coroutineTy;
-
-
-struct aioInfo {
-  aioOpRoot root;
-
-  union {
-    struct dynamicBuffer *dynamicArray;
-    void *buffer;
-  };
-
-  size_t transactionSize;
-  size_t bytesTransferred;
-  socketTy acceptSocket;
-  HostAddress host;
-};
-
 
 #endif //__ASYNCTYPES_H_
