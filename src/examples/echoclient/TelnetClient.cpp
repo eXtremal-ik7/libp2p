@@ -15,7 +15,7 @@ struct ClientData {
 };
 
 
-void readCb(AsyncOpStatus status, aioObject *object, void *buffer, size_t size, size_t transferred, void *arg)
+void readCb(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
 {
   ClientData *data = (ClientData*)arg;  
   if (status == aosSuccess) {
@@ -31,7 +31,7 @@ void readCb(AsyncOpStatus status, aioObject *object, void *buffer, size_t size, 
 }
 
 
-void pingTimerCb(aioObject *event, void *arg)
+void pingTimerCb(asyncBase *base, aioObject *event, void *arg)
 {
   ClientData *data = (ClientData*)arg;
   if (data->isConnected) {
@@ -45,7 +45,7 @@ void pingTimerCb(aioObject *event, void *arg)
 }
 
 
-void connectCb(AsyncOpStatus status, aioObject *object, void *arg)
+void connectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg)
 {
   ClientData *data = (ClientData*)arg;
   if (status == aosSuccess) {

@@ -6,9 +6,9 @@
 const size_t echoBufferSize = 1024;
 
 
-void readCb(AsyncOpStatus status, aioObject *socket, void *buffer, size_t size, size_t transferred, void *arg)
+void readCb(AsyncOpStatus status, asyncBase *base, aioObject *socket, size_t transferred, void *arg)
 {
-  uint8_t *echoBuffer = (uint8_t*)buffer;
+  uint8_t *echoBuffer = (uint8_t*)arg;
   if (status == aosSuccess) {
     aioWrite(socket, echoBuffer, transferred, afNone, 1000000, 0, 0);
     aioRead(socket, echoBuffer, echoBufferSize, afNone, 0, readCb, echoBuffer);
@@ -22,16 +22,15 @@ void readCb(AsyncOpStatus status, aioObject *socket, void *buffer, size_t size, 
 }
 
 
-void acceptCb(AsyncOpStatus status, aioObject *listener, socketTy acceptSocket, void *arg)
+void acceptCb(AsyncOpStatus status, asyncBase *base, aioObject *listener, socketTy acceptSocket, void *arg)
 {
-  asyncBase *base = (asyncBase*)arg;
   if (status == aosSuccess) {
     fprintf(stderr, " * new client\n");
     uint8_t *echoBuffer = new uint8_t[echoBufferSize];
     aioObject *newSocketOp = newSocketIo(base, acceptSocket);
     aioRead(newSocketOp, echoBuffer, echoBufferSize, afNone, 0, readCb, echoBuffer);
   }
-  aioAccept(listener, 0, acceptCb, base);
+  aioAccept(listener, 0, acceptCb, 0);
 }
 
 
@@ -58,7 +57,7 @@ int main(int argc, char **argv)
   asyncBase *base = createAsyncBase(amOSDefault);
   aioObject *socketOp = newSocketIo(base, hSocket);
 
-  aioAccept(socketOp, 0, acceptCb, base);
+  aioAccept(socketOp, 0, acceptCb, 0);
   asyncLoop(base);
   return 0;
 }

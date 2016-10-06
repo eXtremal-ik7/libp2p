@@ -31,7 +31,7 @@ void userEventTrigger(aioObject *event)
   // timer must be already stopped if need
   aioOpRoot *root = event->root.readQueue.head;
   if (root->callback)
-    ((aioEventCb*)root->callback)(event, root->arg);
+    ((aioEventCb*)root->callback)(root->base, event, root->arg);
 }
 
 static void startMethod(aioOpRoot *op)
@@ -71,22 +71,22 @@ static void finishMethod(aioOpRoot *root, int status)
     aioObject *object = (aioObject*)root->object;
     switch (root->opCode) {
       case actConnect :
-        ((aioConnectCb*)root->callback)(status, object, root->arg);
+        ((aioConnectCb*)root->callback)(status, root->base, object, root->arg);
         break;
       case actAccept :
-        ((aioAcceptCb*)root->callback)(status, object, op->acceptSocket, root->arg);          
+        ((aioAcceptCb*)root->callback)(status, root->base, object, op->acceptSocket, root->arg);          
         break;
       case actRead :
-        ((aioCb*)root->callback)(status, object, op->buffer, op->transactionSize, op->bytesTransferred, root->arg);          
+        ((aioCb*)root->callback)(status, root->base, object, op->bytesTransferred, root->arg);          
         break;      
       case actWrite :
-        ((aioCb*)root->callback)(status, object, op->buffer, op->transactionSize, op->bytesTransferred, root->arg);          
+        ((aioCb*)root->callback)(status, root->base, object, op->bytesTransferred, root->arg);          
         break;      
       case actReadMsg :
-        ((aioMsgCb*)root->callback)(status, object, op->dynamicArray, op->bytesTransferred, root->arg);          
+        ((aioCb*)root->callback)(status, root->base, object, op->bytesTransferred, root->arg);          
         break;      
       case actWriteMsg :
-        ((aioCb*)root->callback)(status, object, op->buffer, op->transactionSize, op->bytesTransferred, root->arg);          
+        ((aioCb*)root->callback)(status, root->base, object, op->bytesTransferred, root->arg);          
         break;
     }
   }
@@ -129,8 +129,8 @@ static asyncOp *initAsyncOp(aioObject *object,
   info->root.opCode = opCode;
   info->object = object;
   info->root.endTime = 0;
-//   info->callback = callback;
-//   info->arg = arg;
+  info->callback = callback;
+  info->arg = arg;
   info->root.callback = callback;
   info->root.arg = arg;
 
@@ -155,20 +155,20 @@ static asyncOp *initAsyncOp(aioObject *object,
   return newOp;
 }
 
-static void coroutineEventCb(aioObject *event, void *arg)
+static void coroutineEventCb(asyncBase *base, aioObject *event, void *arg)
 {
   coroReturnStruct *r = (coroReturnStruct*)arg;
   coroutineCall(r->coroutine);
 }
 
-static void coroutineConnectCb(AsyncOpStatus status, aioObject *object, void *arg)
+static void coroutineConnectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg)
 {
   coroReturnStruct *r = (coroReturnStruct*)arg;
   r->status = status;
   coroutineCall(r->coroutine);
 }
 
-static void coroutineAcceptCb(AsyncOpStatus status, aioObject *listener, socketTy socket, void *arg)
+static void coroutineAcceptCb(AsyncOpStatus status, asyncBase *base, aioObject *listener, socketTy socket, void *arg)
 {
   coroReturnStruct *r = (coroReturnStruct*)arg;
   r->status = status;
@@ -176,7 +176,7 @@ static void coroutineAcceptCb(AsyncOpStatus status, aioObject *listener, socketT
   coroutineCall(r->coroutine);
 }
 
-static void coroutineCb(AsyncOpStatus status, aioObject *object, void *buffer, size_t size, size_t transferred, void *arg)
+static void coroutineCb(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
 {
   coroReturnStruct *r = (coroReturnStruct*)arg;
   r->status = status;  
@@ -184,13 +184,6 @@ static void coroutineCb(AsyncOpStatus status, aioObject *object, void *buffer, s
   coroutineCall(r->coroutine);
 }
 
-static void coroutineMsgCb(AsyncOpStatus status, aioObject *object, dynamicBuffer *buffer, size_t transferred, void *arg)
-{
-  coroReturnStruct *r = (coroReturnStruct*)arg;
-  r->status = status;  
-  r->bytesTransferred = transferred;  
-  coroutineCall(r->coroutine);
-}
 
 intptr_t argAsInteger(void *arg)
 {
@@ -404,7 +397,7 @@ void aioWrite(aioObject *op,
 void aioReadMsg(aioObject *op,
                 dynamicBuffer *buffer,
                 uint64_t usTimeout,
-                aioMsgCb callback,
+                aioCb callback,
                 void *arg)
 {
   asyncOp *newOp = initAsyncOp(op, callback, arg, 0, buffer, 0, afNone, usTimeout, actReadMsg);
@@ -469,7 +462,7 @@ ssize_t ioWrite(aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint
 ssize_t ioReadMsg(aioObject *op, dynamicBuffer *buffer,uint64_t usTimeout)
 {
   coroReturnStruct r = {coroutineCurrent()};  
-  aioReadMsg(op, buffer, usTimeout, coroutineMsgCb, &r);
+  aioReadMsg(op, buffer, usTimeout, coroutineCb, &r);
   coroutineYield();
   return r.status == aosSuccess ? r.bytesTransferred : -1;
 }

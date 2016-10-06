@@ -100,12 +100,12 @@ void printHelpMessage(const char *appName)
 }
 
 
-void readCb(AsyncOpStatus status, aioObject *rawSocket, dynamicBuffer *buffer, size_t transferred, void *arg)
+void readCb(AsyncOpStatus status, asyncBase *base, aioObject *rawSocket, size_t transferred, void *arg)
 {
   ICMPClientData *client = (ICMPClientData*)arg;
   if (status == aosSuccess && transferred >= (sizeof(ip) + sizeof(icmp))) {
-    dynamicBufferSeek(buffer, SeekSet, 0);
-    uint8_t *ptr = (uint8_t*)dynamicBufferPtr(buffer);
+    dynamicBufferSeek(&client->buffer, SeekSet, 0);
+    uint8_t *ptr = (uint8_t*)dynamicBufferPtr(&client->buffer);
     icmp *receivedIcmp = (icmp*)(ptr + sizeof(ip));
 
     if (receivedIcmp->icmp_type == ICMP_ECHOREPLY) {     
@@ -122,10 +122,10 @@ void readCb(AsyncOpStatus status, aioObject *rawSocket, dynamicBuffer *buffer, s
     }
   }
   
-  aioReadMsg(rawSocket, buffer, 0, readCb, client);
+  aioReadMsg(rawSocket, &client->buffer, 0, readCb, client);
 }
 
-void pingTimerCb(aioObject *event, void *arg)
+void pingTimerCb(asyncBase *base, aioObject *event, void *arg)
 {
   ICMPClientData *clientData = (ICMPClientData*)arg;
   clientData->id++;
@@ -142,7 +142,7 @@ void pingTimerCb(aioObject *event, void *arg)
 }
 
 
-void printTimerCb(aioObject *event, void *arg)
+void printTimerCb(asyncBase *base, aioObject *event, void *arg)
 {
   std::vector<uint32_t> forDelete;
   ICMPClientData *clientData = (ICMPClientData*)arg;

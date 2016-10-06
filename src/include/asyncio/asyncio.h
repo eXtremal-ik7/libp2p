@@ -8,11 +8,11 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
   
-typedef void aioEventCb(aioObject *event, void *arg);
-typedef void aioConnectCb(AsyncOpStatus status, aioObject *object, void *arg);
-typedef void aioAcceptCb(AsyncOpStatus status, aioObject *listener, socketTy socket, void *arg);
-typedef void aioCb(AsyncOpStatus status, aioObject *object, void *buffer, size_t size, size_t transferred, void *arg);
-typedef void aioMsgCb(AsyncOpStatus status, aioObject *object, dynamicBuffer *buffer, size_t transferred, void *arg);
+typedef void aioEventCb(asyncBase *base, aioObject *event, void *arg);
+typedef void aioConnectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg);
+typedef void aioAcceptCb(AsyncOpStatus status, asyncBase *base, aioObject *listener, socketTy socket, void *arg);
+typedef void aioCb(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg);
+// typedef void aioMsgCb(AsyncOpStatus status, aioObject *object, dynamicBuffer *buffer, size_t transferred, void *arg);
   
 intptr_t argAsInteger(void *arg);
 void *intArg(intptr_t id);
@@ -54,7 +54,7 @@ void aioRead(aioObject *op,
 void aioReadMsg(aioObject *op,
                 dynamicBuffer *buffer,
                 uint64_t usTimeout,
-                aioMsgCb callback,
+                aioCb callback,
                 void *arg);
 
 void aioWrite(aioObject *op,
