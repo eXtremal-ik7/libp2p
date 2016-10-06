@@ -1,9 +1,13 @@
 #include "asyncio/asyncOp.h"
+#include "asyncio/objectPool.h"
 #include "asyncioInternal.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifndef WIN32
+#include <signal.h>
+#endif
 
 static inline uint64_t getPt(uint64_t endTime)
 {
@@ -97,6 +101,82 @@ void opRingPush(OpRing *buffer, asyncOpRoot *op, uint64_t pt)
   op->timeoutQueue.next = oldOp;
   if (oldOp)
     oldOp->timeoutQueue.prev = op;  
+}
+
+timerTy nullTimer()
+{
+#ifdef WIN32
+  return INVALID_HANDLE_VALUE;
+#else
+  return 0;
+#endif
+}
+
+timerTy createTimer(void *arg)
+{
+#ifdef WIN32
+  return CreateWaitableTimer(NULL, FALSE, NULL);
+#else
+  timerTy timerId = 0;
+  struct sigevent sEvent;
+  sEvent.sigev_notify = SIGEV_SIGNAL;
+  sEvent.sigev_signo = SIGRTMIN;
+  sEvent.sigev_value.sival_ptr = arg;
+  timer_create(CLOCK_REALTIME, &sEvent, &timerId);
+  return timerId;
+#endif
+}
+
+asyncOpRoot *initAsyncOpRoot(asyncBase *base,
+                             const char *nonTimerPool,
+                             const char *timerPool,
+                             newAsyncOpTy *newOpProc,
+                             aioStartProc *startMethod,
+                             aioFinishProc *finishMethod,
+                             aioObjectRoot *object,
+                             void *callback,
+                             void *arg,
+                             int flags,
+                             int opCode,
+                             uint64_t timeout)
+{
+  int realtime = (object->type == ioObjectUserEvent) || (flags & afRealtime);
+  const char *pool = realtime ? timerPool : nonTimerPool;  
+  asyncOpRoot *op = (asyncOpRoot*)objectGet(&base->pool, pool);  
+  if (!op) {
+    op = newOpProc(base);
+    op->timerId = realtime ? createTimer(op) : nullTimer();
+    op->base = base;
+    op->poolId = pool;
+    op->startMethod = startMethod;
+    op->finishMethod = finishMethod;
+
+  }
+  
+  op->executeQueue.prev = 0;
+  op->executeQueue.next = 0;  
+  op->timeoutQueue.prev = 0;
+  op->timeoutQueue.next = 0;  
+  op->object = object;
+  op->flags = flags;
+  op->opCode = opCode;
+  op->endTime = 0;
+  op->callback = callback;
+  op->arg = arg;
+  op->counter = 0;  
+  
+  if (timeout) {
+    if (realtime) {
+      // start timer for this operation
+      op->base->methodImpl.startTimer(op, timeout, 1);
+    } else {
+      // add operation to timeout grid
+      op->endTime = ((uint64_t)time(0))*1000000ULL + timeout;
+      addToTimeoutQueue(op->base, op);
+    }
+  }
+  
+  return op;
 }
 
 
@@ -197,9 +277,8 @@ static inline void startOperation(asyncOpRoot *op, asyncBase *previousOpBase)
 
 void finishOperation(asyncOpRoot *op, int status, int needRemoveFromTimeGrid)
 {
-  // TODO: normal timer check
-  if (op->poolId == "timer pool") {
-    // stop timer call 
+  if (op->timerId != nullTimer()) {
+    op->base->methodImpl.stopTimer(op);
   } else if (op->endTime && needRemoveFromTimeGrid) {
     removeFromTimeoutQueue(op->base, op);
   }

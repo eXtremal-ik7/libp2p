@@ -7,7 +7,6 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -17,7 +16,7 @@
 
 #define MAX_EVENTS 256
 
-void userEventTrigger(aioObject *event);
+void userEventTrigger(aioObjectRoot *event);
 
 enum pipeDescrs {
   Read = 0,
@@ -43,8 +42,6 @@ typedef struct fdStruct {
 
 typedef struct epollOp {
   asyncOp info;
-  timer_t timerId;
-  int counter;
   int useInternalBuffer;
   void *internalBuffer;
   size_t internalBufferSize;
@@ -64,11 +61,11 @@ typedef struct epollBase {
 void epollPostEmptyOperation(asyncBase *base);
 void epollNextFinishedOperation(asyncBase *base);
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data);
-asyncOp *epollNewAsyncOp(asyncBase *base, int needTimer);
+asyncOpRoot *epollNewAsyncOp(asyncBase *base);
 void epollDeleteObject(aioObject *object);
-void epollStartTimer(epollOp *op, uint64_t usTimeout, int count);
-void epollStopTimer(epollOp *op);
-void epollActivate(epollOp *op);
+void epollStartTimer(asyncOpRoot *op, uint64_t usTimeout, int count);
+void epollStopTimer(asyncOpRoot *op);
+void epollActivate(asyncOpRoot *op);
 void epollAsyncConnect(epollOp *op,
                        const HostAddress *address,
                        uint64_t usTimeout);
@@ -128,7 +125,7 @@ static aioObject *getObject(epollOp *op)
 static int getFd(epollOp *op)
 {
   aioObject *object = getObject(op);
-  switch (object->type) {
+  switch (object->root.type) {
     case ioObjectDevice :
       return object->hDevice;
       break;
@@ -188,8 +185,8 @@ static void asyncOpUnlink(epollOp *op)
 
 static void timerCb(int sig, siginfo_t *si, void *uc)
 {
-  epollOp *op = (epollOp*)si->si_value.sival_ptr;
-  epollBase *base = (epollBase *)op->info.root.base;
+  asyncOpRoot *op = (asyncOpRoot*)si->si_value.sival_ptr;
+  epollBase *base = (epollBase *)op->base;
 
   pipeMsg msg = {Timeout, (void *)op};
 
@@ -198,7 +195,7 @@ static void timerCb(int sig, siginfo_t *si, void *uc)
   write(base->pipeFd[Write], &msg, sizeof(pipeMsg));
 }
 
-static void startTimer(epollOp *op, uint64_t usTimeout, int periodic)
+static void startTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic)
 {
   struct itimerspec its;
   its.it_value.tv_sec = usTimeout / 1000000;
@@ -210,7 +207,7 @@ static void startTimer(epollOp *op, uint64_t usTimeout, int periodic)
   }
 }
 
-static void stopTimer(epollOp *op)
+static void stopTimer(asyncOpRoot *op)
 {
   struct itimerspec its;
   op->counter = 0;
@@ -308,7 +305,7 @@ static void processReadyFd(epollBase *base,
     return;
   assert(fd == getFd(op) && "Lost asyncop found!");
   ioctl(fd, FIONREAD, &available);
-  if (object->type == ioObjectSocket && available == 0 && isRead) {
+  if (object->root.type == ioObjectSocket && available == 0 && isRead) {
     if (op->info.root.opCode != actAccept) {
       finish(op, aosDisconnected);
       return;
@@ -362,7 +359,7 @@ static void processReadyFd(epollBase *base,
       size_t remaining = op->info.transactionSize - op->info.bytesTransferred;
       ssize_t bytesWritten = write(fd, ptr, remaining);
       if (bytesWritten == -1) {
-        if (object->type == ioObjectSocket && errno == EPIPE) {
+        if (object->root.type == ioObjectSocket && errno == EPIPE) {
           finish(op, aosDisconnected);
         } else {
           finish(op, aosUnknownError);
@@ -423,12 +420,12 @@ void epollNextFinishedOperation(asyncBase *base)
         int available;
         ioctl(localBase->pipeFd[Read], FIONREAD, &available);
         for (i = 0; i < available / sizeof(pipeMsg); i++) {
-          epollOp *op;
-          aioObject *object;
+          asyncOpRoot *op;
+          aioObjectRoot *object;
           read(localBase->pipeFd[Read], &msg, sizeof(pipeMsg));
 
-          op = (epollOp*)msg.data;
-          object = getObject(op);
+          op = (asyncOpRoot*)msg.data;
+          object = op->object;
           switch (msg.cmd) {
             case Reset :
               return;
@@ -439,7 +436,9 @@ void epollNextFinishedOperation(asyncBase *base)
                   stopTimer(op);
                 userEventTrigger(object);
               } else {
-                finish(op, aosTimeout);
+                if (object->type != ioObjectUserDefined)
+                  asyncOpUnlink((epollOp*)op);
+                finishOperation(op, aosTimeout, 0);
               }
               break;
             case UserEvent :
@@ -461,9 +460,9 @@ void epollNextFinishedOperation(asyncBase *base)
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
   aioObject *object = calloc(sizeof(aioObject), 1);
+  object->root.type = type;
   object->base = base;
-  object->type = type;
-  switch (object->type) {
+  switch (object->root.type) {
     case ioObjectDevice :
       object->hDevice = *(iodevTy *)data;
       break;
@@ -478,34 +477,21 @@ aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
   return object;
 }
 
-asyncOp *epollNewAsyncOp(asyncBase *base, int needTimer)
+asyncOpRoot *epollNewAsyncOp(asyncBase *base)
 {
   epollOp *op = malloc(sizeof(epollOp));
   if (op) {
-    struct sigevent sEvent;
     op->internalBuffer = 0;
     op->internalBufferSize = 0;
-    if (needTimer) {
-      sEvent.sigev_notify = SIGEV_SIGNAL;
-      sEvent.sigev_signo = SIGRTMIN;
-      sEvent.sigev_value.sival_ptr = op;
-      if (timer_create(CLOCK_REALTIME, &sEvent, &op->timerId) == -1) {
-        fprintf(stderr,
-                " * newepollOp: timer_create error %s\n",
-                strerror(errno));
-      }
-    } else {
-      op->timerId = 0;
-    }
   }
 
-  return (asyncOp*)op;
+  return (asyncOpRoot*)op;
 }
 
 
 void epollDeleteObject(aioObject *object)
 {
-  switch (object->type) {
+  switch (object->root.type) {
     case ioObjectDevice :
       close(object->hDevice);
       break;
@@ -519,7 +505,7 @@ void epollDeleteObject(aioObject *object)
 }
 
 
-void epollStartTimer(epollOp *op, uint64_t usTimeout, int count)
+void epollStartTimer(asyncOpRoot *op, uint64_t usTimeout, int count)
 {
   // only for user event, 'op' must have timer
   op->counter = (count > 0) ? count : -1;
@@ -527,17 +513,17 @@ void epollStartTimer(epollOp *op, uint64_t usTimeout, int count)
 }
 
 
-void epollStopTimer(epollOp *op)
+void epollStopTimer(asyncOpRoot *op)
 {
   // only for user event, 'op' must have timer  
   stopTimer(op);
 }
 
 
-void epollActivate(epollOp *op)
+void epollActivate(asyncOpRoot *op)
 {
   pipeMsg msg = {UserEvent, (void *)op};
-  epollBase *localBase = (epollBase *)op->info.root.base;
+  epollBase *localBase = (epollBase *)op->base;
   write(localBase->pipeFd[Write], &msg, sizeof(pipeMsg));
 }
 

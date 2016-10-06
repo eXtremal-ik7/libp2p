@@ -6,7 +6,6 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
@@ -16,12 +15,10 @@
 #include <map>
 #include <stdio.h>
 
-extern "C" void userEventTrigger(aioObject *event);
+extern "C" void userEventTrigger(aioObjectRoot *event);
 
 typedef struct selectOp {
   asyncOp info;
-  timer_t timerId;
-  int counter;
   int useInternalBuffer;
   void *internalBuffer;
   size_t internalBufferSize;
@@ -54,11 +51,11 @@ typedef struct selectBase {
 void selectPostEmptyOperation(asyncBase *base);
 void selectNextFinishedOperation(asyncBase *base);
 aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data);
-asyncOp *selectNewAsyncOp(asyncBase *base, int needTimer);
+asyncOpRoot *selectNewAsyncOp(asyncBase *base);
 void selectDeleteObject(aioObject *object);
-void selectStartTimer(selectOp *op, uint64_t usTimeout, int count);
-void selectStopTimer(selectOp *op);
-void selectActivate(selectOp *op);
+void selectStartTimer(asyncOpRoot *op, uint64_t usTimeout, int count);
+void selectStopTimer(asyncOpRoot *op);
+void selectActivate(asyncOpRoot *op);
 void selectAsyncConnect(selectOp *op, const HostAddress *address, uint64_t usTimeout);
 void selectAsyncAccept(selectOp *op, uint64_t usTimeout);
 void selectAsyncRead(selectOp *op, uint64_t usTimeout);
@@ -104,7 +101,7 @@ static aioObject *getObject(selectOp *op)
 static int getFd(selectOp *op)
 {
   aioObject *object = getObject(op);
-  switch (object->type) {
+  switch (object->root.type) {
     case ioObjectDevice :
       return object->hDevice;
       break;
@@ -155,8 +152,8 @@ static void asyncOpUnlink(selectOp *op)
 
 static void timerCb(int sig, siginfo_t *si, void *uc)
 {
-  selectOp *op = (selectOp*)si->si_value.sival_ptr;
-  selectBase *base = (selectBase*)op->info.root.base;
+  asyncOpRoot *op = (asyncOpRoot*)si->si_value.sival_ptr;
+  selectBase *base = (selectBase*)op->base;
   
   if (op->counter > 0)
     op->counter--;
@@ -164,7 +161,7 @@ static void timerCb(int sig, siginfo_t *si, void *uc)
 }
 
 
-static void startTimer(selectOp *op, uint64_t usTimeout, int periodic)
+static void startTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic)
 {
   struct itimerspec its;  
   its.it_value.tv_sec = usTimeout / 1000000;
@@ -177,7 +174,7 @@ static void startTimer(selectOp *op, uint64_t usTimeout, int periodic)
 }
 
 
-static void stopTimer(selectOp *op)
+static void stopTimer(asyncOpRoot *op)
 {
   struct itimerspec its;   
   op->counter = 0;
@@ -278,7 +275,7 @@ static void processReadyFds(selectBase *base,
   
     assert(fd == getFd(op) && "Lost asyncop found!");
     ioctl(fd, FIONREAD, &available);  
-    if (object->type == ioObjectSocket && available == 0 && isRead) {
+    if (object->root.type == ioObjectSocket && available == 0 && isRead) {
       if (op->info.root.opCode != actAccept) {
         finish(op, aosDisconnected);
         continue;
@@ -333,7 +330,7 @@ static void processReadyFds(selectBase *base,
         size_t remaining = op->info.transactionSize - op->info.bytesTransferred;
         ssize_t bytesWritten = write(fd, ptr, remaining);
         if (bytesWritten == -1) {
-          if (object->type == ioObjectSocket && errno == EPIPE) {
+          if (object->root.type == ioObjectSocket && errno == EPIPE) {
             finish(op, aosDisconnected);
           } else {
             finish(op, aosUnknownError);
@@ -406,7 +403,7 @@ void selectNextFinishedOperation(asyncBase *base)
          IE = localBase->writeOps.end(); I != IE; ++I) {  
       if (I->second->mask & mtWrite) {
         nfds = std::max(nfds, I->first+1);
-        if (I->second->object->type == ioObjectSocket)
+        if (I->second->object->root.type == ioObjectSocket)
           FD_SET(I->first, &readFds);
         FD_SET(I->first, &writeFds);
       }
@@ -419,20 +416,22 @@ void selectNextFinishedOperation(asyncBase *base)
     if (FD_ISSET(localBase->pipeFd[0], &readFds)) {
       int available;
       ioctl(localBase->pipeFd[0], FIONREAD, &available);
-      selectOp *op;
+      asyncOpRoot *op;
       for (int i = 0; i < available/(int)sizeof(op); i++) {
         read(localBase->pipeFd[0], &op, sizeof(op));
         if (!op)
           return;
     
         if (op) {
-          aioObject *object = getObject(op);
+          aioObjectRoot *object = op->object;
           if (object->type == ioObjectUserEvent) {
             if (op->counter == 0)
               stopTimer(op);
             userEventTrigger(object);
           } else {
-            finish(op, aosTimeout);   
+            if (object->type != ioObjectUserDefined)
+              asyncOpUnlink((selectOp*)op);
+            finishOperation(op, aosTimeout, 0);
           }
         }
       }
@@ -447,12 +446,11 @@ void selectNextFinishedOperation(asyncBase *base)
 aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
   aioObject *object = (aioObject*)calloc(1, sizeof(aioObject));
+  object->root.type = type;
   object->base = base;
-  object->type = type;
-  switch (object->type) {
+  switch (object->root.type) {
     case ioObjectDevice :
       object->hDevice = *(iodevTy*)data;
-      break;
     case ioObjectSocket :
     case ioObjectSocketSyn :
       object->hSocket = *(socketTy*)data;
@@ -465,34 +463,21 @@ aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 }
 
 
-asyncOp *selectNewAsyncOp(asyncBase *base, int needTimer)
+asyncOpRoot *selectNewAsyncOp(asyncBase *base)
 {
   selectOp *op = new selectOp;
   if (op) {
-    struct sigevent sEvent;
     op->internalBuffer = 0;
     op->internalBufferSize = 0;
-    if (needTimer) {
-      sEvent.sigev_notify = SIGEV_SIGNAL;
-      sEvent.sigev_signo = SIGRTMIN;
-      sEvent.sigev_value.sival_ptr = op;
-      if (timer_create(CLOCK_REALTIME, &sEvent, &op->timerId) == -1) {
-        fprintf(stderr,
-                " * newSelectOp: timer_create error %s\n",
-                strerror(errno));
-      }
-    } else {
-      op->timerId = 0;
-    }
   }
 
-  return (asyncOp*)op;
+  return (asyncOpRoot*)op;
 }
 
 
 void selectDeleteObject(aioObject *object)
 {
-  switch (object->type) {
+  switch (object->root.type) {
     case ioObjectDevice :
       close(object->hDevice);
       break;
@@ -506,7 +491,7 @@ void selectDeleteObject(aioObject *object)
 }
 
 
-void selectStartTimer(selectOp *op, uint64_t usTimeout, int count)
+void selectStartTimer(asyncOpRoot *op, uint64_t usTimeout, int count)
 {
   // only for user event, 'op' must have timer
   op->counter = (count > 0) ? count : -1;
@@ -514,16 +499,16 @@ void selectStartTimer(selectOp *op, uint64_t usTimeout, int count)
 }
 
 
-void selectStopTimer(selectOp *op)
+void selectStopTimer(asyncOpRoot *op)
 {
   // only for user event, 'op' must have timer
   stopTimer(op);
 }
 
 
-void selectActivate(selectOp *op)
+void selectActivate(asyncOpRoot *op)
 {
-  selectBase *localBase = (selectBase*)op->info.root.base;
+  selectBase *localBase = (selectBase*)op->base;
   write(localBase->pipeFd[1], op, sizeof(op));
 }
 

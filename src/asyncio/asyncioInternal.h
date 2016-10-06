@@ -10,11 +10,10 @@ struct dynamicBuffer;
 typedef void postEmptyOperationTy(asyncBase*);
 typedef void nextFinishedOperationTy(asyncBase*);
 typedef aioObject *newAioObjectTy(asyncBase*, IoObjectTy, void*);
-typedef asyncOp *newAsyncOpTy(asyncBase*, int);
 typedef void deleteObjectTy(aioObject*);
-typedef void startTimerTy(asyncOp*, uint64_t, int);
-typedef void stopTimerTy(asyncOp*);
-typedef void activateTy(asyncOp*);
+typedef void startTimerTy(asyncOpRoot*, uint64_t, int);
+typedef void stopTimerTy(asyncOpRoot*);
+typedef void activateTy(asyncOpRoot*);
 typedef void asyncConnectTy(asyncOp*, const HostAddress*, uint64_t);
 typedef void asyncAcceptTy(asyncOp*, uint64_t);
 typedef void asyncReadTy(asyncOp*, uint64_t);
@@ -59,7 +58,6 @@ struct asyncBase {
 struct aioObject {
   aioObjectRoot root;
   asyncBase *base;
-  IoObjectTy type;
   union {
     iodevTy hDevice;
     socketTy hSocket;

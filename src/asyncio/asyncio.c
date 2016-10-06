@@ -26,12 +26,12 @@ typedef struct coroReturnStruct {
   size_t bytesTransferred;
 } coroReturnStruct;
 
-void userEventTrigger(aioObject *event)
+void userEventTrigger(aioObjectRoot *event)
 {
   // timer must be already stopped if need
-  asyncOpRoot *root = event->root.readQueue.head;
+  asyncOpRoot *root = event->readQueue.head;
   if (root->callback)
-    ((aioEventCb*)root->callback)(root->base, event, root->arg);
+    ((aioEventCb*)root->callback)(root->base, (aioObject*)event, root->arg);
 }
 
 static void startMethod(asyncOpRoot *root)
@@ -62,10 +62,6 @@ static void startMethod(asyncOpRoot *root)
 static void finishMethod(asyncOpRoot *root, int status)
 {
   asyncOp *op = (asyncOp*)root;
-  
-  // TODO: timer must be independent from OS I/O method used
-  if (root->poolId == timerPoolId)
-    root->base->methodImpl.stopTimer(op);
     
   // Do callback if need
   if (root->callback) {
@@ -104,47 +100,20 @@ static asyncOp *initAsyncOp(aioObject *object,
                             uint64_t timeout,
                             int opCode)
 {
-  int needTimer = (object->type == ioObjectUserEvent) || (flags & afRealtime);
-  const char *pool = needTimer ? timerPoolId : poolId;
+  asyncOp *op = (asyncOp*)initAsyncOpRoot(object->base,
+                                          poolId, timerPoolId,
+                                          object->base->methodImpl.newAsyncOp,
+                                          startMethod, finishMethod,
+                                          &object->root, callback, arg,
+                                          flags, opCode, timeout);
   
-  asyncOp *newOp = queryObject(object->base, pool);
-  if (!newOp) {
-    newOp = object->base->methodImpl.newAsyncOp(object->base, needTimer);
-    newOp->root.base = object->base;
-    newOp->root.poolId = pool;
-    newOp->root.startMethod = startMethod;
-    newOp->root.finishMethod = finishMethod;
-  }
-  
-  newOp->root.executeQueue.prev = 0;
-  newOp->root.executeQueue.next = 0;  
-  newOp->root.timeoutQueue.prev = 0;
-  newOp->root.timeoutQueue.next = 0;  
-  newOp->root.object = &object->root;
-  newOp->root.flags = flags;
-  newOp->root.opCode = opCode;
-  newOp->root.endTime = 0;
-  newOp->root.callback = callback;
-  newOp->root.arg = arg;
-
   if (buffer)
-    newOp->buffer = buffer;
+    op->buffer = buffer;
   else if (dynamicArray)
-    newOp->dynamicArray = dynamicArray;
-  newOp->transactionSize = transactionSize;
-  newOp->bytesTransferred = 0;
-  if (timeout) {
-    if (needTimer) {
-      // start timer for this operation
-      newOp->root.base->methodImpl.startTimer(newOp, timeout, 1);
-    } else {
-      // add operation to timeout grid
-      newOp->root.endTime = ((uint64_t)time(0))*1000000ULL + timeout;
-      addToTimeoutQueue(object->base, &newOp->root);
-    }
-  }
-  
-  return newOp;
+    op->dynamicArray = dynamicArray;
+  op->transactionSize = transactionSize;
+  op->bytesTransferred = 0;  
+  return op;
 }
 
 static void coroutineEventCb(asyncBase *base, aioObject *event, void *arg)
@@ -262,8 +231,8 @@ void postQuitOperation(asyncBase *base)
 aioObject *newUserEvent(asyncBase *base, aioEventCb callback, void *arg)
 {
   aioObject *object = malloc(sizeof(aioObject));
+  object->root.type = ioObjectUserEvent;  
   object->base = base;
-  object->type = ioObjectUserEvent;  
   object->root.readQueue.head =
     (asyncOpRoot*)initAsyncOp(object, callback, arg, 0, 0, 0, 0, 0, actNoAction);
   return object;
@@ -288,7 +257,7 @@ aioObject *newDeviceIo(asyncBase *base, iodevTy hDevice)
 
 void deleteAioObject(aioObject *object)
 {
-  if (object->type == ioObjectUserEvent) {
+  if (object->root.type == ioObjectUserEvent) {
     asyncOpRoot *op = object->root.readQueue.head;
     objectRelease(&op->base->pool, op, op->poolId);
   }
@@ -299,21 +268,21 @@ void deleteAioObject(aioObject *object)
 void userEventStartTimer(aioObject *event, uint64_t usTimeout, int counter)
 {
   asyncOpRoot *op = event->root.readQueue.head;  
-  op->base->methodImpl.startTimer((asyncOp*)op, usTimeout, counter);
+  op->base->methodImpl.startTimer(op, usTimeout, counter);
 }
 
 
 void userEventStopTimer(aioObject *event)
 {
   asyncOpRoot *op = event->root.readQueue.head;    
-  op->base->methodImpl.stopTimer((asyncOp*)op);
+  op->base->methodImpl.stopTimer(op);
 }
 
 
 void userEventActivate(aioObject *event)
 {
   asyncOpRoot *op = event->root.readQueue.head;    
-  op->base->methodImpl.activate((asyncOp*)op);
+  op->base->methodImpl.activate(op);
 }
 
 
@@ -474,10 +443,10 @@ ssize_t ioWriteMsg(aioObject *op, const HostAddress *address, void *buffer, size
 void ioSleep(aioObject *event, uint64_t usTimeout)
 {
   coroReturnStruct r = {coroutineCurrent()};  
-  asyncOp *op = (asyncOp*)event->root.readQueue.head;
-  event->root.readQueue.head->callback = coroutineEventCb;
-  event->root.readQueue.head->arg = &r;
-  event->root.readQueue.head->base->methodImpl.startTimer(op, usTimeout, 1);
+  asyncOpRoot *op = event->root.readQueue.head;
+  op->callback = coroutineEventCb;
+  op->arg = &r;
+  op->base->methodImpl.startTimer(op, usTimeout, 1);
   coroutineYield();
 }
 

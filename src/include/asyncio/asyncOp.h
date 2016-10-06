@@ -13,8 +13,17 @@ typedef struct asyncOpRoot asyncOpRoot;
 typedef struct asyncOp asyncOp;
 typedef struct asyncBase asyncBase;
 
+typedef asyncOpRoot *newAsyncOpTy(asyncBase*);
 typedef void aioStartProc(asyncOpRoot*);
 typedef void aioFinishProc(asyncOpRoot*, int);
+
+#ifdef WIN32
+#include <Windows.h>
+typedef HANDLE timerTy;
+#else
+#include <time.h>
+typedef timer_t timerTy;
+#endif  
 
 typedef struct List {
   asyncOpRoot *head;
@@ -37,6 +46,7 @@ typedef struct OpRing {
 struct aioObjectRoot {
   List readQueue;
   List writeQueue;
+  int type;
 };
 
 struct asyncOpRoot {
@@ -54,6 +64,8 @@ struct asyncOpRoot {
   int opCode;
   int flags;
   uint64_t endTime;
+  timerTy timerId;
+  int counter;  
 };
 
 void opRingInit(OpRing *buffer, size_t size, uint64_t begin);
@@ -63,6 +75,22 @@ void opRingShift(OpRing *buffer, uint64_t newBegin);
 void opRingPop(OpRing *buffer, uint64_t pt);
 void opRingPush(OpRing *buffer, asyncOpRoot *op, uint64_t pt);
 
+timerTy nullTimer();
+timerTy createTimer(void *arg);
+
+
+asyncOpRoot *initAsyncOpRoot(asyncBase *base,
+                             const char *nonTimerPool,
+                             const char *timerPool,
+                             newAsyncOpTy *newOpProc,
+                             aioStartProc *startMethod,
+                             aioFinishProc *finishMethod,
+                             aioObjectRoot *object,
+                             void *callback,
+                             void *arg,
+                             int flags,
+                             int opCode,
+                             uint64_t timeout);
 
 // Must be thread-safe
 int addToExecuteQueue(aioObjectRoot *object, asyncOpRoot *op, int isWriteQueue);

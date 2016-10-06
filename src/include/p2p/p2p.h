@@ -90,7 +90,6 @@ private:
   bool _coroutineMode;
   
 private:  
-  static void handler(aioInfo *info);
   static void listener(AsyncOpStatus status, asyncBase *base, aioObject *listener, HostAddress client, socketTy socket, void *arg);
 
   p2pNode(asyncBase *base, const char *clusterName, bool coroutineMode) :

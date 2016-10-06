@@ -18,7 +18,8 @@ typedef enum IoObjectTy {
   ioObjectUserEvent = 0,
   ioObjectSocket,
   ioObjectSocketSyn,
-  ioObjectDevice
+  ioObjectDevice,
+  ioObjectUserDefined
 } IoObjectTy;
 
 
