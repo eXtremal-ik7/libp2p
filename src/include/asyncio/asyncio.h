@@ -15,7 +15,6 @@ typedef void aioCb(AsyncOpStatus status, asyncBase *base, aioObject *object, siz
   
 intptr_t argAsInteger(void *arg);
 void *intArg(intptr_t id);
-asyncBase *aioObjectBase(aioObject *object);
 socketTy aioObjectSocket(aioObject *object);
 iodevTy aioObjectDevice(aioObject *object);
 
@@ -31,18 +30,21 @@ void userEventStartTimer(aioObject *event, uint64_t usTimeout, int counter);
 void userEventStopTimer(aioObject *event);
 void userEventActivate(aioObject *event);
 
-void aioConnect(aioObject *op,
+void aioConnect(asyncBase *base, 
+                aioObject *op,
                 const HostAddress *address,
                 uint64_t usTimeout,
                 aioConnectCb callback,
                 void *arg);
 
-void aioAccept(aioObject *op,
+void aioAccept(asyncBase *base, 
+               aioObject *op,
                uint64_t usTimeout,
                aioAcceptCb callback,
                void *arg);
 
-void aioRead(aioObject *op,
+void aioRead(asyncBase *base, 
+             aioObject *op,
              void *buffer,
              size_t size,
              AsyncFlags flags,
@@ -50,13 +52,15 @@ void aioRead(aioObject *op,
              aioCb callback,
              void *arg);
 
-void aioReadMsg(aioObject *op,
+void aioReadMsg(asyncBase *base, 
+                aioObject *op,
                 dynamicBuffer *buffer,
                 uint64_t usTimeout,
                 aioCb callback,
                 void *arg);
 
-void aioWrite(aioObject *op,
+void aioWrite(asyncBase *base, 
+              aioObject *op,
               void *buffer,
               size_t size,
               AsyncFlags flags,
@@ -64,7 +68,8 @@ void aioWrite(aioObject *op,
               aioCb callback,
               void *arg);
 
-void aioWriteMsg(aioObject *op,
+void aioWriteMsg(asyncBase *base, 
+                 aioObject *op,
                  const HostAddress *address,
                  void *buffer,
                  size_t size,
@@ -74,12 +79,12 @@ void aioWriteMsg(aioObject *op,
                  void *arg);
 
 
-int ioConnect(aioObject *op, const HostAddress *address, uint64_t usTimeout);
-socketTy ioAccept(aioObject *op, uint64_t usTimeout);
-ssize_t ioRead(aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
-ssize_t ioReadMsg(aioObject *op, dynamicBuffer *buffer, uint64_t usTimeout);
-ssize_t ioWrite(aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
-ssize_t ioWriteMsg(aioObject *op, const HostAddress *address, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
+int ioConnect(asyncBase *base, aioObject *op, const HostAddress *address, uint64_t usTimeout);
+socketTy ioAccept(asyncBase *base, aioObject *op, uint64_t usTimeout);
+ssize_t ioRead(asyncBase *base, aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
+ssize_t ioReadMsg(asyncBase *base, aioObject *op, dynamicBuffer *buffer, uint64_t usTimeout);
+ssize_t ioWrite(asyncBase *base, aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
+ssize_t ioWriteMsg(asyncBase *base, aioObject *op, const HostAddress *address, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
 void ioSleep(aioObject *event, uint64_t usTimeout);
 
 // asyncOp *asyncMonitor(aioObject *op, asyncCb callback, void *arg);

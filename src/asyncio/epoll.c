@@ -461,7 +461,6 @@ aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
   aioObject *object = calloc(sizeof(aioObject), 1);
   object->root.type = type;
-  object->base = base;
   switch (object->root.type) {
     case ioObjectDevice :
       object->hDevice = *(iodevTy *)data;

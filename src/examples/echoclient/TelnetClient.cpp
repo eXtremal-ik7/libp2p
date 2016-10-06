@@ -38,9 +38,8 @@ void pingTimerCb(asyncBase *base, aioObject *event, void *arg)
     char symbol = 32 + rand() % 96;
     printf("%02X:", (int)symbol);
     fflush(stdout);
-    aioWrite(data->socket, &symbol, 1, afNone, 1000000, 0, 0);
-    aioRead(data->socket, data->buffer, clientBufferSize,
-            afNone, 1000000, readCb, data);
+    aioWrite(base, data->socket, &symbol, 1, afNone, 1000000, 0, 0);
+    aioRead(base, data->socket, data->buffer, clientBufferSize, afNone, 1000000, readCb, data);
   }
 }
 
@@ -84,7 +83,7 @@ int main(int argc, char **argv)
   data.base = base;
   data.socket = socketOp;
   data.isConnected = false;    
-  aioConnect(socketOp, &address, 3000000, connectCb, &data);
+  aioConnect(base, socketOp, &address, 3000000, connectCb, &data);
   userEventStartTimer(stdInputOp, 1000000, -1);
   asyncLoop(base);
   return 0;

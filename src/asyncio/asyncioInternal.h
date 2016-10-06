@@ -57,7 +57,6 @@ struct asyncBase {
 
 struct aioObject {
   aioObjectRoot root;
-  asyncBase *base;
   union {
     iodevTy hDevice;
     socketTy hSocket;

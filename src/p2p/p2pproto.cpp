@@ -4,13 +4,13 @@
 
 const char *p2pPoolId = "P2P";
 
-enum {
+enum p2pOpTy {
   p2pOpAccept = 0,
   p2pOpConnect,
   p2pOpRecv,
   p2pOpRecvStream,
   p2pOpSend
-} p2pOpTy;
+};
 
 enum p2pPeerState {
   // recv states
@@ -40,18 +40,20 @@ static int p2pStatusFromError(p2pErrorTy error)
   }
 }
 
-static p2pOp *allocp2pOp(p2pConnection *connection,
+static p2pOp *allocp2pOp(asyncBase *base,
+                         p2pConnection *connection,
                          void *buffer,
                          size_t bufferSize,
                          p2pStream *stream,
                          void *callback,
                          void *arg)
 {
-  p2pOp *op = (p2pOp*)queryObject(aioObjectBase(connection->socket), p2pPoolId);
+  p2pOp *op = (p2pOp*)queryObject(base, p2pPoolId);
   if (!op) {
     op = (p2pOp*)malloc(sizeof(p2pOp));
   }
 
+  op->base = base;
   op->info.connection = connection;  
   op->info.buffer = buffer;
   op->info.bufferSize = bufferSize;
@@ -77,15 +79,15 @@ static void finishP2POp(p2pOp *op, int status)
       ((p2pCb*)op->callback)(&op->info);
   }
   
-  releaseObject(aioObjectBase(op->info.connection->socket), op, p2pPoolId);  
+  releaseObject(op->base, op, p2pPoolId);  
   if (current && current->type != p2pOpSend) {
     p2pConnection *connection = current->info.connection;
     switch (current->type) {
       case p2pOpRecv :
-        aioRead(connection->socket, &current->info.header, sizeof(p2pHeader), afWaitAll, current->usTimeout, p2pRecvProc, current);
+        aioRead(op->base, connection->socket, &current->info.header, sizeof(p2pHeader), afWaitAll, current->usTimeout, p2pRecvProc, current);
         break;
       case p2pOpRecvStream :
-        aioRead(connection->socket, &current->info.header, sizeof(p2pHeader), afWaitAll, current->usTimeout, p2pRecvStreamProc, current);
+        aioRead(op->base, connection->socket, &current->info.header, sizeof(p2pHeader), afWaitAll, current->usTimeout, p2pRecvStreamProc, current);
         break;
     }
   }
@@ -125,7 +127,7 @@ static void acceptProc(p2pInfo *info)
     p2pErrorTy result = ((p2pAcceptCb*)op->callback)(&op->connectMsg, &op->info);
     stream->reset();
     stream->writeStatusMessage(result);
-    aiop2pSend(info->connection, 3000000, stream->data(), p2pHeader(p2pMsgStatus, stream->sizeOf()), acceptProc, op);
+    aiop2pSend(op->base, info->connection, 3000000, stream->data(), p2pHeader(p2pMsgStatus, stream->sizeOf()), acceptProc, op);
     op->state = (op->info.status == aosSuccess) ? stWaitOkSend : stWaitErrorSend;
     op->info.status = p2pStatusFromError(result);
   } else if (op->state == stWaitOkSend) {
@@ -136,16 +138,16 @@ static void acceptProc(p2pInfo *info)
   }
 }
 
-void aiop2pAccept(p2pConnection *connection, uint64_t timeout, p2pAcceptCb callback, void *arg)
+void aiop2pAccept(asyncBase *base, p2pConnection *connection, uint64_t timeout, p2pAcceptCb callback, void *arg)
 {
   // TODO: return error
   if (connection->current)
     return;
   
-  p2pOp *op = allocp2pOp(connection, 0, 0, 0, (void*)callback, arg);
+  p2pOp *op = allocp2pOp(base, connection, 0, 0, 0, (void*)callback, arg);
   op->type = p2pOpAccept;
   op->state = stWaitConnectMsg;
-  aiop2pRecv(connection, timeout, &connection->stream, 1024, acceptProc, op);
+  aiop2pRecv(base, connection, timeout, &connection->stream, 1024, acceptProc, op);
 }
 
 
@@ -166,15 +168,15 @@ static void connectProc(p2pInfo *info)
   }
 }
 
-void aiop2pConnect(p2pConnection *connection, uint64_t timeout, p2pConnectData *data, p2pCb callback, void *arg)
+void aiop2pConnect(asyncBase *base, p2pConnection *connection, uint64_t timeout, p2pConnectData *data, p2pCb callback, void *arg)
 {
-  p2pOp *op = allocp2pOp(connection, 0, 0, 0, (void*)callback, arg);
+  p2pOp *op = allocp2pOp(base, connection, 0, 0, 0, (void*)callback, arg);
   op->type = p2pOpConnect;
   connection->stream.reset();
   connection->stream.writeConnectMessage(*data);
   op->state = stWaitConnectResponse;  
-  aiop2pSend(connection, timeout, connection->stream.data(), p2pHeader(p2pMsgConnect, connection->stream.sizeOf()), 0, 0);
-  aiop2pRecv(connection, timeout, &op->info.connection->stream, 1024, connectProc, op);
+  aiop2pSend(base, connection, timeout, connection->stream.data(), p2pHeader(p2pMsgConnect, connection->stream.sizeOf()), 0, 0);
+  aiop2pRecv(base, connection, timeout, &op->info.connection->stream, 1024, connectProc, op);
 }
 
 void p2pRecvProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
@@ -186,7 +188,7 @@ void p2pRecvProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_
       size_t msgSize = op->info.header.size;
       if (msgSize <= op->info.bufferSize) {
         op->state = stWaitMsgBody;
-        aioRead(op->info.connection->socket, op->info.buffer, msgSize, afWaitAll, op->usTimeout, p2pRecvProc, op);
+        aioRead(base, op->info.connection->socket, op->info.buffer, msgSize, afWaitAll, op->usTimeout, p2pRecvProc, op);
       } else {
         finishP2POp(op, p2pStBufferTooSmall);
       }
@@ -208,7 +210,7 @@ void p2pRecvStreamProc(AsyncOpStatus status, asyncBase *base, aioObject *object,
       if (op->info.bufferSize == 0 || msgSize <= op->info.bufferSize) {
         op->state = stWaitMsgBody;
         connection->stream.reset();
-        aioRead(connection->socket, connection->stream.alloc(msgSize), msgSize, afWaitAll, op->usTimeout, p2pRecvStreamProc, op);
+        aioRead(base, connection->socket, connection->stream.alloc(msgSize), msgSize, afWaitAll, op->usTimeout, p2pRecvStreamProc, op);
       } else {
         finishP2POp(op, aosUnknownError);
       }
@@ -226,47 +228,47 @@ void sendProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t t
   finishP2POp((p2pOp*)arg, status);
 }
 
-void aiop2pRecv(p2pConnection *connection, uint64_t timeout, void *buffer, size_t bufferSize, p2pCb callback, void *arg)
+void aiop2pRecv(asyncBase *base, p2pConnection *connection, uint64_t timeout, void *buffer, size_t bufferSize, p2pCb callback, void *arg)
 {
-  p2pOp *op = allocp2pOp(connection, buffer, bufferSize, 0, (void*)callback, arg);
+  p2pOp *op = allocp2pOp(base, connection, buffer, bufferSize, 0, (void*)callback, arg);
   op->type = p2pOpRecv;
   op->state = stWaitHeader;
 
   if (!connection->current) {
-    aioRead(connection->socket, &op->info.header, sizeof(p2pHeader), afWaitAll, timeout, p2pRecvProc, op);
+    aioRead(base, connection->socket, &op->info.header, sizeof(p2pHeader), afWaitAll, timeout, p2pRecvProc, op);
   } else {
     connection->current->next = op;
   }
 }
 
-void aiop2pRecv(p2pConnection *connection, uint64_t timeout, p2pStream *stream, size_t maxMsgSize,  p2pCb callback, void *arg)
+void aiop2pRecv(asyncBase *base, p2pConnection *connection, uint64_t timeout, p2pStream *stream, size_t maxMsgSize,  p2pCb callback, void *arg)
 {
-  p2pOp *op = allocp2pOp(connection, 0, maxMsgSize, 0, (void*)callback, arg);
+  p2pOp *op = allocp2pOp(base, connection, 0, maxMsgSize, 0, (void*)callback, arg);
   op->type = p2pOpRecvStream;
   op->state = stWaitHeader;
 
   if (!connection->current) {
-    aioRead(connection->socket, &op->info.header, sizeof(p2pHeader), afWaitAll, timeout, p2pRecvStreamProc, op);
+    aioRead(base, connection->socket, &op->info.header, sizeof(p2pHeader), afWaitAll, timeout, p2pRecvStreamProc, op);
   } else {
     connection->current->next = op;
   }
 }
 
-void aiop2pSend(p2pConnection *connection, uint64_t timeout, void *data, p2pHeader header, p2pCb callback, void *arg)
+void aiop2pSend(asyncBase *base, p2pConnection *connection, uint64_t timeout, void *data, p2pHeader header, p2pCb callback, void *arg)
 {
-  p2pOp *op = allocp2pOp(connection, 0, 0, 0, (void*)callback, arg);  
+  p2pOp *op = allocp2pOp(base, connection, 0, 0, 0, (void*)callback, arg);  
   op->type = p2pOpSend;
 
-  aioWrite(connection->socket, &header, sizeof(p2pHeader), afWaitAll, timeout, 0, 0);
-  aioWrite(connection->socket, data, header.size, afWaitAll, timeout, sendProc, op);
+  aioWrite(base, connection->socket, &header, sizeof(p2pHeader), afWaitAll, timeout, 0, 0);
+  aioWrite(base, connection->socket, data, header.size, afWaitAll, timeout, sendProc, op);
 }
 
-int iop2pAccept(p2pConnection *connection, uint64_t timeout, p2pAcceptCb callback, void *arg)
+int iop2pAccept(asyncBase *base, p2pConnection *connection, uint64_t timeout, p2pAcceptCb callback, void *arg)
 {
   p2pHeader header;
   p2pConnectData data;
 
-  if (iop2pRecv(connection, timeout, &connection->stream, 1024, &header) == -1)
+  if (iop2pRecv(base, connection, timeout, &connection->stream, 1024, &header) == -1)
     return aosUnknownError;
 
   if (!connection->stream.readConnectMessage(&data))
@@ -277,21 +279,21 @@ int iop2pAccept(p2pConnection *connection, uint64_t timeout, p2pAcceptCb callbac
   p2pErrorTy error = callback(&data, &info);
   connection->stream.reset();
   connection->stream.writeStatusMessage(error);
-  bool sendResult = iop2pSend(connection, timeout, connection->stream.data(), 0, p2pMsgStatus, connection->stream.sizeOf());
+  bool sendResult = iop2pSend(base, connection, timeout, connection->stream.data(), 0, p2pMsgStatus, connection->stream.sizeOf());
   info.status = sendResult ? p2pStatusFromError(error) : aosUnknownError;
   callback(0, &info);
   return info.status;
 }
 
-int iop2pConnect(p2pConnection *connection, uint64_t timeout, p2pConnectData *data)
+int iop2pConnect(asyncBase *base, p2pConnection *connection, uint64_t timeout, p2pConnectData *data)
 {
   connection->stream.reset();
   connection->stream.writeConnectMessage(*data);
   p2pHeader header;
-  if (!iop2pSend(connection, timeout, connection->stream.data(), 0, p2pMsgConnect, connection->stream.sizeOf()))
+  if (!iop2pSend(base, connection, timeout, connection->stream.data(), 0, p2pMsgConnect, connection->stream.sizeOf()))
     return aosUnknownError;
   
-  if (!iop2pRecv(connection, timeout, &connection->stream, 1024, &header) || header.type != p2pMsgStatus)
+  if (!iop2pRecv(base, connection, timeout, &connection->stream, 1024, &header) || header.type != p2pMsgStatus)
     return aosUnknownError;
   
   p2pErrorTy error;
@@ -301,26 +303,26 @@ int iop2pConnect(p2pConnection *connection, uint64_t timeout, p2pConnectData *da
   return p2pStatusFromError(error);
 }
 
-bool iop2pSend(p2pConnection *connection, uint64_t timeout, void *data, uint32_t id, uint32_t type, size_t size)
+bool iop2pSend(asyncBase *base, p2pConnection *connection, uint64_t timeout, void *data, uint32_t id, uint32_t type, size_t size)
 {
   bool success;
   p2pHeader header(id, type, size);
-  success = ioWrite(connection->socket, &header, sizeof(p2pHeader), afWaitAll, timeout) == sizeof(p2pHeader);
-  success &= (ioWrite(connection->socket, data, size, afWaitAll, timeout) == size);
+  success = ioWrite(base, connection->socket, &header, sizeof(p2pHeader), afWaitAll, timeout) == sizeof(p2pHeader);
+  success &= (ioWrite(base, connection->socket, data, size, afWaitAll, timeout) == size);
   return success;
 }
 
-ssize_t iop2pRecv(p2pConnection *connection, uint64_t timeout, void *buffer, size_t bufferSize, p2pHeader *header)
+ssize_t iop2pRecv(asyncBase *base, p2pConnection *connection, uint64_t timeout, void *buffer, size_t bufferSize, p2pHeader *header)
 {
-  if (ioRead(connection->socket, header, sizeof(p2pHeader), afWaitAll, timeout) == sizeof(p2pHeader) && header->size <= bufferSize)
-    return ioRead(connection->socket, buffer, header->size, afWaitAll, timeout) == header->size ? header->size : -1;
+  if (ioRead(base, connection->socket, header, sizeof(p2pHeader), afWaitAll, timeout) == sizeof(p2pHeader) && header->size <= bufferSize)
+    return ioRead(base, connection->socket, buffer, header->size, afWaitAll, timeout) == header->size ? header->size : -1;
 }
 
-ssize_t iop2pRecv(p2pConnection *connection, uint64_t timeout, p2pStream *stream, size_t maxMsgSize, p2pHeader *header)
+ssize_t iop2pRecv(asyncBase *base, p2pConnection *connection, uint64_t timeout, p2pStream *stream, size_t maxMsgSize, p2pHeader *header)
 {
-  if (ioRead(connection->socket, header, sizeof(p2pHeader), afWaitAll, timeout) == sizeof(p2pHeader) && header->size <= maxMsgSize) {
+  if (ioRead(base, connection->socket, header, sizeof(p2pHeader), afWaitAll, timeout) == sizeof(p2pHeader) && header->size <= maxMsgSize) {
     stream->reset();
-    ssize_t result = ioRead(connection->socket, stream->alloc(header->size), header->size, afWaitAll, timeout) ;
+    ssize_t result = ioRead(base, connection->socket, stream->alloc(header->size), header->size, afWaitAll, timeout) ;
     stream->seekSet(0);
     return result == header->size ? header->size : -1;
   } else {

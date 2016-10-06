@@ -8,6 +8,11 @@ struct listenerContext {
   aioObject *socket;
 };
 
+struct readerContext {
+  asyncBase *base;
+  aioObject *socket;
+};
+
 void printhex(uint8_t *data, size_t size)
 {
   for (size_t i = 0; i < size; i++) {
@@ -16,15 +21,15 @@ void printhex(uint8_t *data, size_t size)
   fprintf(stderr, "\n");   
 }
 
-void *reader(void *arg)
+void *readerProc(void *arg)
 {
-  aioObject *socket = (aioObject*)arg;  
+  readerContext *reader = (readerContext*)arg;
   uint8_t echoBuffer[1024];
   while (true) {
-    ssize_t bytesRead = ioRead(socket, echoBuffer, sizeof(echoBuffer), afNone, 0);
+    ssize_t bytesRead = ioRead(reader->base, reader->socket, echoBuffer, sizeof(echoBuffer), afNone, 0);
     if (bytesRead != -1) {
       printhex(echoBuffer, bytesRead);
-      ioWrite(socket, echoBuffer, bytesRead, afNone, 0);
+      ioWrite(reader->base, reader->socket, echoBuffer, bytesRead, afNone, 0);
     } else {
       fprintf(stderr, " * asyncRead error, exiting..\n");
       break;
@@ -34,15 +39,17 @@ void *reader(void *arg)
   return 0;
 }
 
-void *listener(void *arg)
+void *listenerProc(void *arg)
 {
   listenerContext *ctx = (listenerContext*)arg;
   while (true) {
-    socketTy acceptSocket = ioAccept(ctx->socket, 0);
+    socketTy acceptSocket = ioAccept(ctx->base, ctx->socket, 0);
     if (acceptSocket != INVALID_SOCKET) {
       fprintf(stderr, "new connection accepted\n");
-      aioObject *newSocketOp = newSocketIo(ctx->base, acceptSocket);      
-      coroutineTy *echoProc = coroutineNew(reader, newSocketOp, 0x10000);
+      readerContext *reader = new readerContext;
+      reader->base = ctx->base;
+      reader->socket = newSocketIo(ctx->base, acceptSocket);      
+      coroutineTy *echoProc = coroutineNew(readerProc, reader, 0x10000);
       coroutineCall(echoProc);      
     }
   }
@@ -77,8 +84,7 @@ int main(int argc, char **argv)
   ctx.base = base;
   ctx.socket = socketOp;
 
-  coroutineTy *listenerProc = coroutineNew(listener, &ctx, 0x10000);
-  coroutineCall(listenerProc);
+  coroutineCall(coroutineNew(listenerProc, &ctx, 0x10000));
   asyncLoop(base);
   return 0;
 }

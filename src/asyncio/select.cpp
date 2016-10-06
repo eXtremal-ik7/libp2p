@@ -447,7 +447,6 @@ aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
   aioObject *object = (aioObject*)calloc(1, sizeof(aioObject));
   object->root.type = type;
-  object->base = base;
   switch (object->root.type) {
     case ioObjectDevice :
       object->hDevice = *(iodevTy*)data;

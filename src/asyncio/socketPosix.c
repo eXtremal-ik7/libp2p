@@ -25,6 +25,10 @@ socketTy socketCreate(int af, int type, int protocol, int isAsync)
 #endif
 }
 
+void socketClose(socketTy hSocket)
+{
+  close(hSocket);
+}
 
 int socketBind(socketTy hSocket, const HostAddress *address)
 {

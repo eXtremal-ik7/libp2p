@@ -122,7 +122,7 @@ void readCb(AsyncOpStatus status, asyncBase *base, aioObject *rawSocket, size_t 
     }
   }
   
-  aioReadMsg(rawSocket, &client->buffer, 0, readCb, client);
+  aioReadMsg(base, rawSocket, &client->buffer, 0, readCb, client);
 }
 
 void pingTimerCb(asyncBase *base, aioObject *event, void *arg)
@@ -134,10 +134,10 @@ void pingTimerCb(asyncBase *base, aioObject *event, void *arg)
   clientData->data.icmp_cksum =
     InternetChksum((uint16_t*)&clientData->data, sizeof(icmp));
     
-  aioWriteMsg(clientData->rawSocket,
-                &clientData->remoteAddress,
-                &clientData->data, sizeof(icmp),
-                afNone, 1000000, 0, 0);
+  aioWriteMsg(base, clientData->rawSocket,
+              &clientData->remoteAddress,
+              &clientData->data, sizeof(icmp),
+              afNone, 1000000, 0, 0);
   clientData->times[clientData->id] = getTimeMark();
 }
 
@@ -239,7 +239,7 @@ int main(int argc, char **argv)
   client.rawSocket = newSocketIo(base, S);
 
   dynamicBufferInit(&client.buffer, 1024);
-  aioReadMsg(client.rawSocket, &client.buffer, 0, readCb, &client);
+  aioReadMsg(base, client.rawSocket, &client.buffer, 0, readCb, &client);
   userEventStartTimer(printTimer, 100000, -1);
   userEventStartTimer(pingTimer, (uint64_t)(gInterval*1000000), -1);
   asyncLoop(base);
