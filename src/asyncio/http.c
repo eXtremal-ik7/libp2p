@@ -93,9 +93,9 @@ void httpConnectProc(AsyncOpStatus status, asyncBase *base, aioObject *object, v
   finishOperation((asyncOpRoot*)arg, status, 1);
 }
 
-void httpsConnectProc(SSLInfo *info)
+void httpsConnectProc(AsyncOpStatus status, asyncBase *base, SSLSocket *object, void *arg)
 {
-  finishOperation((asyncOpRoot*)info->arg, info->status, 1);
+  finishOperation((asyncOpRoot*)arg, status, 1);
 }
 
 void httpRequestProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
@@ -110,15 +110,15 @@ void httpRequestProc(AsyncOpStatus status, asyncBase *base, aioObject *object, s
   }  
 }
 
-void httpsRequestProc(SSLInfo *info)
+void httpsRequestProc(AsyncOpStatus status, asyncBase *base, SSLSocket *object, size_t transferred, void *arg)
 {
-  HTTPOp *op = (HTTPOp*)info->arg;    
-  if (info->status == aosSuccess) {
+  HTTPOp *op = (HTTPOp*)arg;
+  if (status == aosSuccess) {
     HTTPClient *client = (HTTPClient*)op->root.object;
-    httpSetBuffer(&client->state, client->inBuffer, client->inBufferOffset+info->bytesTransferred);
+    httpSetBuffer(&client->state, client->inBuffer, client->inBufferOffset+transferred);
     httpParseStart(op);
   } else {
-    finishOperation(&op->root, info->status, 1);
+    finishOperation(&op->root, status, 1);
   }
 }
 
@@ -177,13 +177,14 @@ void httpParseStart(HTTPOp *op)
         memcpy(client->inBuffer, httpDataPtr(&client->state), offset);
       
       if (client->isHttps)
-        aioSslRead(client->sslSocket,
-                client->inBuffer+offset,
-                client->inBufferSize-offset,
-                afNone,
-                0,
-                httpsRequestProc,
-                op);
+        aioSslRead(op->root.base,
+                   client->sslSocket,
+                   client->inBuffer+offset,
+                   client->inBufferSize-offset,
+                   afNone,
+                   0,
+                   httpsRequestProc,
+                   op);
       else
         aioRead(op->root.base,
                 client->plainSocket,
@@ -252,7 +253,7 @@ void aioHttpConnect(asyncBase *base,
   asyncOpRoot *op = allocHttpOp(base, client, httpOpConnect, 0, callback, arg, usTimeout);
   if (addToExecuteQueue(&client->root, op, 1)) {
     if (client->isHttps)
-      aioSslConnect(client->sslSocket, address, usTimeout, httpsConnectProc, op);
+      aioSslConnect(base, client->sslSocket, address, usTimeout, httpsConnectProc, op);
     else
       aioConnect(base, client->plainSocket, address, usTimeout, httpConnectProc, op);
   }
@@ -270,7 +271,7 @@ void aioHttpRequest(asyncBase *base,
   asyncOpRoot *op = allocHttpOp(base, client, httpOpRequest, parseCallback, callback, arg, usTimeout);
   
   if (client->isHttps)
-    aioSslWrite(client->sslSocket, (void*)request, requestSize, afNone, 0, 0, 0);
+    aioSslWrite(base, client->sslSocket, (void*)request, requestSize, afNone, 0, 0, 0);
   else
     aioWrite(base, client->plainSocket, (void*)request, requestSize, afNone, 0, 0, 0);  
   
