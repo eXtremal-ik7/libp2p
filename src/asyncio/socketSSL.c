@@ -222,8 +222,9 @@ SSLSocket *sslSocketNew(asyncBase *base)
 
 void sslSocketDelete(SSLSocket *socket)
 {
-  socket->root.links--;   // TODO: atomic
   deleteAioObject(socket->object);
+  socket->root.links--;   // TODO: atomic
+  checkForDeleteObject(&socket->root);
 }
 
 socketTy sslGetSocket(const SSLSocket *socket)

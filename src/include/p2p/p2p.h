@@ -23,10 +23,10 @@ struct p2pPeer {
 private:
   static void clientNetworkWaitEnd(asyncBase *base, aioObject *event, void *arg);  
   static void clientNetworkConnectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg);
-  static void clientP2PConnectCb(p2pInfo *info);  
-  static void clientReceiver(p2pInfo *info);  
-  static p2pErrorTy nodeAcceptCb(p2pConnectData *data, p2pInfo *info);
-  static void *nodeMsgHandlerEP(void *peer) { ((p2pPeer*)peer)->nodeMsgHandler(); }
+  static void clientP2PConnectCb(int status, asyncBase *base, p2pConnection *connection, void *arg);  
+  static void clientReceiver(int status, asyncBase *base, p2pConnection *connection, p2pHeader header, void *arg);  
+  static p2pErrorTy nodeAcceptCb(int status, asyncBase *base, p2pConnection *connection, p2pConnectData *data, void *arg);
+  static void *nodeMsgHandlerEP(void *peer) { ((p2pPeer*)peer)->nodeMsgHandler(); return 0; }
   
   void nodeMsgHandler();
   

@@ -13,14 +13,14 @@
 // }
 
 
-void p2pPeer::clientReceiver(p2pInfo *info)
+void p2pPeer::clientReceiver(int status, asyncBase *base, p2pConnection *connection, p2pHeader header, void *arg)
 {
-  p2pPeer *peer = (p2pPeer*)info->arg;
+  p2pPeer *peer = (p2pPeer*)arg;
   
-  if (info->status == aosSuccess) {
-    switch (info->header.type) {
+  if (status == aosSuccess) {
+    switch (header.type) {
       case p2pMsgResponse : {
-        auto It = peer->handlersMap.find(info->header.id);
+        auto It = peer->handlersMap.find(header.id);
         if (It != peer->handlersMap.end()) {
           p2pEventHandler &handler = It->second;
           if (handler.coroutine) {
@@ -40,7 +40,7 @@ void p2pPeer::clientReceiver(p2pInfo *info)
     }
     
     aiop2pRecv(peer->_base, peer->connection, 500000, &peer->connection->stream, 65536, clientReceiver, peer);
-  } else if (info->status == aosTimeout) {
+  } else if (status == aosTimeout) {
     // check requests
     // TODO: use better timer grouping
     time_t currentTime = time(0);
@@ -67,10 +67,10 @@ void p2pPeer::clientReceiver(p2pInfo *info)
   }
 }
 
-void p2pPeer::clientP2PConnectCb(p2pInfo *info)
+void p2pPeer::clientP2PConnectCb(int status, asyncBase *base, p2pConnection *connection, void *arg)
 {
-  p2pPeer *peer = (p2pPeer*)info->arg;
-  if (info->status == aosSuccess) {
+  p2pPeer *peer = (p2pPeer*)arg;
+  if (status == aosSuccess) {
     peer->_connected = true;
     peer->_node->connectionEstablished(peer);   
     aiop2pRecv(peer->_base, peer->connection, 500000, &peer->connection->stream, 65536, clientReceiver, peer);
@@ -103,9 +103,9 @@ void p2pPeer::clientNetworkConnectCb(AsyncOpStatus status, asyncBase *base, aioO
   }
 }
 
-p2pErrorTy p2pPeer::nodeAcceptCb(p2pConnectData *data, p2pInfo *info)
+p2pErrorTy p2pPeer::nodeAcceptCb(int status, asyncBase *base, p2pConnection *connection, p2pConnectData *data, void *arg)
 {
-  p2pPeer *peer = (p2pPeer*)info->arg;
+  p2pPeer *peer = (p2pPeer*)arg;
   return p2pOk;
 }
 

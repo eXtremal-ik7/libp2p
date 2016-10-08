@@ -420,17 +420,14 @@ void epollNextFinishedOperation(asyncBase *base)
         int available;
         ioctl(localBase->pipeFd[Read], FIONREAD, &available);
         for (i = 0; i < available / sizeof(pipeMsg); i++) {
-          asyncOpRoot *op;
-          aioObjectRoot *object;
           read(localBase->pipeFd[Read], &msg, sizeof(pipeMsg));
-
-          op = (asyncOpRoot*)msg.data;
-          object = op->object;
+          asyncOpRoot *op = (asyncOpRoot*)msg.data;
+          aioObjectRoot *object;
           switch (msg.cmd) {
             case Reset :
               return;
-              break;
             case Timeout :
+              object = op->object;
               if (object->type == ioObjectUserEvent) {
                 if (op->counter == 0)
                   stopTimer(op);
@@ -442,7 +439,7 @@ void epollNextFinishedOperation(asyncBase *base)
               }
               break;
             case UserEvent :
-              userEventTrigger(object);
+              userEventTrigger(op->object);
               break;
           }
         }
