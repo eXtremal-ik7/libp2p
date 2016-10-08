@@ -2,6 +2,7 @@
 #include "asyncio/coroutine.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 struct listenerContext {
   asyncBase *base;
@@ -32,6 +33,7 @@ void *readerProc(void *arg)
       ioWrite(reader->base, reader->socket, echoBuffer, bytesRead, afNone, 0);
     } else {
       fprintf(stderr, " * asyncRead error, exiting..\n");
+      deleteAioObject(reader->socket);
       break;
     }
   }
@@ -59,10 +61,31 @@ void *listenerProc(void *arg)
 
 int main(int argc, char **argv)
 {
+  if (argc != 3) {
+    fprintf(stderr, "usage: %s <method> <port>\n", argv[0]);
+    return 1;
+  }
+  
+  AsyncMethod method;
+  if (strcmp(argv[1], "default") == 0) {
+    method = amOSDefault;
+  } else if (strcmp(argv[1], "select") == 0) {
+    method = amSelect;
+  } else if (strcmp(argv[1], "epoll") == 0) {
+    method = amEPoll;
+  } else if (strcmp(argv[1], "kqueue") == 0) {
+    method = amKQueue;
+  } else if (strcmp(argv[1], "iocp") == 0) {
+    method = amIOCP;
+  } else {
+    fprintf(stderr, "ERROR: unknown method %s, default used\n", argv[1]);
+    method = amOSDefault;
+  }
+  
   HostAddress address;
   address.family = AF_INET;
   address.ipv4 = INADDR_ANY;
-  address.port = htons(9999);
+  address.port = htons(atoi(argv[2]));
   
   initializeSocketSubsystem();
   socketTy hSocket = socketCreate(AF_INET, SOCK_STREAM, IPPROTO_TCP, 1);
@@ -77,7 +100,7 @@ int main(int argc, char **argv)
     exit(1);
   }
 
-  asyncBase *base = createAsyncBase(amOSDefault);
+  asyncBase *base = createAsyncBase(method);
   aioObject *socketOp = newSocketIo(base, hSocket);
   
   listenerContext ctx;

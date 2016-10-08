@@ -1,6 +1,7 @@
 #include "asyncio/asyncio.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 
@@ -59,11 +60,32 @@ void connectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *a
 
 int main(int argc, char **argv)
 {
+  if (argc != 4) {
+    fprintf(stderr, "usage: %s <method> <ip> <port>\n", argv[0]);
+    return 1;
+  }
+  
+  AsyncMethod method;
+  if (strcmp(argv[1], "default") == 0) {
+    method = amOSDefault;
+  } else if (strcmp(argv[1], "select") == 0) {
+    method = amSelect;
+  } else if (strcmp(argv[1], "epoll") == 0) {
+    method = amEPoll;
+  } else if (strcmp(argv[1], "kqueue") == 0) {
+    method = amKQueue;
+  } else if (strcmp(argv[1], "iocp") == 0) {
+    method = amIOCP;
+  } else {
+    fprintf(stderr, "ERROR: unknown method %s, default used\n", argv[1]);
+    method = amOSDefault;
+  }  
+  
   HostAddress address;
   initializeSocketSubsystem();
   srand((unsigned)time(NULL));
 
-  asyncBase *base = createAsyncBase(amOSDefault);
+  asyncBase *base = createAsyncBase(method);
   
   address.family = AF_INET;
   address.ipv4 = INADDR_ANY;
@@ -78,8 +100,8 @@ int main(int argc, char **argv)
   aioObject *stdInputOp = newUserEvent(base, pingTimerCb, &data);
 
   address.family = AF_INET;
-  address.ipv4 = inet_addr("127.0.0.1");
-  address.port = htons(9999);
+  address.ipv4 = inet_addr(argv[2]);
+  address.port = htons(atoi(argv[3]));
   data.base = base;
   data.socket = socketOp;
   data.isConnected = false;    

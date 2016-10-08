@@ -16,6 +16,7 @@ typedef struct asyncBase asyncBase;
 typedef asyncOpRoot *newAsyncOpTy(asyncBase*);
 typedef void aioStartProc(asyncOpRoot*);
 typedef void aioFinishProc(asyncOpRoot*, int);
+typedef void aioObjectDestructor(aioObjectRoot*);
 
 #ifdef WIN32
 #include <Windows.h>
@@ -47,6 +48,8 @@ struct aioObjectRoot {
   List readQueue;
   List writeQueue;
   int type;
+  int links;
+  aioObjectDestructor *destructor;
 };
 
 struct asyncOpRoot {
@@ -77,7 +80,9 @@ void opRingPush(OpRing *buffer, asyncOpRoot *op, uint64_t pt);
 
 timerTy nullTimer();
 timerTy createTimer(void *arg);
+aioObjectRoot *initObjectRoot(int type, size_t size, aioObjectDestructor destructor);
 
+void checkForDeleteObject(aioObjectRoot *object);
 
 asyncOpRoot *initAsyncOpRoot(asyncBase *base,
                              const char *nonTimerPool,

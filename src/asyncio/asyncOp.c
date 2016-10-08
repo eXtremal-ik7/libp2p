@@ -127,6 +127,21 @@ timerTy createTimer(void *arg)
 #endif
 }
 
+aioObjectRoot *initObjectRoot(int type, size_t size, aioObjectDestructor destructor)
+{
+  aioObjectRoot *object = (aioObjectRoot*)calloc(size, 1);
+  object->type = type;
+  object->links = 1;
+  object->destructor = destructor;
+  return object;
+}
+
+void checkForDeleteObject(aioObjectRoot *object)
+{
+  if (!object->readQueue.head && !object->writeQueue.head && object->links == 0)
+    object->destructor(object);
+}
+
 asyncOpRoot *initAsyncOpRoot(asyncBase *base,
                              const char *nonTimerPool,
                              const char *timerPool,
@@ -183,6 +198,7 @@ asyncOpRoot *initAsyncOpRoot(asyncBase *base,
 int addToExecuteQueue(aioObjectRoot *object, asyncOpRoot *op, int isWriteQueue)
 {
   // TODO: make thread safe
+  // TODO acquireSpinlock(object);
   List *list = isWriteQueue ? &object->writeQueue : &object->readQueue;
   op->executeQueue.prev = list->tail;
   op->executeQueue.next = 0;
@@ -191,6 +207,7 @@ int addToExecuteQueue(aioObjectRoot *object, asyncOpRoot *op, int isWriteQueue)
   list->tail = op;
   if (op->executeQueue.prev == 0) {
     list->head = op;
+    // TODO releaseSpinlock(object);
     return 1;
   }
   
@@ -200,6 +217,7 @@ int addToExecuteQueue(aioObjectRoot *object, asyncOpRoot *op, int isWriteQueue)
 asyncOpRoot *removeFromExecuteQueue(asyncOpRoot *op)
 {
   // TODO: make thread safe
+  // TODO acquireSpinlock(object)
   aioObjectRoot *object = op->object;  
   if (op->executeQueue.next) {
     op->executeQueue.next->executeQueue.prev = op->executeQueue.prev;
@@ -217,22 +235,27 @@ asyncOpRoot *removeFromExecuteQueue(asyncOpRoot *op)
       object->readQueue.head = op->executeQueue.next;
       // Start next 'read' operation
       if (object->readQueue.head)
+        // TODO releaseSpinlock(object);
         return object->readQueue.head;
     } else if (object->writeQueue.head == op) {
       object->writeQueue.head = op->executeQueue.next;
       // Start next 'write' operation
       if (object->writeQueue.head)
+        // TODO releaseSpinlock(object);
         return object->writeQueue.head;
     }
   }
-    
+   
+  // TODO releaseSpinlock(object);
   return 0;
 }
 
 
 void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op)
 {
+  // TODO acquireSpinlock(base)
   opRingPush(&base->timeGrid, op, getPt(op->endTime));
+  // TODO releaseSpinlock(base)
 }
 
 
@@ -253,8 +276,13 @@ void processTimeoutQueue(asyncBase *base)
   // check timeout queue
   uint64_t currentTime = time(0);
   uint64_t begin = opRingBegin(&base->timeGrid);
+  if (!(begin < currentTime))
+    return;
+  
   while (begin < currentTime) {
+    // TODO acquireSpinlock(base)
     asyncOpRoot *op = opRingGet(&base->timeGrid, begin);
+    // TODO releaseSpinlock(base)
     while (op) {
       asyncOpRoot *next = op->timeoutQueue.next;
       finishOperation(op, aosTimeout, 0);
@@ -263,8 +291,9 @@ void processTimeoutQueue(asyncBase *base)
       
     begin++;
   }
-
+  // TODO acquireSpinlock(base)
   opRingShift(&base->timeGrid, currentTime);
+  // TODO releaseSpinlock(base)
 }
 
 static inline void startOperation(asyncOpRoot *op, asyncBase *previousOpBase)
@@ -277,23 +306,29 @@ static inline void startOperation(asyncOpRoot *op, asyncBase *previousOpBase)
 
 void finishOperation(asyncOpRoot *op, int status, int needRemoveFromTimeGrid)
 {
+  asyncBase *base = op->base;  
+  aioObjectRoot *object = op->object;
+  object->links++; // TODO: atomic
+  
   if (op->timerId != nullTimer()) {
-    op->base->methodImpl.stopTimer(op);
+    base->methodImpl.stopTimer(op);
   } else if (op->endTime && needRemoveFromTimeGrid) {
-    removeFromTimeoutQueue(op->base, op);
+    removeFromTimeoutQueue(base, op);
   }
   
   // Remove operation from execute queue
-  asyncBase *base = op->base;
   asyncOpRoot *nextOp = removeFromExecuteQueue(op);
   
   // Release operation
-  objectRelease(&op->base->pool, op, op->poolId);
+  objectRelease(&base->pool, op, op->poolId);
   
   // Do callback if need
   op->finishMethod(op, status);
+  object->links--; // TODO: atomic
   
   // Start next operation
   if (nextOp)
     startOperation(nextOp, base);
+  else
+    checkForDeleteObject(object);
 }

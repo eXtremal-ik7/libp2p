@@ -459,9 +459,9 @@ void epollNextFinishedOperation(asyncBase *base)
 
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
-  aioObject *object = calloc(sizeof(aioObject), 1);
-  object->root.type = type;
-  switch (object->root.type) {
+  aioObject *object =
+    (aioObject*)initObjectRoot(type, sizeof(aioObject), (aioObjectDestructor*)epollDeleteObject);
+  switch (type) {
     case ioObjectDevice :
       object->hDevice = *(iodevTy *)data;
       break;
@@ -490,17 +490,7 @@ asyncOpRoot *epollNewAsyncOp(asyncBase *base)
 
 void epollDeleteObject(aioObject *object)
 {
-  switch (object->root.type) {
-    case ioObjectDevice :
-      close(object->hDevice);
-      break;
-    case ioObjectSocket :
-    case ioObjectSocketSyn :
-      close(object->hSocket);
-      break;
-    default :
-      break;
-  }
+  free(object);
 }
 
 

@@ -33,6 +33,7 @@ void connectProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_
 void readProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg);
 void writeProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg);
 
+
 static asyncOpRoot *alloc(asyncBase *base)
 {
   SSLOp *op = (SSLOp*)malloc(sizeof(SSLOp));
@@ -193,9 +194,19 @@ void writeProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t 
 }
 
 
+void sslSocketDestructor(aioObjectRoot *root)
+{
+  SSLSocket *socket = (SSLSocket*)root;
+  free(socket->sslReadBuffer);  
+  SSL_free(socket->ssl);
+  SSL_CTX_free(socket->sslContext);
+  free(socket);
+}
+
+
 SSLSocket *sslSocketNew(asyncBase *base)
 {
-  SSLSocket *S = (SSLSocket*)malloc(sizeof(SSLSocket));
+  SSLSocket *S = (SSLSocket*)initObjectRoot(ioObjectUserDefined, sizeof(SSLSocket), sslSocketDestructor);
   S->sslContext = SSL_CTX_new (TLSv1_1_client_method());
   S->ssl = SSL_new(S->sslContext);  
   S->bioIn = BIO_new(BIO_s_mem());
@@ -211,12 +222,8 @@ SSLSocket *sslSocketNew(asyncBase *base)
 
 void sslSocketDelete(SSLSocket *socket)
 {
+  socket->root.links--;   // TODO: atomic
   deleteAioObject(socket->object);
-  // TODO: cleanup
-  // free(socket->sslReadBuffer);  
-  // SSL_free(socket->ssl);
-  // SSL_CTX_free(socket->sslContext);
-  // free(socket);
 }
 
 socketTy sslGetSocket(const SSLSocket *socket)

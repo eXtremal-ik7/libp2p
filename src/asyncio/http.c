@@ -204,11 +204,17 @@ void httpParseStart(HTTPOp *op)
   }
 }
 
+static void httpClientDestructor(aioObjectRoot *root)
+{
+  HTTPClient *client = (HTTPClient*)root;
+  dynamicBufferFree(&client->out);
+  free(client->inBuffer);
+  free(client);
+}
 
 HTTPClient *httpClientNew(asyncBase *base, aioObject *socket)
 {
-  HTTPClient *client = (HTTPClient*)malloc(sizeof(HTTPClient));
-  client->root.type = ioObjectUserDefined;
+  HTTPClient *client = (HTTPClient*)initObjectRoot(ioObjectUserDefined, sizeof(HTTPClient), httpClientDestructor); 
   client->isHttps = 0;
   client->inBuffer = (uint8_t*)malloc(65536);
   client->inBufferSize = 65536;
@@ -221,8 +227,7 @@ HTTPClient *httpClientNew(asyncBase *base, aioObject *socket)
 
 HTTPClient *httpsClientNew(asyncBase *base, SSLSocket *socket)
 {
-  HTTPClient *client = (HTTPClient*)malloc(sizeof(HTTPClient));
-  client->root.type = ioObjectUserDefined;
+  HTTPClient *client = (HTTPClient*)initObjectRoot(ioObjectUserDefined, sizeof(HTTPClient), httpClientDestructor);  
   client->isHttps = 1;
   client->inBuffer = (uint8_t*)malloc(65536);
   client->inBufferSize = 65536;
@@ -235,12 +240,12 @@ HTTPClient *httpsClientNew(asyncBase *base, SSLSocket *socket)
 
 void httpClientDelete(HTTPClient *client)
 {
+  client->root.links--; // TODO: atomic
   if (client->isHttps)
     sslSocketDelete(client->sslSocket);
   else
     deleteAioObject(client->plainSocket);
-  
-  // TODO: cleanup if no operations queued
+  checkForDeleteObject(&client->root);
 }
 
 void aioHttpConnect(asyncBase *base,

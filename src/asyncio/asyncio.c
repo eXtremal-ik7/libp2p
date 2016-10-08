@@ -254,17 +254,17 @@ aioObject *newDeviceIo(asyncBase *base, iodevTy hDevice)
 
 void deleteAioObject(aioObject *object)
 {
+  object->root.links--; // TODO: atomic
   if (object->root.type == ioObjectUserEvent) {
     asyncOpRoot *op = object->root.readQueue.head;
     objectRelease(&op->base->pool, op, op->poolId);
-  } else if (object->root.type != ioObjectUserDefined) {
+    object->root.destructor(&object->root);
+  } else {
     if (object->root.type == ioObjectDevice)
       serialPortClose(object->hDevice);
-    else if (object->root.type == ioObjectSocket) {
+    else if (object->root.type == ioObjectSocket)
       socketClose(object->hSocket);
-    }
-
-    // TODO: cleanup if no operations queued
+    checkForDeleteObject(&object->root);
   }
 }
 
