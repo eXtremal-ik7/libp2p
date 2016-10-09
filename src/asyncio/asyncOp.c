@@ -142,6 +142,32 @@ void checkForDeleteObject(aioObjectRoot *object)
     object->destructor(object);
 }
 
+void cancelIoForParentOp(aioObjectRoot *object, asyncOpRoot *parentOp)
+{
+  {
+    asyncOpRoot *childOp = object->readQueue.tail;
+    while (childOp) {
+      asyncOpRoot *prev = childOp->executeQueue.prev;
+      if (childOp->arg == parentOp) {
+        childOp->callback = 0;
+        finishOperation(childOp, aosTimeout, 0);
+      }
+      childOp = prev;
+    }
+  }
+  {
+    asyncOpRoot *childOp = object->writeQueue.tail;
+    while (childOp) {
+      asyncOpRoot *prev = childOp->executeQueue.prev;
+      if (childOp->arg == parentOp) {
+        childOp->callback = 0;
+        finishOperation(childOp, aosTimeout, 0);        
+      }
+      childOp = prev;
+    }
+  }    
+}
+
 asyncOpRoot *initAsyncOpRoot(asyncBase *base,
                              const char *nonTimerPool,
                              const char *timerPool,
@@ -316,14 +342,21 @@ void finishOperation(asyncOpRoot *op, int status, int needRemoveFromTimeGrid)
     removeFromTimeoutQueue(base, op);
   }
   
+  asyncOpRoot *nextOp;
+  
   // Remove operation from execute queue
-  asyncOpRoot *nextOp = removeFromExecuteQueue(op);
-  
   // Release operation
-  objectRelease(&base->pool, op, op->poolId);
-  
   // Do callback if need
-  op->finishMethod(op, status);
+  if (status == aosTimeout) {
+    op->finishMethod(op, status);
+    nextOp = removeFromExecuteQueue(op);
+    objectRelease(&base->pool, op, op->poolId);    
+  } else {
+    nextOp = removeFromExecuteQueue(op);
+    objectRelease(&base->pool, op, op->poolId);
+    op->finishMethod(op, status);
+  }
+
   object->links--; // TODO: atomic
   
   // Start next operation

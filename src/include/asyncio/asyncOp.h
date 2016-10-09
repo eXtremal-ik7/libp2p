@@ -80,9 +80,10 @@ void opRingPush(OpRing *buffer, asyncOpRoot *op, uint64_t pt);
 
 timerTy nullTimer();
 timerTy createTimer(void *arg);
-aioObjectRoot *initObjectRoot(int type, size_t size, aioObjectDestructor destructor);
 
+aioObjectRoot *initObjectRoot(int type, size_t size, aioObjectDestructor destructor);
 void checkForDeleteObject(aioObjectRoot *object);
+void cancelIoForParentOp(aioObjectRoot *object, asyncOpRoot *parentOp);
 
 asyncOpRoot *initAsyncOpRoot(asyncBase *base,
                              const char *nonTimerPool,

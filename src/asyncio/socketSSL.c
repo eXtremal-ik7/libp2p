@@ -59,8 +59,13 @@ static void start(asyncOpRoot *op)
 static void finish(asyncOpRoot *root, int status)
 {
   SSLOp *op = (SSLOp*)root;
+  SSLSocket *S = (SSLSocket*)root->object;  
+  
+    // cleanup child operation after timeout
+  if (status == aosTimeout)
+    cancelIoForParentOp((aioObjectRoot*)S->object, root);
+  
   if (root->callback) {
-    SSLSocket *S = (SSLSocket*)root->object;
     switch (root->opCode) {
       case sslOpConnect :
         ((sslConnectCb*)root->callback)(status, root->base, S, root->arg);
@@ -138,7 +143,7 @@ void connectProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_
       // Need data exchange
       size_t connectSize = copyFromOut(S, Op);
       Op->state = sslStReadNewFrame;
-      aioWrite(base, object, Op->sslBuffer, connectSize, afWaitAll, 0, 0, 0);
+      aioWrite(base, object, Op->sslBuffer, connectSize, afWaitAll, 0, 0, Op);
       aioRead(base, object, S->sslReadBuffer, S->sslReadBufferSize, afNone, 0, connectProc, Op);
     } else {
       finishOperation(&Op->root, aosUnknownError, 1);        

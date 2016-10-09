@@ -40,8 +40,13 @@ static void start(asyncOpRoot *op)
 static void finish(asyncOpRoot *root, int status)
 {
   HTTPOp *op = (HTTPOp*)root;
+  HTTPClient *client = (HTTPClient*)root->object; 
+  
+    // cleanup child operation after timeout
+  if (status == aosTimeout)
+    cancelIoForParentOp(client->isHttps ? (aioObjectRoot*)client->sslSocket : (aioObjectRoot*)client->plainSocket, root);  
+  
   if (root->callback) {
-     HTTPClient *client = (HTTPClient*)root->object;     
      switch (root->opCode) {
        case httpOpConnect :
          ((httpConnectCb*)root->callback)(status, root->base, client, root->arg);

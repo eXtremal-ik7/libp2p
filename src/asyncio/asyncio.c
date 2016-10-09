@@ -64,6 +64,11 @@ static void startMethod(asyncOpRoot *root)
 static void finishMethod(asyncOpRoot *root, int status)
 {
   asyncOp *op = (asyncOp*)root;
+  
+    // cleanup child operation after timeout
+  if (status == aosTimeout) {
+    // TODO: remove socket from i/o multiplexer
+  }
     
   // Do callback if need
   if (root->callback) {

@@ -76,7 +76,12 @@ static void start(asyncOpRoot *root)
 static void finish(asyncOpRoot *root, int status)
 {
   p2pOp *op = (p2pOp*)root;  
-  p2pConnection *connection = (p2pConnection*)root->object;
+  p2pConnection *connection = (p2pConnection*)root->object;  
+  
+  // cleanup child operation after timeout
+  if (status == aosTimeout)
+    cancelIoForParentOp((aioObjectRoot*)connection->socket, root);
+
   if (root->callback) {
     switch (root->opCode) {
       case p2pOpAccept :
@@ -293,7 +298,7 @@ void aiop2pSend(asyncBase *base, p2pConnection *connection, uint64_t timeout, vo
   p2pOp *op = allocp2pOp(base, connection, 0, 0, 0, (void*)callback, arg, p2pOpSend, timeout);  
   
   // TODO: acquireSpinlock(connection)
-  aioWrite(base, connection->socket, &header, sizeof(p2pHeader), afWaitAll, timeout, 0, 0);
+  aioWrite(base, connection->socket, &header, sizeof(p2pHeader), afWaitAll, 0, 0, 0);
   aioWrite(base, connection->socket, data, header.size, afWaitAll, timeout, sendProc, op);
   // TODO: releaseSpinlock(connection)
 }
@@ -332,7 +337,7 @@ bool iop2pSend(asyncBase *base, p2pConnection *connection, uint64_t timeout, voi
   coroReturnStruct r = {coroutineCurrent()};
   aiop2pSend(base, connection, timeout, data, p2pHeader(id, type, size), coroutineSendCb, &r);
   coroutineYield();
-  return r.msgSize == size;
+  return r.status == aosSuccess;
 }
 
 ssize_t iop2pRecv(asyncBase *base, p2pConnection *connection, uint64_t timeout, void *buffer, size_t bufferSize, p2pHeader *header)
