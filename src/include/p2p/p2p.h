@@ -25,6 +25,7 @@ private:
   static void clientNetworkConnectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg);
   static void clientP2PConnectCb(int status, asyncBase *base, p2pConnection *connection, void *arg);  
   static void clientReceiver(int status, asyncBase *base, p2pConnection *connection, p2pHeader header, void *arg);  
+  static void checkTimeout(asyncBase *base, aioObject *event, void *arg) { ((p2pPeer*)arg)->checkTimeout(); }
   static p2pErrorTy nodeAcceptCb(int status, asyncBase *base, p2pConnection *connection, p2pConnectData *data, void *arg);
   static void *nodeMsgHandlerEP(void *peer) { ((p2pPeer*)peer)->nodeMsgHandler(); return 0; }
   
@@ -33,6 +34,7 @@ private:
 public:
   asyncBase *_base;
   aioObject *_event;
+  aioObject *_checkTimeoutEvent;
   p2pNode *_node;  
   HostAddress _address;
   bool _connected;
@@ -43,8 +45,11 @@ public:
   p2pPeer(asyncBase *base, p2pNode *node, const HostAddress *address) :
     _base(base), _node(node), _address(*address), _connected(false), connection(0) {
     _event = newUserEvent(base, clientNetworkWaitEnd, this);
+    _checkTimeoutEvent = newUserEvent(base, checkTimeout, this);
+    userEventStartTimer(_checkTimeoutEvent, 1000000, -1);
   }
   
+  void checkTimeout();
   bool createConnection();
   void destroyConnection();
   void connect();

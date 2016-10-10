@@ -13,6 +13,28 @@
 // }
 
 
+void p2pPeer::checkTimeout()
+{
+  // check requests
+  // TODO: use better timer grouping
+  time_t currentTime = time(0);
+  for (auto I = handlersMap.begin(), IE = handlersMap.end(); I != IE;) {
+    p2pEventHandler &handler = I->second;      
+    if (handler.endPoint && currentTime >= handler.endPoint) {
+      if (handler.coroutine) {
+        _node->setLastActivePeer(0);
+        coroutineCall(handler.coroutine);
+      } else if (handler.callback) {
+        ((p2pNodeCb*)handler.callback)(0);        
+      }
+      
+      handlersMap.erase(I++);
+    } else {
+      ++I;
+    }
+  }  
+}
+
 void p2pPeer::clientReceiver(int status, asyncBase *base, p2pConnection *connection, p2pHeader header, void *arg)
 {
   p2pPeer *peer = (p2pPeer*)arg;
@@ -39,28 +61,7 @@ void p2pPeer::clientReceiver(int status, asyncBase *base, p2pConnection *connect
         break;
     }
     
-    aiop2pRecv(peer->_base, peer->connection, 500000, &peer->connection->stream, 65536, clientReceiver, peer);
-  } else if (status == aosTimeout) {
-    // check requests
-    // TODO: use better timer grouping
-    time_t currentTime = time(0);
-    for (auto I = peer->handlersMap.begin(), IE = peer->handlersMap.end(); I != IE;) {
-      p2pEventHandler &handler = I->second;      
-      if (handler.endPoint && currentTime >= handler.endPoint) {
-        if (handler.coroutine) {
-          peer->_node->setLastActivePeer(0);
-          coroutineCall(handler.coroutine);
-        } else if (handler.callback) {
-          ((p2pNodeCb*)handler.callback)(0);        
-        }
-        
-        peer->handlersMap.erase(I++);
-      } else {
-        ++I;
-      }
-    }
-    
-    aiop2pRecv(peer->_base, peer->connection, 500000, &peer->connection->stream, 65536, clientReceiver, peer);
+    aiop2pRecv(peer->_base, peer->connection, 0, &peer->connection->stream, 65536, clientReceiver, peer);
   } else {
     // try reconnect
     peer->connect();
@@ -73,9 +74,9 @@ void p2pPeer::clientP2PConnectCb(int status, asyncBase *base, p2pConnection *con
   if (status == aosSuccess) {
     peer->_connected = true;
     peer->_node->connectionEstablished(peer);   
-    aiop2pRecv(peer->_base, peer->connection, 500000, &peer->connection->stream, 65536, clientReceiver, peer);
+    aiop2pRecv(peer->_base, peer->connection, 0, &peer->connection->stream, 65536, clientReceiver, peer);
   } else {
-    peer->connectAfter(1000000);
+    peer->connectAfter(P2P_CONNECT_TIMEOUT);
   }
 }
 
@@ -99,7 +100,7 @@ void p2pPeer::clientNetworkConnectCb(AsyncOpStatus status, asyncBase *base, aioO
     peer->connect();
   } else {
     // Wait and try reconnect
-    peer->connectAfter(1000000);
+    peer->connectAfter(P2P_CONNECT_TIMEOUT);
   }
 }
 
