@@ -141,14 +141,31 @@ int uriParseIpv4(const char **ptr, uriParseCb callback, void *arg)
 int uriParsePath(const char **ptr, uriParseCb callback, void *arg)
 {
   const char *p = *ptr;
+  const char *lastElement = p;
   for (;;) {
     if (isPChar(&p)) {
       continue;
     } else if (*p == '/') {
+      if (p != *ptr) {
+        URIComponent component;
+        component.type = uriCtPathElement;
+        component.raw.data = lastElement;
+        component.raw.size = p-lastElement;
+        callback(&component, arg);
+      }
       p++;
+      lastElement = p;
     } else {
       if (p != *ptr) {
         URIComponent component;
+        
+        // send last fragment
+        component.type = uriCtPathElement;
+        component.raw.data = lastElement;
+        component.raw.size = p-lastElement;
+        callback(&component, arg);
+        
+        // send entire path
         component.type = uriCtPath;
         component.raw.data = *ptr;
         component.raw.size = p-*ptr;
@@ -330,13 +347,41 @@ int uriParseHierPart(const char **ptr, uriParseCb callback, void *arg)
 int uriParseQuery(const char **ptr, uriParseCb callback, void *arg)
 {
   const char *p = *ptr;
+  const char *lastName = p;
+  const char *lastValue = 0;  
+  size_t lastNameSize = 0;
   for (;;) {
-    if (isPChar(&p) || *p == '/' || *p == '?') {
+    if (*p == '=') {
+      lastNameSize = p - lastName;
+      p++;
+      lastValue = p;
+    } else if (*p == '&') {
+      if (lastValue) {
+        URIComponent component;
+        component.type = uriCtQueryElement;
+        component.raw.data = lastName;
+        component.raw.size = lastNameSize;
+        component.raw2.data = lastValue;
+        component.raw2.size = p - lastValue;
+        callback(&component, arg);
+      }
+      p++;
+      lastName = p;
+    } else if (isPChar(&p) || *p == '/' || *p == '?') {
       p++;
       continue;
     } else {
       if (p != *ptr) {
         URIComponent component;
+        if (lastValue) {
+          component.type = uriCtQueryElement;
+          component.raw.data = lastName;
+          component.raw.size = lastNameSize;
+          component.raw2.data = lastValue;
+          component.raw2.size = p - lastValue;        
+          callback(&component, arg);
+        }
+        
         component.type = uriCtQuery;
         component.raw.data = *ptr;
         component.raw.size = p-*ptr;

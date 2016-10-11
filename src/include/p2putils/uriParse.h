@@ -16,7 +16,9 @@ enum uriComponentTy {
   uriCtHostIPv6,
   uriCtHostDNS,
   uriCtPort,
+  uriCtPathElement,
   uriCtPath,
+  uriCtQueryElement,
   uriCtQuery,
   uriCtFragment
 };
@@ -28,9 +30,13 @@ struct URIComponent {
     struct {
       const char *data;
       size_t size;
-    } raw;
+    } raw;  
     int i32;
   };
+  struct {
+    const char *data;
+    size_t size;
+  } raw2;    
 };
 
 typedef void uriParseCb(URIComponent *component, void *arg);

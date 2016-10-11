@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-struct rawData {
+struct RawData {
   uint8_t *data;
   size_t size;
 };
