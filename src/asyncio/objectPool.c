@@ -77,7 +77,7 @@ ObjectList *getOrCreateElement(ObjectPool *pool, const void *type)
   if (index > 0)
     memcpy(newElements, pool->elements, index*sizeof(ObjectList));
   if (index < pool->elementsNum)
-    memcpy(newElements+index+1, pool->elements+index, pool->elementsNum-index);
+    memcpy(newElements+index+1, pool->elements+index, (pool->elementsNum-index)*sizeof(ObjectList));
   
   free(pool->elements);
   pool->elementsNum = newElementsNum;
