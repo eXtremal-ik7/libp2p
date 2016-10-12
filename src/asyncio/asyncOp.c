@@ -14,6 +14,16 @@ static inline uint64_t getPt(uint64_t endTime)
   return (endTime / 1000000) + (endTime % 1000000 != 0);
 }
 
+static inline void acquireSpinlock(aioObjectRoot *object)
+{
+  // TODO: implement
+}
+
+static inline void releaseSpinlock(aioObjectRoot *object)
+{
+  // TODO: implement
+}
+
 void opRingInit(OpRing *buffer, size_t size, uint64_t begin)
 {
   buffer->data = calloc(size, sizeof(void*));
@@ -142,30 +152,66 @@ void checkForDeleteObject(aioObjectRoot *object)
     object->destructor(object);
 }
 
-void cancelIoForParentOp(aioObjectRoot *object, asyncOpRoot *parentOp)
+void cancelIo(aioObjectRoot *object, asyncBase *base)
 {
-  {
-    asyncOpRoot *childOp = object->readQueue.tail;
-    while (childOp) {
-      asyncOpRoot *prev = childOp->executeQueue.prev;
-      if (childOp->arg == parentOp) {
-        childOp->callback = 0;
-        finishOperation(childOp, aosTimeout, 0);
-      }
-      childOp = prev;
+  asyncOpRoot *op;
+  
+  for (;;) {
+    acquireSpinlock(object);
+    op = object->readQueue.head;
+    if (!op) {
+      releaseSpinlock(object);
+      break;
     }
+    
+    if (op->base == base) {
+      object->readQueue.head = op->executeQueue.next;
+      releaseSpinlock(object);
+    } else {
+      releaseSpinlock(object);
+      // TODO: send message to another base
+      return;
+    }
+    
+    if (op->timerId != nullTimer()) {
+      base->methodImpl.stopTimer(op);
+    } else if (op->endTime) {
+      removeFromTimeoutQueue(base, op);
+    }
+    
+    objectRelease(&base->pool, op, op->poolId); 
+    op->finishMethod(op, aosCanceled);
   }
-  {
-    asyncOpRoot *childOp = object->writeQueue.tail;
-    while (childOp) {
-      asyncOpRoot *prev = childOp->executeQueue.prev;
-      if (childOp->arg == parentOp) {
-        childOp->callback = 0;
-        finishOperation(childOp, aosTimeout, 0);        
-      }
-      childOp = prev;
+  
+  for (;;) {
+    acquireSpinlock(object);
+    op = object->writeQueue.head;
+    if (!op) {
+      releaseSpinlock(object);
+      break;
     }
-  }    
+    
+    if (op->base == base) {
+      object->writeQueue.head = op->executeQueue.next;
+      releaseSpinlock(object);
+    } else {
+      releaseSpinlock(object);
+      // TODO send message to another base
+      return;
+    }
+    
+    if (op->timerId != nullTimer()) {
+      base->methodImpl.stopTimer(op);
+    } else if (op->endTime) {
+      removeFromTimeoutQueue(base, op);
+    }
+    
+    objectRelease(&base->pool, op, op->poolId); 
+    op->finishMethod(op, aosCanceled);
+  }
+  
+  
+  checkForDeleteObject(object);
 }
 
 asyncOpRoot *initAsyncOpRoot(asyncBase *base,

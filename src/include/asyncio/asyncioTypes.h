@@ -51,6 +51,7 @@ typedef enum AsyncOpStatus {
   aosSuccess,
   aosTimeout,
   aosDisconnected,
+  aosCanceled,
   aosUnknownError,
   aosMonitoring,
   aosLast

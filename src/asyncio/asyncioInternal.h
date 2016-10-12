@@ -11,18 +11,16 @@ typedef void postEmptyOperationTy(asyncBase*);
 typedef void nextFinishedOperationTy(asyncBase*);
 typedef aioObject *newAioObjectTy(asyncBase*, IoObjectTy, void*);
 typedef void deleteObjectTy(aioObject*);
+typedef void finishOpTy(asyncOp*);
 typedef void startTimerTy(asyncOpRoot*, uint64_t, int);
 typedef void stopTimerTy(asyncOpRoot*);
 typedef void activateTy(asyncOpRoot*);
-typedef void asyncConnectTy(asyncOp*, const HostAddress*, uint64_t);
-typedef void asyncAcceptTy(asyncOp*, uint64_t);
-typedef void asyncReadTy(asyncOp*, uint64_t);
-typedef void asyncWriteTy(asyncOp*, uint64_t);
-typedef void asyncReadMsgTy(asyncOp*, uint64_t);
-typedef void asyncWriteMsgTy(asyncOp*, const HostAddress*, uint64_t);
-typedef void asyncMonitorTy(asyncOp*);
-typedef void asyncMonitorStopTy(asyncOp*);
-
+typedef void asyncConnectTy(asyncOp*, const HostAddress*);
+typedef void asyncAcceptTy(asyncOp*);
+typedef void asyncReadTy(asyncOp*);
+typedef void asyncWriteTy(asyncOp*);
+typedef void asyncReadMsgTy(asyncOp*);
+typedef void asyncWriteMsgTy(asyncOp*, const HostAddress*);
 
 struct asyncImpl {
   postEmptyOperationTy *postEmptyOperation;
@@ -30,6 +28,7 @@ struct asyncImpl {
   newAioObjectTy *newAioObject;
   newAsyncOpTy *newAsyncOp;
   deleteObjectTy *deleteObject;
+  finishOpTy *finishOp;
   startTimerTy *startTimer;
   stopTimerTy *stopTimer;
   activateTy *activate;
@@ -39,8 +38,6 @@ struct asyncImpl {
   asyncWriteTy *write;
   asyncReadMsgTy *readMsg;
   asyncWriteMsgTy *writeMsg;
-  asyncMonitorTy *monitor;
-  asyncMonitorStopTy *montitorStop;
 };
 
 
@@ -75,4 +72,7 @@ struct asyncOp {
   size_t bytesTransferred;
   socketTy acceptSocket;
   HostAddress host;
+
+  void *internalBuffer;
+  size_t internalBufferSize;  
 };

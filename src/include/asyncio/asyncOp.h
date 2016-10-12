@@ -83,7 +83,7 @@ timerTy createTimer(void *arg);
 
 aioObjectRoot *initObjectRoot(int type, size_t size, aioObjectDestructor destructor);
 void checkForDeleteObject(aioObjectRoot *object);
-void cancelIoForParentOp(aioObjectRoot *object, asyncOpRoot *parentOp);
+void cancelIo(aioObjectRoot *object, asyncBase *base);
 
 asyncOpRoot *initAsyncOpRoot(asyncBase *base,
                              const char *nonTimerPool,

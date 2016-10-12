@@ -19,9 +19,6 @@ extern "C" void userEventTrigger(aioObjectRoot *event);
 
 typedef struct selectOp {
   asyncOp info;
-  int useInternalBuffer;
-  void *internalBuffer;
-  size_t internalBufferSize;
 } selectOp;
 
 
@@ -53,6 +50,7 @@ void selectNextFinishedOperation(asyncBase *base);
 aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data);
 asyncOpRoot *selectNewAsyncOp(asyncBase *base);
 void selectDeleteObject(aioObject *object);
+void selectFinishOp(selectOp *op);
 void selectStartTimer(asyncOpRoot *op, uint64_t usTimeout, int count);
 void selectStopTimer(asyncOpRoot *op);
 void selectActivate(asyncOpRoot *op);
@@ -72,6 +70,7 @@ static struct asyncImpl selectImpl = {
   selectNewAioObject,
   selectNewAsyncOp,
   selectDeleteObject,
+  (finishOpTy*)selectFinishOp,
   (startTimerTy*)selectStartTimer,
   (stopTimerTy*)selectStopTimer,
   (activateTy*)selectActivate,
@@ -80,9 +79,7 @@ static struct asyncImpl selectImpl = {
   (asyncReadTy*)selectAsyncRead,
   (asyncWriteTy*)selectAsyncWrite,
   (asyncReadMsgTy*)selectAsyncReadMsg,
-  (asyncWriteMsgTy*)selectAsyncWriteMsg,
-  (asyncMonitorTy*)selectMonitor,
-  (asyncMonitorStopTy*)selectMonitorStop
+  (asyncWriteMsgTy*)selectAsyncWriteMsg
 };
 
 
@@ -190,18 +187,6 @@ static void startOperation(selectOp *op,
                            uint64_t usTimeout)
 {
   selectBase *localBase = (selectBase*)op->info.root.base;
-
-  if (op->useInternalBuffer && (action == actWrite || action == actWriteMsg)) {
-    if (op->internalBuffer == 0) {
-      op->internalBuffer = malloc(op->info.transactionSize);
-      op->internalBufferSize = op->info.transactionSize;      
-    } else if (op->internalBufferSize < op->info.transactionSize) {
-      op->internalBufferSize = op->info.transactionSize;
-      op->internalBuffer = realloc(op->internalBuffer,
-                                   op->info.transactionSize);
-    }
-    memcpy(op->internalBuffer, op->info.buffer, op->info.transactionSize);
-  }
 
   OpLinksMap &links = isWriteOperation(action) ?
     localBase->writeOps : localBase->readOps;
@@ -324,8 +309,7 @@ static void processReadyFds(selectBase *base,
       }
               
       case actWrite : {
-        void *buffer = op->useInternalBuffer ?
-          op->internalBuffer : op->info.buffer;
+        void *buffer = op->info.buffer;
         uint8_t *ptr = (uint8_t*)buffer + op->info.bytesTransferred;
         size_t remaining = op->info.transactionSize - op->info.bytesTransferred;
         ssize_t bytesWritten = write(fd, ptr, remaining);
@@ -354,8 +338,7 @@ static void processReadyFds(selectBase *base,
 
       case actWriteMsg : {
         struct sockaddr_in remoteAddress;
-        void *ptr = op->useInternalBuffer ?
-          op->internalBuffer : op->info.buffer;
+        void *ptr = op->info.buffer;
         remoteAddress.sin_family = op->info.host.family;
         remoteAddress.sin_addr.s_addr = op->info.host.ipv4;
         remoteAddress.sin_port = op->info.host.port;
@@ -466,8 +449,8 @@ asyncOpRoot *selectNewAsyncOp(asyncBase *base)
 {
   selectOp *op = new selectOp;
   if (op) {
-    op->internalBuffer = 0;
-    op->internalBufferSize = 0;
+    op->info.internalBuffer = 0;
+    op->info.internalBufferSize = 0;
   }
 
   return (asyncOpRoot*)op;
@@ -479,6 +462,10 @@ void selectDeleteObject(aioObject *object)
   free(object);
 }
 
+void selectFinishOp(selectOp *op)
+{
+  asyncOpUnlink(op);
+}
 
 void selectStartTimer(asyncOpRoot *op, uint64_t usTimeout, int count)
 {
@@ -535,7 +522,6 @@ void selectAsyncRead(selectOp *op, uint64_t usTimeout)
 
 void selectAsyncWrite(selectOp *op, uint64_t usTimeout)
 {
-  op->useInternalBuffer = !(op->info.root.flags & afNoCopy);
   startOperation(op, actWrite, usTimeout);
 }
 
@@ -550,7 +536,6 @@ void selectAsyncWriteMsg(selectOp *op,
                          const HostAddress *address,
                          uint64_t usTimeout)
 {
-  op->useInternalBuffer = !(op->info.root.flags & afNoCopy);  
   op->info.host = *address;
   startOperation(op, actWriteMsg, usTimeout);
 }

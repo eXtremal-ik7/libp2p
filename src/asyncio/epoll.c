@@ -42,9 +42,6 @@ typedef struct fdStruct {
 
 typedef struct epollOp {
   asyncOp info;
-  int useInternalBuffer;
-  void *internalBuffer;
-  size_t internalBufferSize;
 } epollOp;
 
 
@@ -63,6 +60,7 @@ void epollNextFinishedOperation(asyncBase *base);
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data);
 asyncOpRoot *epollNewAsyncOp(asyncBase *base);
 void epollDeleteObject(aioObject *object);
+void epollFinishOp(epollOp *op);
 void epollStartTimer(asyncOpRoot *op, uint64_t usTimeout, int count);
 void epollStopTimer(asyncOpRoot *op);
 void epollActivate(asyncOpRoot *op);
@@ -85,6 +83,7 @@ static struct asyncImpl epollImpl = {
   epollNewAioObject,
   epollNewAsyncOp,
   epollDeleteObject,
+  (finishOpTy*)epollFinishOp,
   (startTimerTy*)epollStartTimer,
   (stopTimerTy*)epollStopTimer,
   (activateTy*)epollActivate,
@@ -93,9 +92,7 @@ static struct asyncImpl epollImpl = {
   (asyncReadTy*)epollAsyncRead,
   (asyncWriteTy*)epollAsyncWrite,
   (asyncReadMsgTy*)epollAsyncReadMsg,
-  (asyncWriteMsgTy*)epollAsyncWriteMsg,
-  (asyncMonitorTy*)epollMonitor,
-  (asyncMonitorStopTy*)epollMonitorStop
+  (asyncWriteMsgTy*)epollAsyncWriteMsg
 };
 
 static void epollControl(int epollFd, int action, int events, int fd)
@@ -222,19 +219,6 @@ static void startOperation(epollOp *op,
                            uint64_t usTimeout)
 {
   epollBase *localBase = (epollBase *)op->info.root.base;
-
-  if (op->useInternalBuffer && (action == actWrite || action == actWriteMsg)) {
-    if (op->internalBuffer == 0) {
-      op->internalBuffer = malloc(op->info.transactionSize);
-      op->internalBufferSize = op->info.transactionSize;
-    } else if (op->internalBufferSize < op->info.transactionSize) {
-      op->internalBufferSize = op->info.transactionSize;
-      op->internalBuffer = realloc(op->internalBuffer,
-                                   op->info.transactionSize);
-    }
-    memcpy(op->internalBuffer, op->info.buffer, op->info.transactionSize);
-  }
-
   asyncOpLink(getFdStruct(localBase, getFd(op)), op);
 }
 
@@ -345,16 +329,15 @@ static void processReadyFd(epollBase *base,
         op->info.transactionSize - op->info.bytesTransferred
         : (size_t)available;
 
-      read(fd, ptr, readyForRead);
-      op->info.bytesTransferred += readyForRead;
+      ssize_t bytesRead = read(fd, ptr, readyForRead);
+      op->info.bytesTransferred += bytesRead;
       if (op->info.bytesTransferred == op->info.transactionSize ||
           !(op->info.root.flags & afWaitAll))
         finish(op, aosSuccess);
       break;
     }
     case actWrite : {
-      void *buffer = op->useInternalBuffer ?
-                     op->internalBuffer : op->info.buffer;
+      void *buffer = op->info.buffer;
       uint8_t *ptr = (uint8_t*)buffer + op->info.bytesTransferred;
       size_t remaining = op->info.transactionSize - op->info.bytesTransferred;
       ssize_t bytesWritten = write(fd, ptr, remaining);
@@ -381,8 +364,7 @@ static void processReadyFd(epollBase *base,
     }
     case actWriteMsg : {
       struct sockaddr_in remoteAddress;
-      void *ptr = op->useInternalBuffer ?
-                  op->internalBuffer : op->info.buffer;
+      void *ptr = op->info.buffer;
       remoteAddress.sin_family = op->info.host.family;
       remoteAddress.sin_addr.s_addr = op->info.host.ipv4;
       remoteAddress.sin_port = op->info.host.port;
@@ -477,8 +459,8 @@ asyncOpRoot *epollNewAsyncOp(asyncBase *base)
 {
   epollOp *op = malloc(sizeof(epollOp));
   if (op) {
-    op->internalBuffer = 0;
-    op->internalBufferSize = 0;
+    op->info.internalBuffer = 0;
+    op->info.internalBufferSize = 0;
   }
 
   return (asyncOpRoot*)op;
@@ -490,6 +472,10 @@ void epollDeleteObject(aioObject *object)
   free(object);
 }
 
+void epollFinishOp(epollOp *op)
+{
+  asyncOpUnlink(op);
+}
 
 void epollStartTimer(asyncOpRoot *op, uint64_t usTimeout, int count)
 {
@@ -547,7 +533,6 @@ void epollAsyncRead(epollOp *op, uint64_t usTimeout)
 
 void epollAsyncWrite(epollOp *op, uint64_t usTimeout)
 {
-  op->useInternalBuffer = !(op->info.root.flags & afNoCopy);
   startOperation(op, actWrite, usTimeout);
 }
 
@@ -562,7 +547,6 @@ void epollAsyncWriteMsg(epollOp *op,
                         const HostAddress *address,
                         uint64_t usTimeout)
 {
-  op->useInternalBuffer = !(op->info.root.flags & afNoCopy);
   op->info.host = *address;
   startOperation(op, actWriteMsg, usTimeout);
 }

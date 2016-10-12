@@ -123,7 +123,7 @@ void p2pPeer::nodeMsgHandler()
     switch (header.type) {
       case p2pMsgRequest : {
         if (p2pRequestCb *handler = _node->getRequestHandler()) {
-          handler(this, header.id, connection->stream.data(), connection->stream.sizeOf());
+          handler(this, header.id, connection->stream.data(), connection->stream.sizeOf(), _node->getRequestHandlerArg());
         } else {
           valid = false;
         }

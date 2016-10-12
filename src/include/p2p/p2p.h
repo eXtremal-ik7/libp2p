@@ -9,7 +9,7 @@ class p2pPeer;
 class xmstream;
 
 typedef void p2pNodeCb(p2pPeer*);
-typedef void p2pRequestCb(p2pPeer*, uint64_t, void*, size_t);
+typedef void p2pRequestCb(p2pPeer*, uint64_t, void*, size_t, void*);
 typedef void p2pSignalCb(p2pPeer*, void*, size_t, void*);
 
 struct p2pEventHandler {
@@ -90,6 +90,7 @@ private:
   // node data
   aioObject *_listenerSocket;  
   p2pRequestCb *_requestHandler;
+  void *_requestHandlerArg;
   p2pSignalCb *_signalHandler;  
   void *_signalHandlerArg;
   bool _coroutineMode;
@@ -99,7 +100,7 @@ private:
 
   p2pNode(asyncBase *base, const char *clusterName, bool coroutineMode) :
     _base(base), _clusterName(clusterName), _coroutineMode(coroutineMode),
-    _listenerSocket(0), _requestHandler(0), _signalHandler(0) {}
+    _listenerSocket(0), _requestHandler(0), _requestHandlerArg(0), _signalHandler(0) {}
   
   void addHandler(p2pNodeCb *callback, void *arg, uint64_t timeout) {
     p2pEventHandler handler;
@@ -153,7 +154,13 @@ public:
 
   // node api
   p2pRequestCb *getRequestHandler() { return _requestHandler; }
-  void setRequestHandler(p2pRequestCb *handler) { _requestHandler = handler; }
+  void *getRequestHandlerArg() { return _requestHandlerArg; }
+  
+  void setRequestHandler(p2pRequestCb *handler, void *arg) {
+    _requestHandler = handler;
+    _requestHandlerArg = arg;
+  }
+  
   void setSignalHandler(p2pSignalCb *handler, void *arg) {
     _signalHandler = handler;
     _signalHandlerArg = arg;

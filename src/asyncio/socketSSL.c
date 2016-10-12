@@ -62,10 +62,10 @@ static void finish(asyncOpRoot *root, int status)
   SSLSocket *S = (SSLSocket*)root->object;  
   
     // cleanup child operation after timeout
-  if (status == aosTimeout)
-    cancelIoForParentOp((aioObjectRoot*)S->object, root);
+  if (status == aosTimeout || status == aosCanceled)
+    cancelIo((aioObjectRoot*)S->object, root->base);
   
-  if (root->callback) {
+  if (root->callback && status != aosCanceled) {
     switch (root->opCode) {
       case sslOpConnect :
         ((sslConnectCb*)root->callback)(status, root->base, S, root->arg);

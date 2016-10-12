@@ -5,6 +5,7 @@
 #include "asyncio/socket.h"
 #include "asyncioInternal.h"
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 const char *poolId = "asyncIo";
@@ -46,16 +47,16 @@ static void startMethod(asyncOpRoot *root)
       // TODO: return error
       break; 
     case actRead :
-      root->base->methodImpl.read(op, 0);
+      root->base->methodImpl.read(op);
       break;      
     case actWrite :
-      root->base->methodImpl.write(op, 0);      
+      root->base->methodImpl.write(op);      
       break;      
     case actReadMsg :
-      root->base->methodImpl.readMsg(op, 0);      
+      root->base->methodImpl.readMsg(op);
       break;      
     case actWriteMsg :
-      root->base->methodImpl.writeMsg(op, &op->host, 0);
+      root->base->methodImpl.writeMsg(op, &op->host);
       break;
   }
 }
@@ -66,12 +67,11 @@ static void finishMethod(asyncOpRoot *root, int status)
   asyncOp *op = (asyncOp*)root;
   
     // cleanup child operation after timeout
-  if (status == aosTimeout) {
-    // TODO: remove socket from i/o multiplexer
-  }
+  if (status == aosTimeout || status == aosCanceled)
+    root->base->methodImpl.finishOp(op);
     
   // Do callback if need
-  if (root->callback) {
+  if (root->callback && status != aosCanceled) {
     aioObject *object = (aioObject*)root->object;
     switch (root->opCode) {
       case actConnect :
@@ -121,6 +121,20 @@ static asyncOp *initAsyncOp(asyncBase *base,
     op->dynamicArray = dynamicArray;
   op->transactionSize = transactionSize;
   op->bytesTransferred = 0;  
+  
+  if ((opCode == actWrite || opCode == actWriteMsg) && !(flags & afNoCopy)) {
+    if (op->internalBuffer == 0) {
+      op->internalBuffer = malloc(transactionSize);
+      op->internalBufferSize = transactionSize;
+    } else if (op->internalBufferSize < transactionSize) {
+      op->internalBufferSize = transactionSize;
+      op->internalBuffer = realloc(op->internalBuffer, transactionSize);
+    }
+    
+    memcpy(op->internalBuffer, buffer, transactionSize);
+    op->buffer = op->internalBuffer;
+  }
+  
   return op;
 }
 
@@ -322,7 +336,7 @@ void aioConnect(asyncBase *base,
 {
   asyncOp *newOp = initAsyncOp(base, op, callback, arg, 0, 0, 0, afNone, usTimeout, actConnect);
   if (addToExecuteQueue((aioObjectRoot*)op, (asyncOpRoot*)newOp, 1))
-    ((asyncOpRoot*)newOp)->base->methodImpl.connect(newOp, address, 0);
+    ((asyncOpRoot*)newOp)->base->methodImpl.connect(newOp, address);
 }
 
 
@@ -334,7 +348,7 @@ void aioAccept(asyncBase *base,
 {
   asyncOp *newOp = initAsyncOp(base, op, callback, arg, 0, 0, 0, afNone, usTimeout, actAccept);
   if (addToExecuteQueue((aioObjectRoot*)op, (asyncOpRoot*)newOp, 0))
-    ((asyncOpRoot*)newOp)->base->methodImpl.accept(newOp, 0);
+    ((asyncOpRoot*)newOp)->base->methodImpl.accept(newOp);
 }
 
 
