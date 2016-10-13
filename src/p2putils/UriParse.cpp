@@ -367,7 +367,9 @@ int uriParseQuery(const char **ptr, uriParseCb callback, void *arg)
       }
       p++;
       lastName = p;
-    } else if (isPChar(&p) || *p == '/' || *p == '?') {
+    } else if (isPChar(&p)) {
+      continue;
+    } else if (*p == '/' || *p == '?') {
       p++;
       continue;
     } else {
@@ -399,7 +401,9 @@ int uriParseFragment(const char **ptr, uriParseCb callback, void *arg)
 {
   const char *p = *ptr;
   for (;;) {
-    if (isPChar(&p) || *p == '/' || *p == '?') {
+    if (isPChar(&p)) {
+      continue;
+    } else if (*p == '/' || *p == '?') {
       p++;
       continue;
     } else {
