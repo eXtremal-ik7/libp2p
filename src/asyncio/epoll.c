@@ -428,7 +428,7 @@ void epollNextFinishedOperation(asyncBase *base)
       } else {
         if (events[n].events & EPOLLIN)
           processReadyFd(localBase, events[n].data.fd, 1);
-        else if (events[n].events & EPOLLOUT)
+        if (events[n].events & EPOLLOUT)
           processReadyFd(localBase, events[n].data.fd, 0);
       }
     }

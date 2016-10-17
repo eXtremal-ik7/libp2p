@@ -55,12 +55,19 @@ template<typename Type> size_t xitoa(Type value, char *out)
 
 template<typename Type> Type xatoi(const char *in)
 {
+  int minus = 0;
   Type lvalue = 0;
   const char *p = in;
+  if (*p == '-') {
+    minus = 1;
+    p++;
+  } else if (*p == '+') {
+    p++;
+  }
   while (*p)
     lvalue = (lvalue*10) + (*p++ - '0');
   
-  return lvalue;
+  return minus ? -lvalue : lvalue;
 }
 
 #endif //__LIBP2P_STREXTRAS_H_
