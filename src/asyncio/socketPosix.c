@@ -21,6 +21,9 @@ socketTy socketCreate(int af, int type, int protocol, int isAsync)
     int current = fcntl(hSocket, F_GETFL);
     fcntl(hSocket, F_SETFL, O_NONBLOCK | current);
   }
+  
+  int optval = 1;
+  setsockopt(hSocket, IPPROTO_TCP, TCP_NODELAY, (char *)&optval, sizeof(optval) );
   return hSocket;
 #endif
 }

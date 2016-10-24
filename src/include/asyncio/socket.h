@@ -11,6 +11,7 @@
 typedef SOCKET socketTy;
 #define INVALID_SOCKET INVALID_HANDLE_VALUE
 #elif defined(OS_COMMONUNIX)
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/types.h>

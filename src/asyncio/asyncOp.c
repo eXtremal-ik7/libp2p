@@ -372,7 +372,7 @@ static inline void startOperation(asyncOpRoot *op, asyncBase *previousOpBase)
 {
   // TODO: use pipe for send operation to another async base
   uint64_t timePt = ((uint64_t)time(0))*1000000;
-  if (op->endTime && op->endTime >= timePt)
+  if (!op->endTime || op->endTime >= timePt)
     op->startMethod(op);
 }
 
