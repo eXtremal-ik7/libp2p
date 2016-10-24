@@ -1,17 +1,9 @@
+#undef _FORTIFY_SOURCE
 #include <setjmp.h>
 #include <stdlib.h>
 #include <ucontext.h>
 #include "asyncio/coroutine.h"
-
 #include "config.h"
-#ifdef OS_LINUX
-// _longjmp causes uninitialized stack frame
-// TODO: why??
-void __libc_longjmp(jmp_buf env, int val);
-#define LONGJMP __libc_longjmp
-#else
-#define LONGJMP _longjmp
-#endif
 
 typedef struct coroutineTy {
   struct coroutineTy *prev;
@@ -121,7 +113,7 @@ void coroutineCall(coroutineTy *coroutine)
     coroutine->prev = currentCoroutine;
     currentCoroutine = coroutine;
     if (_setjmp(coroutine->prev->context) == 0)
-      LONGJMP(coroutine->context, 1);
+      _longjmp(coroutine->context, 1);
   }
 }
 
@@ -131,6 +123,6 @@ void coroutineYield()
     coroutineTy *old = currentCoroutine;
     currentCoroutine = currentCoroutine->prev;
     if (_setjmp(old->context) == 0)
-      LONGJMP(currentCoroutine->context, 1);
+      _longjmp(currentCoroutine->context, 1);
   }
 }
