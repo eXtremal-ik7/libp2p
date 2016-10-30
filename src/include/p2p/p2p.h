@@ -17,6 +17,8 @@ struct p2pEventHandler {
   void *arg;
   coroutineTy *coroutine;
   time_t endPoint;
+  void *out;
+  size_t outSize;
 };  
 
 struct p2pPeer {
@@ -66,12 +68,14 @@ public:
     handlersMap[id] = handler;
   }
   
-  void addHandler(uint32_t id, coroutineTy *coroutine, uint64_t timeout) {
+  void addHandler(uint32_t id, coroutineTy *coroutine, uint64_t timeout, void *out, size_t outSize) {
     p2pEventHandler handler;
     handler.callback = 0;
     handler.arg = 0;
     handler.coroutine = coroutine;
     handler.endPoint = timeout ? time(0) + (timeout/1000000) : 0;
+    handler.out = out;
+    handler.outSize = outSize;
     handlersMap[id] = handler;
   }
 };
@@ -150,7 +154,7 @@ public:
   // client api
   bool connected();
   bool ioWaitForConnection(uint64_t timeout);
-  p2pPeer *ioRequest(void *data, size_t size, uint64_t timeout);
+  bool ioRequest(void *data, size_t size, uint64_t timeout, void *out, size_t outSize);
 
   // node api
   p2pRequestCb *getRequestHandler() { return _requestHandler; }

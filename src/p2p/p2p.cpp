@@ -45,6 +45,10 @@ void p2pPeer::clientReceiver(int status, asyncBase *base, p2pConnection *connect
         auto It = peer->handlersMap.find(header.id);
         if (It != peer->handlersMap.end()) {
           p2pEventHandler &handler = It->second;
+          if (header.size > handler.outSize)
+            break;
+          
+          memcpy(handler.out, peer->connection->stream.data(), peer->connection->stream.sizeOf());
           if (handler.coroutine) {
             peer->_node->setLastActivePeer(peer);
             coroutineCall(handler.coroutine);
@@ -274,7 +278,7 @@ bool p2pNode::ioWaitForConnection(uint64_t timeout)
 }
 
 
-p2pPeer *p2pNode::ioRequest(void *data, size_t size, uint64_t timeout)
+bool p2pNode::ioRequest(void *data, size_t size, uint64_t timeout, void *out, size_t outSize)
 {
   // TODO: implement strategy for peer select
   if (_connections.empty())
@@ -287,13 +291,13 @@ p2pPeer *p2pNode::ioRequest(void *data, size_t size, uint64_t timeout)
     
     uint32_t id = _lastId++;
     aiop2pSend(peer->_base, peer->connection, timeout, data, p2pHeader(id, p2pMsgRequest, size), 0, 0);
-    peer->addHandler(id, coroutineCurrent(), timeout);
+    peer->addHandler(id, coroutineCurrent(), timeout, out, outSize);
     coroutineYield();    
     if (_lastActivePeer)
-      return _lastActivePeer;
+      return true;
   }
   
-  return 0;
+  return false;
 }
 
 
