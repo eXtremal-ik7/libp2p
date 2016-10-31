@@ -1,5 +1,6 @@
 #undef _FORTIFY_SOURCE
 #include <setjmp.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <ucontext.h>
 #include "asyncio/coroutine.h"
@@ -12,14 +13,21 @@ typedef struct coroutineTy {
   jmp_buf context;
 } coroutineTy;
 
-typedef struct fiberContextTy {
-  coroutineTy *coroutine;
-  coroutineProcTy *proc;
-  void *arg;
-} fiberContextTy;
-
 __thread coroutineTy *currentCoroutine = 0;
 __thread char cleanupFiberStack[4096];
+
+#include <stdio.h>
+void splitPtr(void *ptr, unsigned *lo, unsigned *hi)
+{
+  uintptr_t p = (uintptr_t)ptr;
+  *lo = p & 0xFFFFFFFF;
+  *hi = p >> 32;
+}
+
+void *makePtr(unsigned lo, unsigned hi)
+{
+  return (void*)((((intptr_t)hi) << 32) | lo);
+}
 
 static void fiberDestroy()
 {
@@ -31,13 +39,14 @@ static void fiberDestroy()
   _longjmp(currentCoroutine->context, 1);
 }
 
-static void fiberStart(void *arg)
+static void fiberStart(unsigned coroPtrLo, unsigned coroPtrHi, unsigned procPtrLo, unsigned procPtrHi, unsigned argPtrLo, unsigned argPtrHi)
 {
-  fiberContextTy fiberArg = *((fiberContextTy*)arg);
-  free(arg);
+  coroutineTy *coroutine = makePtr(coroPtrLo, coroPtrHi);
+  coroutineProcTy *proc = makePtr(procPtrLo, procPtrHi);
+  void *arg = makePtr(argPtrLo, argPtrHi);  
   
-  if (_setjmp(fiberArg.coroutine->context) != 0) {
-    fiberArg.proc(fiberArg.arg); 
+  if (_setjmp(coroutine->context) != 0) {
+    proc(arg); 
     
     // change stack frame before its release
     // switch to temporary cleanup fiber    
@@ -85,15 +94,14 @@ coroutineTy *coroutineNew(coroutineProcTy entry, void *arg, unsigned stackSize)
     // Get point for 'longjmp' function
     // Switch back to caller fiber    
     ucontext_t callerCtx;
-    fiberContextTy *fiberArg = malloc(sizeof(fiberContextTy));
-    fiberArg->coroutine = coroutine;
-    fiberArg->proc = entry;
-    fiberArg->arg = arg;
     coroutine->initialContext.uc_link = &callerCtx;
-    makecontext(&coroutine->initialContext,
-                (void(*)())fiberStart,
-                sizeof(void*)/sizeof(int),
-                fiberArg);
+    
+    // TODO: now only for x86_64    
+    unsigned coroPtrLo, coroPtrHi, procPtrLo, procPtrHi, argPtrLo, argPtrHi;
+    splitPtr(coroutine, &coroPtrLo, &coroPtrHi);
+    splitPtr(entry, &procPtrLo, &procPtrHi);
+    splitPtr(arg, &argPtrLo, &argPtrHi);
+    makecontext(&coroutine->initialContext, (void(*)())fiberStart, 6, coroPtrLo, coroPtrHi, procPtrLo, procPtrHi, argPtrLo, argPtrHi);
     swapcontext(&callerCtx, &coroutine->initialContext);
   }
   

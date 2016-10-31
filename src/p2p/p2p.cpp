@@ -187,7 +187,7 @@ void p2pPeer::accept(bool coroutineMode, p2pConnection *connectionArg)
 {
   connection = connectionArg;
   if (coroutineMode) {
-    coroutineTy *handlerProc = coroutineNew(nodeMsgHandlerEP, this, 0x10000);
+    coroutineTy *handlerProc = coroutineNew(nodeMsgHandlerEP, this, 0x100000);
     coroutineCall(handlerProc);
   }
 }
