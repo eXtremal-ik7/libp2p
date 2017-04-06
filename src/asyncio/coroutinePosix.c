@@ -1,5 +1,6 @@
 #undef _FORTIFY_SOURCE
 #include <setjmp.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <ucontext.h>
@@ -74,6 +75,11 @@ int coroutineFinished(coroutineTy *coroutine)
 /// coroutineNew - create coroutine
 coroutineTy *coroutineNew(coroutineProcTy entry, void *arg, unsigned stackSize)
 {
+  sigset_t old;
+  sigset_t all;
+  sigfillset(&all);
+  sigprocmask(SIG_SETMASK, &all, &old);  
+  
   // Create main fiber if it not exists
   if (currentCoroutine == 0)
     currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
@@ -105,6 +111,7 @@ coroutineTy *coroutineNew(coroutineProcTy entry, void *arg, unsigned stackSize)
     swapcontext(&callerCtx, &coroutine->initialContext);
   }
   
+  sigprocmask(SIG_SETMASK, &old, 0);  
   return coroutine;
 }
 
