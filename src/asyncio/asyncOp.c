@@ -166,6 +166,8 @@ void cancelIo(aioObjectRoot *object, asyncBase *base)
     
     if (op->base == base) {
       object->readQueue.head = op->executeQueue.next;
+      if (object->readQueue.head == 0)
+        object->readQueue.tail = 0;
       releaseSpinlock(object);
     } else {
       releaseSpinlock(object);
@@ -179,8 +181,8 @@ void cancelIo(aioObjectRoot *object, asyncBase *base)
       removeFromTimeoutQueue(base, op);
     }
     
-    objectRelease(&base->pool, op, op->poolId); 
     op->finishMethod(op, aosCanceled);
+    objectRelease(&base->pool, op, op->poolId);     
   }
   
   for (;;) {
@@ -193,6 +195,8 @@ void cancelIo(aioObjectRoot *object, asyncBase *base)
     
     if (op->base == base) {
       object->writeQueue.head = op->executeQueue.next;
+      if (object->writeQueue.head == 0)
+        object->writeQueue.tail = 0;      
       releaseSpinlock(object);
     } else {
       releaseSpinlock(object);
@@ -206,8 +210,8 @@ void cancelIo(aioObjectRoot *object, asyncBase *base)
       removeFromTimeoutQueue(base, op);
     }
     
-    objectRelease(&base->pool, op, op->poolId); 
     op->finishMethod(op, aosCanceled);
+    objectRelease(&base->pool, op, op->poolId);     
   }
   
   

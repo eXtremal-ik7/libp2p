@@ -392,7 +392,7 @@ void epollNextFinishedOperation(asyncBase *base)
 
   while (1) {
     do {
-      nfds = epoll_wait(localBase->epollFd, events, MAX_EVENTS, -1);
+      nfds = epoll_wait(localBase->epollFd, events, MAX_EVENTS, 1000);
     } while (nfds <= 0 && errno == EINTR);
     
     processTimeoutQueue(base);

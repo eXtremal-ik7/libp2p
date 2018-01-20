@@ -283,7 +283,8 @@ void aioSslWrite(asyncBase *base,
   SSLOp *newOp = allocSSLOp(base, socket, callback, arg, buffer, size, afNone, sslOpWrite, usTimeout);  
   size_t writeSize = copyFromOut(socket, newOp);  
   aioWrite(base, socket->object, newOp->sslBuffer, writeSize, afWaitAll, usTimeout, writeProc, newOp);
-  releaseObject(base, newOp, newOp->root.poolId);
+  // TODO: check for release
+  // releaseObject(base, newOp, newOp->root.poolId);
 }
 
 int ioSslConnect(asyncBase *base, SSLSocket *socket, const HostAddress *address, uint64_t usTimeout)
