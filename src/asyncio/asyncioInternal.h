@@ -45,7 +45,8 @@ struct asyncBase {
   enum AsyncMethod method;
   struct asyncImpl methodImpl;
   struct ObjectPool pool;
-  OpRing timeGrid;
+  struct pageMap timerMap;
+  time_t lastCheckPoint;  
 #ifndef NDEBUG
   int opsCount;
 #endif

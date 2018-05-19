@@ -36,13 +36,9 @@ typedef struct ListImpl {
   asyncOpRoot *next;
 } ListImpl;
 
-typedef struct OpRing {
-  asyncOpRoot **data;
-  size_t size;
-  size_t offset;
-  uint64_t begin;
-  asyncOpRoot *other;
-} OpRing;
+typedef struct pageMap {
+  asyncOpRoot ***map;
+} pageMap;
 
 struct aioObjectRoot {
   List readQueue;
@@ -71,12 +67,10 @@ struct asyncOpRoot {
   int counter;  
 };
 
-void opRingInit(OpRing *buffer, size_t size, uint64_t begin);
-uint64_t opRingBegin(OpRing *buffer);
-asyncOpRoot *opRingGet(OpRing *buffer, uint64_t pt);
-void opRingShift(OpRing *buffer, uint64_t newBegin);
-void opRingPop(OpRing *buffer, uint64_t pt);
-void opRingPush(OpRing *buffer, asyncOpRoot *op, uint64_t pt);
+void pageMapInit(pageMap *map);
+asyncOpRoot *pageMapExtractAll(pageMap *map, time_t tm);
+void pageMapAdd(pageMap *map, asyncOpRoot *op);
+void pageMapRemove(pageMap *map, asyncOpRoot *op);
 
 timerTy nullTimer();
 timerTy createTimer(void *arg);

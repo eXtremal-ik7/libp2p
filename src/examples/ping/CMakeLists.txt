@@ -9,7 +9,7 @@ endif()
 
 add_executable(aioping ${AIOPingSources})
 
-target_link_libraries(aioping asyncio-0.3)
+target_link_libraries(aioping asyncio-0.4)
 if (WIN32)
   target_link_libraries(aioping ws2_32 mswsock)
 endif()

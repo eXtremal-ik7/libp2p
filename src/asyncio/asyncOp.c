@@ -9,6 +9,8 @@
 #include <signal.h>
 #endif
 
+#define PAGE_MAP_SIZE (1u << 16)
+
 static inline uint64_t getPt(uint64_t endTime)
 {
   return (endTime / 1000000) + (endTime % 1000000 != 0);
@@ -24,93 +26,67 @@ static inline void releaseSpinlock(aioObjectRoot *object)
   // TODO: implement
 }
 
-void opRingInit(OpRing *buffer, size_t size, uint64_t begin)
+static inline void pageMapKeys(time_t tm, uint32_t *lo, uint32_t *hi)
 {
-  buffer->data = calloc(size, sizeof(void*));
-  buffer->size = size;
-  buffer->begin = begin;
-  buffer->offset = 0;
-  buffer->other = 0;
+  uint32_t ltm = (uint32_t)tm;
+  *hi = ltm >> 16;
+  *lo = ltm & 0xFFFF;
 }
 
-uint64_t opRingBegin(OpRing *buffer)
+static inline void *pageMapAlloc()
 {
-  return buffer->begin;
+  return calloc(PAGE_MAP_SIZE, sizeof(void*));
 }
 
-asyncOpRoot *opRingGet(OpRing *buffer, uint64_t pt)
+void pageMapInit(pageMap *map)
 {
-  uint64_t distance = pt - buffer->begin;
-  if (distance < buffer->size) {
-    size_t index = (buffer->offset + distance) % buffer->size;
-    return buffer->data[index];
+  map->map = (asyncOpRoot***)pageMapAlloc();
+}
+
+asyncOpRoot *pageMapExtractAll(pageMap *map, time_t tm)
+{
+  uint32_t lo;
+  uint32_t hi;
+  pageMapKeys(tm, &lo, &hi);
+  asyncOpRoot **p1 = map->map[hi];
+  if (p1) {
+    asyncOpRoot *first = p1[lo];
+    p1[lo] = 0;
+    return first;
   } else {
     return 0;
   }
 }
 
-void opRingShift(OpRing *buffer, uint64_t newBegin)
+void pageMapAdd(pageMap *map, asyncOpRoot *op)
 {
-  uint64_t distance = newBegin - buffer->begin;
-  if (distance == 0)
-    return;
-  
-  size_t newOffset = buffer->offset + distance;
-  if (distance < buffer->size) {
-    size_t d1;
-    size_t d2;
-    int rotate = newOffset > buffer->size;
-    if (rotate) {
-      newOffset %= buffer->size;
-      d1 = buffer->size - buffer->offset;
-      d2 = newOffset;
-    } else {
-      d1 = newOffset - buffer->offset;
-      d2 = 0;
-    }
-
-    memset(&buffer->data[buffer->offset], 0, d1*sizeof(void*));
-    memset(buffer->data, 0, d2*sizeof(void*));
-  } else {
-    memset(buffer->data, 0, sizeof(void*)*buffer->size);    
-  }
-  
-  buffer->begin = newBegin;
-  buffer->offset = newOffset;
-  
-  // TODO: move from other to main grid
-}
-
-void opRingPop(OpRing *buffer, uint64_t pt)
-{
-  uint64_t distance = pt-buffer->begin;
-  if (distance < buffer->size) {
-    size_t index = (buffer->offset + distance) % buffer->size;
-    if (buffer->data[index])
-      buffer->data[index] = buffer->data[index]->timeoutQueue.next;
-  } else {
-    if (buffer->other)
-      buffer->other = buffer->other->timeoutQueue.next;
-  }
-}
-
-void opRingPush(OpRing *buffer, asyncOpRoot *op, uint64_t pt)
-{
-  asyncOpRoot *oldOp;
-  uint64_t distance = pt-buffer->begin;
-  if (distance < buffer->size) {
-    size_t index = (buffer->offset + distance) % buffer->size;
-    oldOp = buffer->data[index];
-    buffer->data[index] = op;
-  } else {
-    oldOp = buffer->other;
-    buffer->other = op;
+  uint32_t lo;
+  uint32_t hi;
+  pageMapKeys(getPt(op->endTime), &lo, &hi);
+  asyncOpRoot **p1 = map->map[hi];
+  if (!p1) {
+    p1 = (asyncOpRoot**)pageMapAlloc();
+    map->map[hi] = p1;
   }
   
   op->timeoutQueue.prev = 0;
-  op->timeoutQueue.next = oldOp;
-  if (oldOp)
-    oldOp->timeoutQueue.prev = op;  
+  op->timeoutQueue.next = p1[lo];
+  p1[lo] = op;
+}
+
+void pageMapRemove(pageMap *map, asyncOpRoot *op)
+{
+  uint32_t lo;
+  uint32_t hi;
+  pageMapKeys(getPt(op->endTime), &lo, &hi);
+  asyncOpRoot **p1 = map->map[hi];
+  if (p1 && op == p1[lo])
+    p1[lo] = op->timeoutQueue.next;
+  
+  if (op->timeoutQueue.prev)
+    op->timeoutQueue.prev->timeoutQueue.next = op->timeoutQueue.next;
+  if (op->timeoutQueue.next)
+    op->timeoutQueue.next->timeoutQueue.prev = op->timeoutQueue.prev;
 }
 
 timerTy nullTimer()
@@ -330,34 +306,24 @@ asyncOpRoot *removeFromExecuteQueue(asyncOpRoot *op)
 void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op)
 {
   // TODO acquireSpinlock(base)
-  opRingPush(&base->timeGrid, op, getPt(op->endTime));
+  pageMapAdd(&base->timerMap, op);
   // TODO releaseSpinlock(base)
 }
 
 
 void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op)
 {
-  if (op->timeoutQueue.prev) {
-    op->timeoutQueue.prev->timeoutQueue.next = op->timeoutQueue.next;
-  } else {
-    assert(opRingGet(&base->timeGrid, getPt(op->endTime)) == op && "opRing lost operation found");
-    opRingPop(&base->timeGrid, getPt(op->endTime));
-  }
-  if (op->timeoutQueue.next)
-    op->timeoutQueue.next->timeoutQueue.prev = op->timeoutQueue.prev;
+  pageMapRemove(&base->timerMap, op);
 }
 
 void processTimeoutQueue(asyncBase *base)
 {
   // check timeout queue
-  uint64_t currentTime = time(0);
-  uint64_t begin = opRingBegin(&base->timeGrid);
-  if (!(begin < currentTime))
-    return;
-  
-  while (begin < currentTime) {
+  time_t currentTime = time(0);  
+  time_t begin = base->lastCheckPoint;
+  for (; begin <= currentTime; begin++) {
     // TODO acquireSpinlock(base)
-    asyncOpRoot *op = opRingGet(&base->timeGrid, begin);
+    asyncOpRoot *op = pageMapExtractAll(&base->timerMap, begin);
     // TODO releaseSpinlock(base)
     while (op) {
       asyncOpRoot *next = op->timeoutQueue.next;
@@ -367,8 +333,9 @@ void processTimeoutQueue(asyncBase *base)
       
     begin++;
   }
+  
   // TODO acquireSpinlock(base)
-  opRingShift(&base->timeGrid, currentTime);
+  base->lastCheckPoint = currentTime;
   // TODO releaseSpinlock(base)
 }
 

@@ -229,7 +229,9 @@ asyncBase *createAsyncBase(AsyncMethod method)
 #ifndef NDEBUG
   base->opsCount = 0;
 #endif
-  opRingInit(&base->timeGrid, 1024, time(0));
+  pageMapInit(&base->timerMap);
+  base->lastCheckPoint = time(0);
+  
   return base;
 }
 

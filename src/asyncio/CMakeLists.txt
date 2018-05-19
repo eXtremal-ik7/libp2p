@@ -1,6 +1,5 @@
 set(Sources asyncio.c
   asyncOp.c
-  cstl.c
   objectPool.c
   dynamicBuffer.c
   timer.c
@@ -30,20 +29,20 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
   add_definitions(-fPIC)
 endif ()
 
-add_library(asyncio-0.3 STATIC ${Sources})
+add_library(asyncio-0.4 STATIC ${Sources})
 if (HTTP_ENABLED)
-  add_dependencies(asyncio-0.3 p2putils)
+  add_dependencies(asyncio-0.4 p2putils)
 endif()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
-  target_link_libraries(asyncio-0.3 rt)
+  target_link_libraries(asyncio-0.4 rt)
 endif()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "QNX")
-  target_link_libraries(asyncio-0.3 socket)
+  target_link_libraries(asyncio-0.4 socket)
 endif()
 
 install(
-  TARGETS asyncio-0.3
+  TARGETS asyncio-0.4
   ARCHIVE DESTINATION lib
 )
