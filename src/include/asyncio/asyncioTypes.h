@@ -2,11 +2,11 @@
 #define __ASYNCTYPES_H_
 
 #include "config.h"
-#include "asyncio/asyncOp.h"
 #include "asyncio/socket.h"
+#include "asyncio/asyncOp.h"
 
 #if defined(OS_WINDOWS)
-#include <Windows.h>
+#include <windows.h>
 
 typedef HANDLE iodevTy;
 #elif defined(OS_COMMONUNIX)
@@ -17,7 +17,6 @@ typedef int iodevTy;
 typedef enum IoObjectTy {
   ioObjectUserEvent = 0,
   ioObjectSocket,
-  ioObjectSocketSyn,
   ioObjectDevice,
   ioObjectUserDefined
 } IoObjectTy;
@@ -30,9 +29,7 @@ typedef enum IoActionTy {
   actRead,
   actWrite,
   actReadMsg,
-  actWriteMsg,
-  actMonitor,
-  actMonitorStop
+  actWriteMsg
 } IoActionTy;
 
 
@@ -52,8 +49,8 @@ typedef enum AsyncOpStatus {
   aosTimeout,
   aosDisconnected,
   aosCanceled,
+  aosBufferTooSmall,
   aosUnknownError,
-  aosMonitoring,
   aosLast
 } AsyncOpStatus;
 
@@ -64,11 +61,6 @@ typedef enum AsyncFlags {
   afNoCopy = 2,
   afRealtime = 4
 } AsyncFlags;
-
-typedef enum AsyncMonitorState {
-  monitorStart = 0,
-  monitorStop
-} AsyncMonitorState;
 
 
 typedef struct asyncBase asyncBase;

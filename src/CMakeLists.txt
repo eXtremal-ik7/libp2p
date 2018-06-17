@@ -3,7 +3,9 @@ cmake_minimum_required(VERSION 2.8)
 set(CMAKE_CXX_FLAGS "-std=c++11")
 
 if (WIN32)
-  include_directories(${CMAKE_SOURCE_DIR}/msvc/include)
+  if(MSVC)
+    include_directories(${CMAKE_SOURCE_DIR}/msvc/include)
+  endif(MSVC)
   set(OS_WINDOWS 1)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(OS_LINUX 1)
@@ -45,8 +47,17 @@ include_directories(
 
 option(SSL_ENABLED "SSL support (OpenSSL is required)" ON)
 option(HTTP_ENABLED "HTTP protocol support" ON)
+option(TEST_ENABLED "Build tests" OFF)
+
+if (SSL_ENABLED)
+  find_package(OpenSSL REQUIRED)
+endif()
 
 add_subdirectory(asyncio)
 add_subdirectory(p2putils)
 add_subdirectory(p2p)
 add_subdirectory(examples)
+
+if (TEST_ENABLED)
+  add_subdirectory(test)
+endif()

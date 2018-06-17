@@ -1,6 +1,6 @@
 #include "asyncio/device.h"
 #ifdef OS_WINDOWS
-#include <Windows.h>
+#include <windows.h>
 #endif
 
 iodevTy serialPortOpen(const char *name)

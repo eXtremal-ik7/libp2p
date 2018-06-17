@@ -60,8 +60,6 @@ void selectAsyncRead(selectOp *op, uint64_t usTimeout);
 void selectAsyncWrite(selectOp *op, uint64_t usTimeout);
 void selectAsyncReadMsg(selectOp *op, uint64_t usTimeout);
 void selectAsyncWriteMsg(selectOp *op, const HostAddress *address, uint64_t usTimeout);
-void selectMonitor(selectOp *op);
-void selectMonitorStop(selectOp *op);
 
 
 static struct asyncImpl selectImpl = {
@@ -103,7 +101,6 @@ static int getFd(selectOp *op)
       return object->hDevice;
       break;
     case ioObjectSocket :
-    case ioObjectSocketSyn :
       return object->hSocket;
       break;
     default :
@@ -329,10 +326,18 @@ static void processReadyFds(selectBase *base,
       }
               
       case actReadMsg : {
-        void *ptr = dynamicBufferAlloc(op->info.dynamicArray, available);
-        read(fd, ptr, available);
-        op->info.bytesTransferred += available;
-        finish(op, aosSuccess);
+        if (available <= op->info.transactionSize) {
+          struct sockaddr_in source;
+          socklen_t addrlen = sizeof(source);
+          recvfrom(fd, op->info.buffer, available, 0, (struct sockaddr*)&source, &addrlen);
+          op->info.host.family = 0;
+          op->info.host.ipv4 = source.sin_addr.s_addr;
+          op->info.host.port = source.sin_port;
+          op->info.bytesTransferred += available;
+          finish(op, aosSuccess);
+        } else {
+          finish(op, aosBufferTooSmall);
+        }
         break;
       }
 
@@ -346,10 +351,6 @@ static void processReadyFds(selectBase *base,
         sendto(fd, ptr, op->info.transactionSize, 0,
                (sockaddr*)&remoteAddress, sizeof(remoteAddress));
         finish(op, aosSuccess);
-        break;
-      }
-      case actMonitor : {
-        finish(op, aosMonitoring);
         break;
       }
       
@@ -434,7 +435,6 @@ aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data)
     case ioObjectDevice :
       object->hDevice = *(iodevTy*)data;
     case ioObjectSocket :
-    case ioObjectSocketSyn :
       object->hSocket = *(socketTy*)data;
       break;
     default :
@@ -538,16 +538,4 @@ void selectAsyncWriteMsg(selectOp *op,
 {
   op->info.host = *address;
   startOperation(op, actWriteMsg, usTimeout);
-}
-
-
-void selectMonitor(selectOp *op)
-{
-  startOperation(op, actMonitor, 0);
-}
-
-
-void selectMonitorStop(selectOp *op)
-{
-  startOperation(op, actMonitorStop, 0);
 }

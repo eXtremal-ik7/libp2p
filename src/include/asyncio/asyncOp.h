@@ -18,8 +18,8 @@ typedef void aioStartProc(asyncOpRoot*);
 typedef void aioFinishProc(asyncOpRoot*, int);
 typedef void aioObjectDestructor(aioObjectRoot*);
 
-#ifdef WIN32
-#include <Windows.h>
+#ifdef _WIN32
+#include <windows.h>
 typedef HANDLE timerTy;
 #else
 #include <time.h>

@@ -3,7 +3,6 @@ extern "C" {
 #endif
 
 #include "asyncio/asyncioTypes.h"
-#include "asyncio/dynamicBuffer.h"
 #include "asyncio/socket.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -12,6 +11,7 @@ typedef void aioEventCb(asyncBase *base, aioObject *event, void *arg);
 typedef void aioConnectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg);
 typedef void aioAcceptCb(AsyncOpStatus status, asyncBase *base, aioObject *listener, HostAddress client, socketTy socket, void *arg);
 typedef void aioCb(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg);
+typedef void aioReadMsgCb(AsyncOpStatus status, asyncBase *base, aioObject *object, HostAddress address, size_t transferred, void *arg);
   
 intptr_t argAsInteger(void *arg);
 void *intArg(intptr_t id);
@@ -54,9 +54,11 @@ void aioRead(asyncBase *base,
 
 void aioReadMsg(asyncBase *base, 
                 aioObject *op,
-                dynamicBuffer *buffer,
+                void *buffer,
+                size_t size,
+                AsyncFlags flags,
                 uint64_t usTimeout,
-                aioCb callback,
+                aioReadMsgCb callback,
                 void *arg);
 
 void aioWrite(asyncBase *base, 
@@ -82,7 +84,7 @@ void aioWriteMsg(asyncBase *base,
 int ioConnect(asyncBase *base, aioObject *op, const HostAddress *address, uint64_t usTimeout);
 socketTy ioAccept(asyncBase *base, aioObject *op, uint64_t usTimeout);
 ssize_t ioRead(asyncBase *base, aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
-ssize_t ioReadMsg(asyncBase *base, aioObject *op, dynamicBuffer *buffer, uint64_t usTimeout);
+ssize_t ioReadMsg(asyncBase *base, aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
 ssize_t ioWrite(asyncBase *base, aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
 ssize_t ioWriteMsg(asyncBase *base, aioObject *op, const HostAddress *address, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
 void ioSleep(aioObject *event, uint64_t usTimeout);

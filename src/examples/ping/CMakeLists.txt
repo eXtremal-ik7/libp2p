@@ -1,6 +1,6 @@
 set(AIOPingSources AIOPing.cpp)
 
-if (WIN32)
+if (MSVC)
   set(AIOPingSources ${AIOPingSources}
     ${CMAKE_SOURCE_DIR}/msvc/getopt.c
     ${CMAKE_SOURCE_DIR}/msvc/getopt1.c

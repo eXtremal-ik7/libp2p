@@ -6,6 +6,7 @@ set(Sources asyncio.c
 )
 
 if (SSL_ENABLED)
+  include_directories(${OPENSSL_INCLUDE_DIR})
   set(Sources ${Sources} socketSSL.c)
 endif()
 
@@ -14,7 +15,7 @@ if (HTTP_ENABLED)
 endif()
 
 if (WIN32)
-  set(Sources ${Sources} iocp.c deviceWin32.c socketWin32.c)
+  set(Sources ${Sources} iocp.c coroutineWin32.c deviceWin32.c socketWin32.c)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(Sources ${Sources} select.cpp epoll.c devicePosix.c socketPosix.c coroutinePosix.c)
 elseif (APPLE)

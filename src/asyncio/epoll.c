@@ -74,8 +74,6 @@ void epollAsyncReadMsg(epollOp *op, uint64_t usTimeout);
 void epollAsyncWriteMsg(epollOp *op,
                         const HostAddress *address,
                         uint64_t usTimeout);
-void epollMonitor(epollOp *op);
-void epollMonitorStop(epollOp *op);
 
 static struct asyncImpl epollImpl = {
   epollPostEmptyOperation,
@@ -127,7 +125,6 @@ static int getFd(epollOp *op)
       return object->hDevice;
       break;
     case ioObjectSocket :
-    case ioObjectSocketSyn :
       return object->hSocket;
       break;
     default :
@@ -356,10 +353,18 @@ static void processReadyFd(epollBase *base,
       break;
     }
     case actReadMsg : {
-      void *ptr = dynamicBufferAlloc(op->info.dynamicArray, available);
-      read(fd, ptr, available);
-      op->info.bytesTransferred += available;
-      finish(op, aosSuccess);
+      if (available <= op->info.transactionSize) {
+        struct sockaddr_in source;
+        socklen_t addrlen = sizeof(source);
+        recvfrom(fd, op->info.buffer, available, 0, (struct sockaddr*)&source, &addrlen);
+        op->info.host.family = 0;
+        op->info.host.ipv4 = source.sin_addr.s_addr;
+        op->info.host.port = source.sin_port;
+        op->info.bytesTransferred += available;
+        finish(op, aosSuccess);
+      } else {
+        finish(op, aosBufferTooSmall);
+      }
       break;
     }
     case actWriteMsg : {
@@ -372,10 +377,6 @@ static void processReadyFd(epollBase *base,
       sendto(fd, ptr, op->info.transactionSize, 0,
              (struct sockaddr *)&remoteAddress, sizeof(remoteAddress));
       finish(op, aosSuccess);
-      break;
-    }
-    case actMonitor : {
-      finish(op, aosMonitoring);
       break;
     }
     default :
@@ -445,7 +446,6 @@ aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
       object->hDevice = *(iodevTy *)data;
       break;
     case ioObjectSocket :
-    case ioObjectSocketSyn :
       object->hSocket = *(socketTy *)data;
       break;
     default :
@@ -549,16 +549,4 @@ void epollAsyncWriteMsg(epollOp *op,
 {
   op->info.host = *address;
   startOperation(op, actWriteMsg, usTimeout);
-}
-
-
-void epollMonitor(epollOp *op)
-{
-  startOperation(op, actMonitor, 0);
-}
-
-
-void epollMonitorStop(epollOp *op)
-{
-  startOperation(op, actMonitorStop, 0);
 }

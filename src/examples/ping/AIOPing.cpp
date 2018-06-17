@@ -59,7 +59,7 @@ struct ICMPClientData {
   HostAddress remoteAddress;
   icmp data;
   uint32_t id;
-  dynamicBuffer buffer;
+  uint8_t buffer[1024];
   std::map<unsigned, timeMark> times;
 };
 
@@ -100,12 +100,12 @@ void printHelpMessage(const char *appName)
 }
 
 
-void readCb(AsyncOpStatus status, asyncBase *base, aioObject *rawSocket, size_t transferred, void *arg)
+void readCb(AsyncOpStatus status, asyncBase *base, aioObject *rawSocket, HostAddress address, size_t transferred, void *arg)
 {
   ICMPClientData *client = (ICMPClientData*)arg;
   if (status == aosSuccess && transferred >= (sizeof(ip) + sizeof(icmp))) {
-    dynamicBufferSeek(&client->buffer, SeekSet, 0);
-    uint8_t *ptr = (uint8_t*)dynamicBufferPtr(&client->buffer);
+//     dynamicBufferSeek(&client->buffer, SeekSet, 0);
+    uint8_t *ptr = (uint8_t*)client->buffer;
     icmp *receivedIcmp = (icmp*)(ptr + sizeof(ip));
 
     if (receivedIcmp->icmp_type == ICMP_ECHOREPLY) {     
@@ -122,7 +122,7 @@ void readCb(AsyncOpStatus status, asyncBase *base, aioObject *rawSocket, size_t 
     }
   }
   
-  aioReadMsg(base, rawSocket, &client->buffer, 0, readCb, client);
+  aioReadMsg(base, rawSocket, client->buffer, sizeof(client->buffer), afNone, 0, readCb, client);
 }
 
 void pingTimerCb(asyncBase *base, aioObject *event, void *arg)
@@ -238,8 +238,8 @@ int main(int argc, char **argv)
   aioObject *printTimer = newUserEvent(base, printTimerCb, &client);
   client.rawSocket = newSocketIo(base, S);
 
-  dynamicBufferInit(&client.buffer, 1024);
-  aioReadMsg(base, client.rawSocket, &client.buffer, 0, readCb, &client);
+//   dynamicBufferInit(&client.buffer, 1024);
+  aioReadMsg(base, client.rawSocket, client.buffer, sizeof(client.buffer), afNone, 0, readCb, &client);
   userEventStartTimer(printTimer, 100000, -1);
   userEventStartTimer(pingTimer, (uint64_t)(gInterval*1000000), -1);
   asyncLoop(base);

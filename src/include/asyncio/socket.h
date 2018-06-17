@@ -5,11 +5,10 @@
 #include <stdint.h>
 
 #if defined(OS_WINDOWS)
-#include <Winsock2.h>
+#include <winsock2.h>
 #include <mswsock.h>
-#include <Windows.h>
+#include <windows.h>
 typedef SOCKET socketTy;
-#define INVALID_SOCKET INVALID_HANDLE_VALUE
 #elif defined(OS_COMMONUNIX)
 #include <netinet/tcp.h>
 #include <arpa/inet.h>

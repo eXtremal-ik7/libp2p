@@ -11,6 +11,7 @@ extern "C" {
   
 #include "asyncio/socketSSL.h"
 #include "p2putils/HttpParse.h"
+#include "asyncio/dynamicBuffer.h"
   
 typedef struct HTTPClient HTTPClient;
 typedef struct HTTPInfo HTTPInfo;

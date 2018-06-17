@@ -63,12 +63,7 @@ struct aioObject {
 
 struct asyncOp {
   asyncOpRoot root;
-
-  union {
-    struct dynamicBuffer *dynamicArray;
-    void *buffer;
-  };
-
+  void *buffer;
   size_t transactionSize;
   size_t bytesTransferred;
   socketTy acceptSocket;

@@ -1,25 +1,23 @@
-#include <Winsock2.h>
+#include <winsock2.h>
 #include <mswsock.h>
-#include <Windows.h>
+#include <windows.h>
 #include "asyncioInternal.h"
-#include "redblacktree.h"
 #include "asyncio/dynamicBuffer.h"
 #include <stdio.h>
 #include <assert.h>
 
-#define SET_CHANGED WAIT_OBJECT_0
-#define SOCK_READY_IO ((WAIT_OBJECT_0) + 1)
-#define WAITING_EVENTS 2
 
-static const size_t minimalBufferSize = 1024;
-
-typedef struct asyncOp asyncOp;
+typedef struct iocpOp iocpOp;
 
 typedef struct overlappedExtra {
   OVERLAPPED data;
-  asyncOp *op;
-  size_t bufferSize;
+  iocpOp *op;
 } overlappedExtra;
+
+typedef struct recvFromData {
+  struct sockaddr_in addr;
+  INT size;
+} recvFromData;
 
 typedef struct iocpBase {
   asyncBase B;
@@ -27,60 +25,55 @@ typedef struct iocpBase {
   HANDLE timerThread;
   LPFN_CONNECTEX ConnectExPtr;
   asyncOp *lastReturned;
-  /* For synchronous sockets */
-  HANDLE threadSockSyn;
-  HANDLE mutexSockSyn;
-  HANDLE sckReadyIO;
-  HANDLE setChanged;
-  /*                         */
-  TreePtr socketTree;
 } iocpBase;
 
-struct asyncOp {
-  aioInfo info;
+typedef struct iocpOp {
+  asyncOp info;
   HANDLE hTimer;
   LARGE_INTEGER signalTime;
   int counter;
-  overlappedExtra *overlapped;
-};
+  overlappedExtra overlapped;
+} iocpOp;
 
 
 void postEmptyOperation(asyncBase *base);
 void iocpNextFinishedOperation(asyncBase *base);
-aioObject *iocpNewAioObject(asyncBase *base, IoObjectTy type, void *data);
-asyncOp *iocpNewAsyncOp(asyncBase *base);
-void iocpDeleteOp(asyncOp *op);
-void iocpStartTimer(asyncOp *op, uint64_t usTimeout, int count);
-void iocpStopTimer(asyncOp *op);
-void iocpActivate(asyncOp *op);
-void iocpAsyncConnect(asyncOp *op, const HostAddress *address, uint64_t usTimeout);
-void iocpAsyncAccept(asyncOp *op, uint64_t usTimeout);
-void iocpAsyncRead(asyncOp *op, uint64_t usTimeout);
-void iocpAsyncWrite(asyncOp *op, uint64_t usTimeout);
-void iocpAsyncReadMsg(asyncOp *op, uint64_t usTimeout);
-void iocpAsyncWriteMsg(asyncOp *op, const HostAddress *address, uint64_t usTimeout);
-void iocpMonitor(asyncOp *op);
-void iocpMonitorStop(asyncOp *op);
+aioObject *iocpNewAioObject(iocpBase *base, IoObjectTy type, void *data);
+asyncOpRoot *iocpNewAsyncOp(asyncBase *base);
+void iocpDeleteObject(aioObject *op);
+void iocpFinishOp(iocpOp *op);
+void iocpStartTimer(iocpOp *op, uint64_t usTimeout, int count);
+void iocpStopTimer(iocpOp *op);
+void iocpActivate(iocpOp *op);
+void iocpAsyncConnect(iocpOp *op, const HostAddress *address, uint64_t usTimeout);
+void iocpAsyncAccept(iocpOp *op, uint64_t usTimeout);
+void iocpAsyncRead(iocpOp *op, uint64_t usTimeout);
+void iocpAsyncWrite(iocpOp *op, uint64_t usTimeout);
+void iocpAsyncReadMsg(iocpOp *op, uint64_t usTimeout);
+void iocpAsyncWriteMsg(iocpOp *op, const HostAddress *address, uint64_t usTimeout);
 
 static struct asyncImpl iocpImpl = {
   postEmptyOperation,
   iocpNextFinishedOperation,
-  iocpNewAioObject,
+  (newAioObjectTy*)iocpNewAioObject,
   iocpNewAsyncOp,
-  iocpDeleteOp,
-  iocpStartTimer,
-  iocpStopTimer,
-  iocpActivate,
-  iocpAsyncConnect,
-  iocpAsyncAccept,
-  iocpAsyncRead,
-  iocpAsyncWrite,
-  iocpAsyncReadMsg,
-  iocpAsyncWriteMsg,
-  iocpMonitor,
-  iocpMonitorStop
+  iocpDeleteObject,
+  (finishOpTy*)iocpFinishOp,
+  (startTimerTy*)iocpStartTimer,
+  (stopTimerTy*)iocpStopTimer,
+  (activateTy*)iocpActivate,
+  (asyncConnectTy*)iocpAsyncConnect,
+  (asyncAcceptTy*)iocpAsyncAccept,
+  (asyncReadTy*)iocpAsyncRead,
+  (asyncWriteTy*)iocpAsyncWrite,
+  (asyncReadMsgTy*)iocpAsyncReadMsg,
+  (asyncWriteMsgTy*)iocpAsyncWriteMsg
 };
 
+static aioObject *getObject(iocpOp *op)
+{
+  return (aioObject*)op->info.root.object;
+}
 
 static DWORD WINAPI timerThreadProc(LPVOID lpParameter)
 {
@@ -89,79 +82,13 @@ static DWORD WINAPI timerThreadProc(LPVOID lpParameter)
   return 0;
 }
 
-static DWORD WINAPI threadSocketSyn(LPVOID lpParameter)
-{
-  int waitRet, bytes;
-  HANDLE eventArray[WAITING_EVENTS];
-  treeNodePtr iter;
-  TreePtr test;
-  iocpBase *base = (iocpBase*)lpParameter;
-  eventArray[0] = base->setChanged;
-  eventArray[1] = base->sckReadyIO;
-
-  while (TRUE) {
-    waitRet = WaitForMultipleObjects(
-      WAITING_EVENTS,
-      eventArray,
-      FALSE,
-      INFINITE
-      );
-    if (waitRet == WAIT_OBJECT_0) {
-      fprintf(stderr, "State changed\n");
-    } else {
-      if (WaitForSingleObject(base->mutexSockSyn, INFINITE) == WAIT_OBJECT_0) {
-        //mutex
-        test = base->socketTree;
-        assert(!treeIsEmpty(base->socketTree));
-        for(iter = getBegin(base->socketTree); iter != getEnd(base->socketTree); iter = nextNode(iter)) {
-          ioctlsocket(iter->keyValue.sock_, FIONREAD, &bytes);
-          if (bytes > 0) {
-            fprintf(stderr, "Socket %u bytes: %u\n", iter->keyValue.sock_, bytes);
-            PostQueuedCompletionStatus(base->completionPort, 0, (ULONG_PTR)iter->keyValue.data, 0);
-          }
-        }
-        ReleaseMutex(base->mutexSockSyn);
-      }
-    }
-
-  }
-}
-
-
-static void *queryBuffer(asyncOp *op, size_t size)
-{
-  if (!op->overlapped || op->overlapped->bufferSize < size) {
-    size_t newBufferSize =
-      (size < minimalBufferSize) ? minimalBufferSize : size;
-
-    if (op->overlapped)
-      free(op->overlapped);
-    
-    op->overlapped = malloc(sizeof(overlappedExtra) + newBufferSize);
-    op->overlapped->op = op;
-    op->overlapped->bufferSize = newBufferSize;
-    memset(op->overlapped, 0, sizeof(OVERLAPPED));
-  }
-
-  return ((uint8_t*)op->overlapped) + sizeof(overlappedExtra);
-}
-
-
-static void deleteAsyncOperation(asyncOp *op)
-{
-  if (op->hTimer)
-    CloseHandle(op->hTimer);
-  free(op);  
-}
-
-
 static VOID CALLBACK userEventTimerCb(LPVOID lpArgToCompletionRoutine,
                                       DWORD dwTimerLowValue,
                                       DWORD dwTimerHighValue)
 {
   int needReactivate = 1;
-  asyncOp *op = lpArgToCompletionRoutine;
-  iocpBase *localBase = (iocpBase*)op->info.object->base;
+  iocpOp *op = lpArgToCompletionRoutine;
+  iocpBase *localBase = (iocpBase*)op->info.root.base;
   PostQueuedCompletionStatus(localBase->completionPort, 0, (ULONG_PTR)op, 0);
 
   if (op->counter > 0) {
@@ -181,8 +108,8 @@ static VOID CALLBACK ioFinishedTimerCb(LPVOID lpArgToCompletionRoutine,
                                        DWORD dwTimerHighValue)
 {
   // Принудительное завершение асинхронной операции
-  asyncOp *op = lpArgToCompletionRoutine;
-  iocpBase *localBase = (iocpBase*)op->info.object->base;
+  iocpOp *op = lpArgToCompletionRoutine;
+  iocpBase *localBase = (iocpBase*)op->info.root.base;
 
   PostQueuedCompletionStatus(localBase->completionPort, 0, (ULONG_PTR)op, 0);
 }
@@ -190,10 +117,11 @@ static VOID CALLBACK ioFinishedTimerCb(LPVOID lpArgToCompletionRoutine,
 
 static VOID CALLBACK timerStartProc(ULONG_PTR dwParam)
 {
-  asyncOp *op = (asyncOp*)dwParam;
+  iocpOp *op = (iocpOp*)dwParam;
   PTIMERAPCROUTINE timerCb;
   
-  switch (op->info.object->type) {
+  aioObject *object = getObject(op);
+  switch (object->root.type) {
     case ioObjectUserEvent :
       timerCb = userEventTimerCb;
       break;
@@ -208,54 +136,70 @@ static VOID CALLBACK timerStartProc(ULONG_PTR dwParam)
 
 static VOID CALLBACK timerCancelProc(ULONG_PTR dwParam)
 {
-  asyncOp *op = (asyncOp*)dwParam;
+  iocpOp *op = (iocpOp*)dwParam;
   CancelWaitableTimer(op->hTimer);
 }
 
+static void initializeOp(iocpOp *op)
+{
+  memset(&op->overlapped.data, 0, sizeof(op->overlapped.data));
+  op->overlapped.op = op;
+}
 
-static void startOrContinueAction(asyncOp *op, size_t size)
+static void startOrContinueAction(iocpOp *op, void *arg)
 {
   WSABUF wsabuf;
-  iocpBase *localBase = (iocpBase*)op->info.object->base;
-  descrStruct treeStruct;
-  void *opBuffer = ((uint8_t*)op->overlapped) + sizeof(overlappedExtra);
+  iocpBase *localBase = (iocpBase*)op->info.root.base;
+  aioObject *object = getObject(op);
+  void *opBuffer = ((uint8_t*)op->info.buffer) + op->info.bytesTransferred;
+  size_t size = op->info.transactionSize - op->info.bytesTransferred;
 
-  switch (op->info.object->type) {
+  switch (object->root.type) {
     case ioObjectSocket :
-      switch (op->info.currentAction) {
+      switch (op->info.root.opCode) {
         case actConnect :
           if (localBase->ConnectExPtr)
-            localBase->ConnectExPtr(op->info.object->hSocket,
-                                    opBuffer,
-                                    size,
+            localBase->ConnectExPtr(object->hSocket,
+                                    arg,
+                                    sizeof(struct sockaddr_in),
                                     NULL,
                                     0,
                                     NULL,
-                                    &op->overlapped->data);
+                                    &op->overlapped.data);
           break;
         case actAccept :
           op->info.acceptSocket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
-          AcceptEx(op->info.object->hSocket,
+          AcceptEx(object->hSocket,
                    op->info.acceptSocket,
-                   opBuffer,
-                   size,
+                   op->info.internalBuffer,
+                   0,
                    sizeof(struct sockaddr_in)+16,
                    sizeof(struct sockaddr_in)+16,
                    NULL,
-                   &op->overlapped->data);
+                   &op->overlapped.data);
           break;
-        case actRead :
-        case actReadMsg : {
+        case actRead : {
           DWORD flags = 0;
           wsabuf.buf = opBuffer;
           wsabuf.len = size;
-          WSARecv(op->info.object->hSocket, &wsabuf, 1, NULL, &flags, &op->overlapped->data, NULL);
+          WSARecv(object->hSocket, &wsabuf, 1, NULL, &flags, &op->overlapped.data, NULL);
           break;
         }
+        
+        case actReadMsg : {
+          recvFromData *rf = op->info.internalBuffer;
+          rf->size = sizeof(rf->addr);
+          DWORD flags = 0;
+          wsabuf.buf = opBuffer;
+          wsabuf.len = size;
+          WSARecvFrom(object->hSocket, &wsabuf, 1, NULL, &flags, (SOCKADDR*)&rf->addr, &rf->size, &op->overlapped.data, NULL);
+          break;
+        }
+        
         case actWrite :
           wsabuf.buf = opBuffer;
           wsabuf.len = size;
-          WSASend(op->info.object->hSocket, &wsabuf, 1, NULL, 0, &op->overlapped->data, NULL);
+          WSASend(object->hSocket, &wsabuf, 1, NULL, 0, &op->overlapped.data, NULL);    
           break;
 
         case actWriteMsg : {
@@ -267,7 +211,7 @@ static void startOrContinueAction(asyncOp *op, size_t size)
           remoteAddress.sin_addr.s_addr = op->info.host.ipv4;
           remoteAddress.sin_port = op->info.host.port;
 
-          WSASendTo(op->info.object->hSocket, &wsabuf, 1, NULL, 0, (struct sockaddr*)&remoteAddress, sizeof(remoteAddress), &op->overlapped->data, NULL);  
+          WSASendTo(object->hSocket, &wsabuf, 1, NULL, 0, (struct sockaddr*)&remoteAddress, sizeof(remoteAddress), &op->overlapped.data, NULL);  
           break;
         }
 
@@ -277,105 +221,23 @@ static void startOrContinueAction(asyncOp *op, size_t size)
       break;
 
     case ioObjectDevice :
-      switch (op->info.currentAction) {
+      switch (op->info.root.opCode) {
         case actRead :
         case actReadMsg : {
-          BOOL result = ReadFile(op->info.object->hDevice,
-                                 opBuffer, size, NULL,
-                                 &op->overlapped->data);
+          ReadFile(object->hDevice, opBuffer, size, NULL, &op->overlapped.data);
           break;
        }
         case actWrite :
-          WriteFile(op->info.object->hDevice, opBuffer, size, NULL, &op->overlapped->data);
+          WriteFile(object->hDevice, opBuffer, size, NULL, &op->overlapped.data);
           break;
         default :
           return;
       }
       break;
-    case ioObjectSocketSyn :
-      switch (op->info.currentAction) {
-        case actMonitor : { 
-          if (WaitForSingleObject(localBase->mutexSockSyn, INFINITE) == WAIT_OBJECT_0) {   
-            WSAEventSelect(
-              op->info.object->hSocket,
-              localBase->sckReadyIO,
-              FD_READ
-              );
-            treeStruct.data = (void*)op;
-            treeStruct.sock_ = op->info.object->hSocket;
-            insertValue(localBase->socketTree, treeStruct);
-
-            ReleaseMutex(localBase->mutexSockSyn);
-            SetEvent(localBase->setChanged);
-          }
-        }
-        break;
-        case actMonitorStop : {
-          if (WaitForSingleObject(localBase->mutexSockSyn, INFINITE) == WAIT_OBJECT_0) {
-            WSAEventSelect(
-              op->info.object->hSocket,
-              localBase->sckReadyIO,
-              0
-              );
-            treeStruct.data = (void*)op;
-            treeStruct.sock_ = op->info.object->hSocket;
-            deleteValue(localBase->socketTree, treeStruct);
-            cqueue_ptr_push(&localBase->B.asyncOps, op);
-
  
-            ReleaseMutex(localBase->mutexSockSyn);
-            SetEvent(localBase->setChanged);
-          }
-        }
-        default:
-          return;
-      }
-
-    
     default :
       return;
 
-  }
-}
-
-
-static void newAction(asyncOp *op,
-                      IoActionTy actionType,
-                      void *buffer,
-                      size_t size,
-                      uint64_t usTimeout)
-{
-  void *opBuffer = queryBuffer(op, size);
-  if (actionType == actConnect ||
-      actionType == actWrite ||
-      actionType == actWriteMsg)
-    memcpy(opBuffer, buffer, size);
-
-  op->info.currentAction = actionType;
-  if (op->info.currentAction == actMonitor)
-    op->info.status = aosMonitoring;
-  else
-    op->info.status = aosPending;
-
-  startOrContinueAction(op, size);
-  if (usTimeout != 0) {
-    iocpBase *localBase = (iocpBase*)op->info.object->base;
-    op->signalTime.QuadPart = -(int64_t)(usTimeout*10);
-    QueueUserAPC(timerStartProc, localBase->timerThread, (ULONG_PTR)op);
-  }
-}
-
-
-static void dispatchOp(asyncOp *op)
-{
-  iocpBase *localBase = (iocpBase*)op->info.object->base;
-  if (op->info.callback)
-    op->info.callback(&op->info);
-  
-  if (op->info.object->type != ioObjectUserEvent &&
-      op->info.object->type != ioObjectSocketSyn) {
-    QueueUserAPC(timerCancelProc, localBase->timerThread, (ULONG_PTR)op);
-    cqueue_ptr_push(&localBase->B.asyncOps, op);
   }
 }
 
@@ -396,37 +258,10 @@ asyncBase *iocpNewAsyncBase()
     GUID guid = WSAID_CONNECTEX;
     DWORD tid;
     
-    cqueue_ptr_init(&base->B.asyncOps, 64);
-    
     base->completionPort =
       CreateIoCompletionPort(INVALID_HANDLE_VALUE, 0, 0, 0);
     base->timerThread =
       CreateThread(NULL, 0x10000, timerThreadProc, NULL, THREAD_PRIORITY_NORMAL, &tid);
-    base->threadSockSyn = 
-      CreateThread(NULL, 0x10000, threadSocketSyn, (LPVOID)base, THREAD_PRIORITY_NORMAL, &tid);
-
-    base->socketTree = malloc(sizeof(Tree));
-    initTree(base->socketTree);
-    
-    base->mutexSockSyn = CreateMutex(
-      NULL,
-      FALSE,
-      NULL
-      );
-
-    base->setChanged = CreateEvent(
-      NULL,
-      FALSE,
-      FALSE,
-      TEXT("Set of sockets changed")
-      );
-
-    base->sckReadyIO = CreateEvent(
-      NULL,
-      FALSE,
-      FALSE,
-      TEXT("socketReadyIO")
-      );
 
     base->ConnectExPtr = 0;
     tmpSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -455,61 +290,57 @@ void iocpNextFinishedOperation(asyncBase *base)
   DWORD bytesNum = 0;
   ULONG_PTR key = 0;
   overlappedExtra *overlapped = 0;
-  asyncOp *op = 0;
+  
+  AsyncOpStatus result;
+  int needRemoveFromTimeoutQueue;
+  int error;
 
-  if (localBase->lastReturned) {
-    cqueue_ptr_push(&localBase->B.asyncOps, localBase->lastReturned);
-    localBase->lastReturned = 0;
-  }
-
-  while (1) {
+  while (1) {    
+    iocpOp *op = 0;
     BOOL status = GetQueuedCompletionStatus(localBase->completionPort,
                                             &bytesNum,
                                             &key,
                                             (OVERLAPPED**)&overlapped,
-                                            INFINITE);
-
+                                            333);
+    
     if (key) {
-      op = (asyncOp*)key;
-      if (op->info.object->type != ioObjectUserEvent &&
-          op->info.object->type != ioObjectSocketSyn) {       
-        op->info.status = aosTimeout;
-        op->overlapped->op = 0;
-        op->overlapped = 0;
-      }
+      op = (iocpOp*)key;
+      needRemoveFromTimeoutQueue = 0;  
     } else if (overlapped) {
       op = overlapped->op;
-      if (!op) {
-        free(overlapped);
-        continue;
+      aioObject *object = getObject(op);
+      needRemoveFromTimeoutQueue = 1;
+      
+      // additional disconnect check
+      error = WSAGetLastError();
+      if (status == TRUE &&
+          bytesNum == 0 &&
+          (op->info.root.opCode == actRead ||
+           op->info.root.opCode == actWrite ||
+           op->info.root.opCode == actReadMsg ||
+           op->info.root.opCode == actWriteMsg)) {
+        status = FALSE;
+        error = ERROR_NETNAME_DELETED;
       }
-
+      
       if (status == FALSE) {
-        if (op->info.object->type == ioObjectSocket) {
-          int error = WSAGetLastError();
+        result = aosUnknownError;
+        if (object->root.type == ioObjectSocket) {
           if (error == WSAEMSGSIZE) {
-            if (op->info.currentAction == actReadMsg) {
-              u_long remaining = 0;
-              ioctlsocket(op->info.object->hSocket, FIONREAD, &remaining);
-              startOrContinueAction(op, remaining);
-            } else {
-            }
+            // Receive buffer too small
+            result = aosBufferTooSmall;
           } else if (error == ERROR_NETNAME_DELETED) {
-            op->info.status = aosDisconnected;
-    
-          } else {
-            op->info.status = aosUnknownError;
+            result = aosDisconnected;
           }
         }
       } else {
-        void *opBuffer = ((uint8_t*)op->overlapped) + sizeof(overlappedExtra); 
-        op->info.status = aosSuccess;
-        if (op->info.currentAction == actAccept) {
+        result = aosSuccess;
+        if (op->info.root.opCode == actAccept) {
           struct sockaddr_in *localAddr = 0;
           struct sockaddr_in *remoteAddr = 0;
           INT localAddrLength;
           INT remoteAddrLength;
-          GetAcceptExSockaddrs(opBuffer,
+          GetAcceptExSockaddrs(op->info.internalBuffer,
                                bytesNum,
                                sizeof(struct sockaddr_in)+16,
                                sizeof(struct sockaddr_in)+16,
@@ -518,82 +349,92 @@ void iocpNextFinishedOperation(asyncBase *base)
           if (localAddr && remoteAddr) {
             op->info.host.family = remoteAddr->sin_family;
             op->info.host.ipv4 = remoteAddr->sin_addr.s_addr;
-            op->info.host.port = remoteAddr->sin_port;       
+            op->info.host.port = remoteAddr->sin_port;
           } else {
-            op->info.status = aosUnknownError;
+            result = aosUnknownError;
           }
-        } else if (op->info.currentAction == actRead) {
-          void *ptr = (uint8_t*)op->info.buffer + op->info.bytesTransferred;
-          memcpy(ptr, opBuffer, bytesNum);
+        } else if (op->info.root.opCode == actRead ||
+                   op->info.root.opCode == actWrite) {
           op->info.bytesTransferred += bytesNum;
-          if ((op->info.flags & afWaitAll) &&
+          if ((op->info.root.flags & afWaitAll) &&
               op->info.bytesTransferred < op->info.transactionSize) {
-            startOrContinueAction(op, op->info.transactionSize - op->info.bytesTransferred);
+            startOrContinueAction(op, 0);
             continue;
           }
-        } else if (op->info.currentAction == actReadMsg) {
-          void *ptr = dynamicBufferAlloc(op->info.dynamicArray, bytesNum);
-          memcpy(ptr, opBuffer, bytesNum);
-          op->info.bytesTransferred += bytesNum;
+        } else if (op->info.root.opCode == actReadMsg) {
+          struct recvFromData *rf = op->info.internalBuffer;
+          op->info.bytesTransferred = bytesNum;
+          op->info.host.family = rf->addr.sin_family;
+          op->info.host.ipv4 = rf->addr.sin_addr.s_addr;
+          op->info.host.port = rf->addr.sin_port;          
+        } else if (op->info.root.opCode == actWriteMsg) {
+          op->info.bytesTransferred = bytesNum;
         }
       }
-    } else {
-      return; 
+    } else if (status == TRUE) {
+      processTimeoutQueue(base);
+      return;
     }
 
-    dispatchOp(op);
+    if (op)
+      finishOperation(&op->info.root, result, needRemoveFromTimeoutQueue);
+
+    processTimeoutQueue(base);
   }
 }
 
 
-aioObject *iocpNewAioObject(asyncBase *base, IoObjectTy type, void *data)
+aioObject *iocpNewAioObject(iocpBase *base, IoObjectTy type, void *data)
 {
-  iocpBase *localBase = (iocpBase*)base;
-  aioObject *object = malloc(sizeof(aioObject));
-  object->base = base;
-  object->type = type;
-  switch (object->type) {
+  aioObject *object =
+    (aioObject*)initObjectRoot(type, sizeof(aioObject), (aioObjectDestructor*)iocpDeleteObject);
+  switch (type) {
     case ioObjectDevice :
-      object->hDevice = *(iodevTy*)data;
-      CreateIoCompletionPort(object->hDevice, localBase->completionPort, 0, 1);
+      object->hDevice = *(iodevTy *)data;
+      CreateIoCompletionPort(object->hDevice, base->completionPort, 0, 1);
       break;
     case ioObjectSocket :
-      object->hSocket = *(socketTy*)data;
-      CreateIoCompletionPort((HANDLE)object->hSocket, localBase->completionPort, 0, 1);
+      object->hSocket = *(socketTy *)data;
+      CreateIoCompletionPort(object->hDevice, base->completionPort, 0, 1);
       break;
-    case ioObjectSocketSyn : 
-      object->hSocket = *(socketTy*)data;
+    default :
       break;
-
   }
 
   return object;
 }
 
 
-asyncOp *iocpNewAsyncOp(asyncBase *base)
+asyncOpRoot *iocpNewAsyncOp(asyncBase *base)
 {
-  asyncOp *op;
-  iocpBase *localBase = (iocpBase*)base;
-  op = malloc(sizeof(asyncOp));
-  if (op) {
+  iocpOp *op;
+  op = malloc(sizeof(iocpOp));
+  if (op)
     memset(op, 0, sizeof(asyncOp));
-    op->hTimer = CreateWaitableTimer(NULL, FALSE, NULL);
-  }
 
-  return (asyncOp*)op;
+  return (asyncOpRoot*)op;
 }
 
 
-void iocpDeleteOp(asyncOp *op)
+void iocpDeleteObject(aioObject *object)
 {
-  deleteAsyncOperation((asyncOp*)op);
+  switch (object->root.type) {
+    case ioObjectDevice :
+    case ioObjectSocket :
+    default :
+      break;
+  }  
+  
+  free(object);
 }
 
-
-void iocpStartTimer(asyncOp *op, uint64_t usTimeout, int count)
+void iocpFinishOp(iocpOp *op)
 {
-  iocpBase *localBase = (iocpBase*)op->info.object->base;
+}
+
+void iocpStartTimer(iocpOp *op, uint64_t usTimeout, int count)
+{
+  iocpBase *localBase = (iocpBase*)op->info.root.base;
   op->signalTime.QuadPart = -(int64_t)(usTimeout*10);
   op->counter = count;
   if (count != 0)
@@ -601,70 +442,84 @@ void iocpStartTimer(asyncOp *op, uint64_t usTimeout, int count)
 }
 
 
-void iocpStopTimer(asyncOp *op)
+void iocpStopTimer(iocpOp *op)
 {
-  iocpBase *localBase = (iocpBase*)op->info.object->base;
+  iocpBase *localBase = (iocpBase*)op->info.root.base;
   QueueUserAPC(timerCancelProc, localBase->timerThread, (ULONG_PTR)op);
 }
 
 
-void iocpActivate(asyncOp *op)
+void iocpActivate(iocpOp *op)
 {
-  iocpBase *localBase = (iocpBase*)op->info.object->base;
+  iocpBase *localBase = (iocpBase*)op->info.root.base;
   PostQueuedCompletionStatus(localBase->completionPort, 0, (ULONG_PTR)op, 0);
 }
 
 
-void iocpAsyncConnect(asyncOp *op, const HostAddress *address, uint64_t usTimeout)
+void iocpAsyncConnect(iocpOp *op, const HostAddress *address, uint64_t usTimeout)
 {
   struct sockaddr_in localAddress;
   localAddress.sin_family = address->family;
   localAddress.sin_addr.s_addr = address->ipv4;
   localAddress.sin_port = address->port;
-  newAction((asyncOp*)op,
-            actConnect,
-            &localAddress,
-            sizeof(localAddress),
-            usTimeout);
+  initializeOp(op);    
+  startOrContinueAction(op, &localAddress);
 }
 
 
-void iocpAsyncAccept(asyncOp *op, uint64_t usTimeout)
-{
-  newAction(op, actAccept, 0, 0, usTimeout);
+void iocpAsyncAccept(iocpOp *op, uint64_t usTimeout)
+{  
+  // Expand internal buffer to 2*(sizeof(struct sockaddr_in)+16) if need
+  const size_t acceptResultSize = 2*(sizeof(struct sockaddr_in)+16);
+  
+  if (op->info.internalBuffer == 0) {
+    op->info.internalBuffer = malloc(acceptResultSize);
+    op->info.internalBufferSize = acceptResultSize;
+  } else if (op->info.internalBufferSize < acceptResultSize) {
+    op->info.internalBuffer = realloc(op->info.internalBuffer, acceptResultSize);
+    op->info.internalBufferSize = acceptResultSize;
+  }
+
+  initializeOp(op);    
+  startOrContinueAction(op, 0);
 }
 
 
-void iocpAsyncRead(asyncOp *op, uint64_t usTimeout)
+void iocpAsyncRead(iocpOp *op, uint64_t usTimeout)
 {
-  newAction(op, actRead, op->info.buffer, op->info.transactionSize, usTimeout);
+  initializeOp(op);  
+  startOrContinueAction(op, 0);
 }
 
 
-void iocpAsyncWrite(asyncOp *op, uint64_t usTimeout)
+void iocpAsyncWrite(iocpOp *op, uint64_t usTimeout)
 {
-  newAction(op, actWrite, op->info.buffer, op->info.transactionSize, usTimeout);  
+  initializeOp(op);  
+  startOrContinueAction(op, 0);
 }
 
 
-void iocpAsyncReadMsg(asyncOp *op, uint64_t usTimeout)
+void iocpAsyncReadMsg(iocpOp *op, uint64_t usTimeout)
 {
-  newAction(op, actReadMsg, 0, minimalBufferSize, usTimeout);
+  // Expand internal buffer to sizeof(struct sockaddr_in if need
+  const size_t acceptResultSize = sizeof(recvFromData);
+  
+  if (op->info.internalBuffer == 0) {
+    op->info.internalBuffer = malloc(acceptResultSize);
+    op->info.internalBufferSize = acceptResultSize;
+  } else if (op->info.internalBufferSize < acceptResultSize) {
+    op->info.internalBuffer = realloc(op->info.internalBuffer, acceptResultSize);
+    op->info.internalBufferSize = acceptResultSize;
+  }  
+  
+  initializeOp(op);  
+  startOrContinueAction(op, 0);
 }
 
 
-void iocpAsyncWriteMsg(asyncOp *op, const HostAddress *address, uint64_t usTimeout)
+void iocpAsyncWriteMsg(iocpOp *op, const HostAddress *address, uint64_t usTimeout)
 {
+  initializeOp(op);
   op->info.host = *address;
-  newAction(op, actWriteMsg, op->info.buffer, op->info.transactionSize, usTimeout);
-}
-
-void iocpMonitor(asyncOp *op)
-{
-  newAction((asyncOp*)op, actMonitor, 0, minimalBufferSize, 0);
-}
-
-void iocpMonitorStop(asyncOp *op)
-{
-  newAction((asyncOp*)op, actMonitorStop, 0, minimalBufferSize, 0);
+  startOrContinueAction(op, 0);
 }
