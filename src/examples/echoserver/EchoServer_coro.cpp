@@ -22,7 +22,7 @@ void printhex(uint8_t *data, size_t size)
   fprintf(stderr, "\n");   
 }
 
-void *readerProc(void *arg)
+void readerProc(void *arg)
 {
   readerContext *reader = (readerContext*)arg;
   uint8_t echoBuffer[1024];
@@ -37,11 +37,9 @@ void *readerProc(void *arg)
       break;
     }
   }
-  
-  return 0;
 }
 
-void *listenerProc(void *arg)
+void listenerProc(void *arg)
 {
   listenerContext *ctx = (listenerContext*)arg;
   while (true) {
@@ -55,8 +53,6 @@ void *listenerProc(void *arg)
       coroutineCall(echoProc);      
     }
   }
-  
-  return 0;
 }
 
 int main(int argc, char **argv)

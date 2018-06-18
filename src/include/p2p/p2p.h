@@ -29,7 +29,7 @@ private:
   static void clientReceiver(int status, asyncBase *base, p2pConnection *connection, p2pHeader header, void *arg);  
   static void checkTimeout(asyncBase *base, aioObject *event, void *arg) { ((p2pPeer*)arg)->checkTimeout(); }
   static p2pErrorTy nodeAcceptCb(int status, asyncBase *base, p2pConnection *connection, p2pConnectData *data, void *arg);
-  static void *nodeMsgHandlerEP(void *peer) { ((p2pPeer*)peer)->nodeMsgHandler(); return 0; }
+  static void nodeMsgHandlerEP(void *peer) { ((p2pPeer*)peer)->nodeMsgHandler(); }
   
   void nodeMsgHandler();
   

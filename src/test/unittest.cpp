@@ -1,4 +1,5 @@
 #include "asyncio/asyncio.h"
+#include "asyncio/coroutine.h"
 #include <gtest/gtest.h>
 
 const unsigned gPort = 65333;
@@ -232,6 +233,64 @@ TEST(basic, test_udp_rw)
   asyncLoop(gBase);
   deleteAioObject(context.serverSocket);
   ASSERT_TRUE(context.success);
+}
+
+void coroutine_create_proc(void *arg)
+{
+  int *x = (int*)arg;
+  (*x)++;
+}
+
+TEST(coroutine, create)
+{
+  int x = 0;
+  coroutineTy *coro = coroutineNew(coroutine_create_proc, &x, 0x10000);
+  while (!coroutineCall(coro))
+    continue;
+  ASSERT_EQ(x, 1);
+}
+
+void coroutine_yield_proc(void *arg)
+{
+  int *x = (int*)arg;
+  (*x)++;
+  coroutineYield();
+  (*x)++;
+}
+
+TEST(coroutine, yield)
+{
+  int x = 0;
+  coroutineTy *coro = coroutineNew(coroutine_yield_proc, &x, 0x10000);
+  while (!coroutineCall(coro))
+    continue;
+  ASSERT_EQ(x, 2);
+}
+
+void coroutine_nested_proc2(void *arg)
+{
+  int *x = (int*)arg;
+  (*x)++;
+}
+
+void coroutine_nested_proc1(void *arg)
+{
+  int *x = (int*)arg;
+  (*x)++;
+  coroutineYield();
+  coroutineTy *coro = coroutineNew(coroutine_nested_proc2, x, 0x10000);
+  coroutineCall(coro);
+  coroutineYield();
+  (*x)++;
+}
+
+TEST(coroutine, nested)
+{
+  int x = 0;
+  coroutineTy *coro = coroutineNew(coroutine_nested_proc1, &x, 0x10000);
+  while (!coroutineCall(coro))
+    continue;
+  ASSERT_EQ(x, 3);
 }
 
 int main(int argc, char **argv)

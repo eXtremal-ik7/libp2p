@@ -122,13 +122,15 @@ void coroutineDelete(coroutineTy *coroutine)
   free(coroutine);
 }
 
-void coroutineCall(coroutineTy *coroutine)
+int coroutineCall(coroutineTy *coroutine)
 {
   if (!coroutineFinished(coroutine)) {
     coroutine->prev = currentCoroutine;
     currentCoroutine = coroutine;
     if (_setjmp(coroutine->prev->context) == 0)
       _longjmp(coroutine->context, 1);
+    
+    return coroutineFinished(coroutine);
   }
 }
 
