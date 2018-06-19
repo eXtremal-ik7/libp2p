@@ -1,11 +1,16 @@
-#include "asyncio/asyncOp.h"
-#include "asyncio/asyncioTypes.h"
+#include "asyncio/api.h"
 #include "asyncio/objectPool.h"
-#include "cstl.h"
-#include <stddef.h>
-#include <stdint.h>
 
-struct dynamicBuffer;
+typedef enum IoActionTy {
+  actNoAction = -1,
+  actConnect = 0,
+  actAccept,
+  actRead,
+  actWrite,
+  actReadMsg,
+  actWriteMsg
+} IoActionTy;
+
 
 typedef void postEmptyOperationTy(asyncBase*);
 typedef void nextFinishedOperationTy(asyncBase*);
@@ -72,3 +77,10 @@ struct asyncOp {
   void *internalBuffer;
   size_t internalBufferSize;  
 };
+
+void pageMapInit(pageMap *map);
+asyncOpRoot *pageMapExtractAll(pageMap *map, time_t tm);
+void pageMapAdd(pageMap *map, asyncOpRoot *op);
+void pageMapRemove(pageMap *map, asyncOpRoot *op);
+
+void processTimeoutQueue(asyncBase *base);

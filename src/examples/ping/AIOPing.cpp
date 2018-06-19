@@ -1,5 +1,6 @@
 #include "asyncio/asyncio.h"
 #include "asyncio/dynamicBuffer.h"
+#include "asyncio/socket.h"
 #include "asyncio/timer.h"
 
 #include <getopt.h>

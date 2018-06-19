@@ -5,9 +5,8 @@ extern "C" {
 #ifndef __ASYNCIO_SOCKETSSL_H_
 #define __ASYNCIO_SOCKETSSL_H_
 
-#include "asyncio/asyncio.h"
+#include "asyncio/api.h"
 #include "openssl/bio.h"
-#include "cstl.h"
 
 typedef struct SSLOp SSLOp;
 typedef struct SSLSocket SSLSocket;

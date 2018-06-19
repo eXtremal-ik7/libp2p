@@ -1,6 +1,4 @@
-#include "asyncio/asyncOp.h"
-#include "asyncio/objectPool.h"
-#include "asyncioInternal.h"
+#include "asyncioImpl.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -111,6 +109,42 @@ timerTy createTimer(void *arg)
   timer_create(CLOCK_REALTIME, &sEvent, &timerId);
   return timerId;
 #endif
+}
+
+void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op)
+{
+  // TODO acquireSpinlock(base)
+  pageMapAdd(&base->timerMap, op);
+  // TODO releaseSpinlock(base)
+}
+
+
+void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op)
+{
+  pageMapRemove(&base->timerMap, op);
+}
+
+void processTimeoutQueue(asyncBase *base)
+{
+  // check timeout queue
+  time_t currentTime = time(0);  
+  time_t begin = base->lastCheckPoint;
+  for (; begin <= currentTime; begin++) {
+    // TODO acquireSpinlock(base)
+    asyncOpRoot *op = pageMapExtractAll(&base->timerMap, begin);
+    // TODO releaseSpinlock(base)
+    while (op) {
+      asyncOpRoot *next = op->timeoutQueue.next;
+      finishOperation(op, aosTimeout, 0);
+      op = next;
+    }
+      
+    begin++;
+  }
+  
+  // TODO acquireSpinlock(base)
+  base->lastCheckPoint = currentTime;
+  // TODO releaseSpinlock(base)
 }
 
 aioObjectRoot *initObjectRoot(int type, size_t size, aioObjectDestructor destructor)
@@ -300,43 +334,6 @@ asyncOpRoot *removeFromExecuteQueue(asyncOpRoot *op)
    
   // TODO releaseSpinlock(object);
   return 0;
-}
-
-
-void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op)
-{
-  // TODO acquireSpinlock(base)
-  pageMapAdd(&base->timerMap, op);
-  // TODO releaseSpinlock(base)
-}
-
-
-void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op)
-{
-  pageMapRemove(&base->timerMap, op);
-}
-
-void processTimeoutQueue(asyncBase *base)
-{
-  // check timeout queue
-  time_t currentTime = time(0);  
-  time_t begin = base->lastCheckPoint;
-  for (; begin <= currentTime; begin++) {
-    // TODO acquireSpinlock(base)
-    asyncOpRoot *op = pageMapExtractAll(&base->timerMap, begin);
-    // TODO releaseSpinlock(base)
-    while (op) {
-      asyncOpRoot *next = op->timeoutQueue.next;
-      finishOperation(op, aosTimeout, 0);
-      op = next;
-    }
-      
-    begin++;
-  }
-  
-  // TODO acquireSpinlock(base)
-  base->lastCheckPoint = currentTime;
-  // TODO releaseSpinlock(base)
 }
 
 static inline void startOperation(asyncOpRoot *op, asyncBase *previousOpBase)

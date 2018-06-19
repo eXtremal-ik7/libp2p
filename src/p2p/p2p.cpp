@@ -1,5 +1,6 @@
 #include "p2p/p2p.h"
 #include "asyncio/coroutine.h"
+#include "asyncio/socket.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h> // TEMP

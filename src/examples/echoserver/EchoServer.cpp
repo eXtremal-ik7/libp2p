@@ -1,4 +1,5 @@
 #include "asyncio/asyncio.h"
+#include "asyncio/socket.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,7 +12,6 @@ void readCb(AsyncOpStatus status, asyncBase *base, aioObject *socket, size_t tra
 {
   uint8_t *echoBuffer = (uint8_t*)arg;
   if (status == aosSuccess) {
-    printf("success!\n");
     aioWrite(base, socket, echoBuffer, transferred, afNone, 1000000, 0, 0);
     aioRead(base, socket, echoBuffer, echoBufferSize, afNone, 0, readCb, echoBuffer);
   } else if (status == aosDisconnected) {
@@ -20,7 +20,6 @@ void readCb(AsyncOpStatus status, asyncBase *base, aioObject *socket, size_t tra
     deleteAioObject(socket);
   } else {
     fprintf(stderr, " * receive error\n");
-//     aioRead(base, socket, echoBuffer, echoBufferSize, afNone, 0, readCb, echoBuffer);    
     deleteAioObject(socket);    
   }
 }

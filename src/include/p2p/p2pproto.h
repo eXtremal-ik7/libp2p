@@ -1,3 +1,4 @@
+#include "asyncio/api.h"
 #include "asyncio/asyncio.h"
 #include "p2pformat.h"
 

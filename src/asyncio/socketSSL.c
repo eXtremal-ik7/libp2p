@@ -1,5 +1,7 @@
+#include "asyncio/asyncio.h"
 #include "asyncio/coroutine.h"
 #include "asyncio/objectPool.h"
+#include "asyncio/socket.h"
 #include "asyncio/socketSSL.h" 
 #include <openssl/bio.h>
 #include <openssl/ssl.h>

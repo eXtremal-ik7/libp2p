@@ -131,6 +131,8 @@ int coroutineCall(coroutineTy *coroutine)
       _longjmp(coroutine->context, 1);
     
     return coroutineFinished(coroutine);
+  } else {
+    return 1;
   }
 }
 

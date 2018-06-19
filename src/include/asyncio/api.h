@@ -7,24 +7,58 @@ extern "C" {
 
 #include <stddef.h>
 #include <stdint.h>
+#include "asyncio/asyncioTypes.h"
 
+typedef struct asyncBase asyncBase;
 typedef struct aioObjectRoot aioObjectRoot;
 typedef struct asyncOpRoot asyncOpRoot;
+typedef struct coroutineTy coroutineTy;
+
+typedef struct aioObject aioObject;
 typedef struct asyncOp asyncOp;
-typedef struct asyncBase asyncBase;
 
 typedef asyncOpRoot *newAsyncOpTy(asyncBase*);
 typedef void aioStartProc(asyncOpRoot*);
 typedef void aioFinishProc(asyncOpRoot*, int);
 typedef void aioObjectDestructor(aioObjectRoot*);
 
-#ifdef _WIN32
-#include <windows.h>
-typedef HANDLE timerTy;
-#else
-#include <time.h>
-typedef timer_t timerTy;
-#endif  
+typedef enum AsyncMethod {
+  amOSDefault = 0,
+  amSelect,
+  amPoll,
+  amEPoll,
+  amKQueue,
+  amIOCP,
+} AsyncMethod;
+
+
+typedef enum IoObjectTy {
+  ioObjectUserEvent = 0,
+  ioObjectSocket,
+  ioObjectDevice,
+  ioObjectUserDefined
+} IoObjectTy;
+
+
+typedef enum AsyncOpStatus {
+  aosPending = 0,
+  aosSuccess,
+  aosTimeout,
+  aosDisconnected,
+  aosCanceled,
+  aosBufferTooSmall,
+  aosUnknownError,
+  aosLast
+} AsyncOpStatus;
+
+
+typedef enum AsyncFlags {
+  afNone = 0,
+  afWaitAll = 1,
+  afNoCopy = 2,
+  afRealtime = 4
+} AsyncFlags;
+
 
 typedef struct List {
   asyncOpRoot *head;
@@ -67,14 +101,6 @@ struct asyncOpRoot {
   int counter;  
 };
 
-void pageMapInit(pageMap *map);
-asyncOpRoot *pageMapExtractAll(pageMap *map, time_t tm);
-void pageMapAdd(pageMap *map, asyncOpRoot *op);
-void pageMapRemove(pageMap *map, asyncOpRoot *op);
-
-timerTy nullTimer();
-timerTy createTimer(void *arg);
-
 aioObjectRoot *initObjectRoot(int type, size_t size, aioObjectDestructor destructor);
 void checkForDeleteObject(aioObjectRoot *object);
 void cancelIo(aioObjectRoot *object, asyncBase *base);
@@ -95,11 +121,6 @@ asyncOpRoot *initAsyncOpRoot(asyncBase *base,
 // Must be thread-safe
 int addToExecuteQueue(aioObjectRoot *object, asyncOpRoot *op, int isWriteQueue);
 asyncOpRoot *removeFromExecuteQueue(asyncOpRoot *op);
-
-void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op);
-void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op);
-void processTimeoutQueue(asyncBase *base);
-
 void finishOperation(asyncOpRoot *op, int status, int needRemoveFromTimeGrid);
 
 #ifdef __cplusplus

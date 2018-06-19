@@ -2,8 +2,7 @@
 extern "C" {
 #endif
 
-#include "asyncio/asyncioTypes.h"
-#include "asyncio/socket.h"
+#include "asyncio/api.h"
 #include <stddef.h>
 #include <stdint.h>
   
@@ -13,16 +12,12 @@ typedef void aioAcceptCb(AsyncOpStatus status, asyncBase *base, aioObject *liste
 typedef void aioCb(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg);
 typedef void aioReadMsgCb(AsyncOpStatus status, asyncBase *base, aioObject *object, HostAddress address, size_t transferred, void *arg);
   
-intptr_t argAsInteger(void *arg);
-void *intArg(intptr_t id);
 socketTy aioObjectSocket(aioObject *object);
 iodevTy aioObjectDevice(aioObject *object);
-
 
 asyncBase *createAsyncBase(AsyncMethod method);
 aioObject *newSocketIo(asyncBase *base, socketTy hSocket);
 aioObject *newDeviceIo(asyncBase *base, iodevTy hDevice);
-// aioObject *newSocketSynIo(asyncBase *base, socketTy hSocket);
 void deleteAioObject(aioObject *object);
 
 aioObject *newUserEvent(asyncBase *base, aioEventCb callback, void *arg);
@@ -89,14 +84,8 @@ ssize_t ioWrite(asyncBase *base, aioObject *op, void *buffer, size_t size, Async
 ssize_t ioWriteMsg(asyncBase *base, aioObject *op, const HostAddress *address, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
 void ioSleep(aioObject *event, uint64_t usTimeout);
 
-// asyncOp *asyncMonitor(aioObject *op, asyncCb callback, void *arg);
-// void asyncMonitorStop(asyncOp *op);
-
 void asyncLoop(asyncBase *base);
 void postQuitOperation(asyncBase *base);
-
-void *queryObject(asyncBase *base, const void *type);
-void releaseObject(asyncBase *base, void *object, const void *type);
 
 #ifdef __cplusplus
 }

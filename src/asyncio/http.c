@@ -1,4 +1,6 @@
 #include "asyncio/http.h"
+
+#include "asyncio/asyncio.h"
 #include "asyncio/coroutine.h"
 #include <string.h>
 

@@ -1,6 +1,11 @@
 #include "asyncio/socket.h"
 #include <fcntl.h>
 #include <unistd.h>
+#include <netinet/tcp.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 
 void initializeSocketSubsystem()
 {

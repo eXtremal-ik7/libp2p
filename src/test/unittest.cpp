@@ -1,5 +1,6 @@
 #include "asyncio/asyncio.h"
 #include "asyncio/coroutine.h"
+#include "asyncio/socket.h"
 #include <gtest/gtest.h>
 
 const unsigned gPort = 65333;
