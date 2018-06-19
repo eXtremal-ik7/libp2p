@@ -1,8 +1,7 @@
 #include "p2putils/CommonParse.h"
 #include "p2putils/HttpParse.h"
 #include <string.h>
-
-#include <stdio.h> // NOTE: TMP
+#include <algorithm>
 
 extern StateElement httpHeaderFSM[128];
 

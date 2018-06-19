@@ -1,7 +1,11 @@
 #include "asyncio/coroutine.h"
 #include <windows.h>
 
+#ifdef _MSC_VER
+__declspec(thread) coroutineTy *currentCoroutine = 0;
+#else
 __thread coroutineTy *currentCoroutine = 0;
+#endif
 
 typedef struct coroutineTy {
   struct coroutineTy *prev;

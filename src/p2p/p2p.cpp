@@ -3,7 +3,6 @@
 #include "asyncio/socket.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h> // TEMP
 
 // Default p2p connection timeout = 1 second
 #define P2P_CONNECT_TIMEOUT 1000000

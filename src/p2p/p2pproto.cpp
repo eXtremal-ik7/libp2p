@@ -149,7 +149,8 @@ static void coroutineRecvCb(int status, asyncBase *base, p2pConnection *connecti
 static void destructor(aioObjectRoot *root)
 {
   p2pConnection *connection = (p2pConnection*)root;
-  connection->stream.~xmstream();
+  xmstream &stream = connection->stream;
+  stream.~xmstream();
   free(connection);
 }
 

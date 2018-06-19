@@ -5,7 +5,6 @@
 #include "asyncio/socketSSL.h" 
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
-#include <unistd.h>
 
 #define DEFAULT_SSL_BUFFER_SIZE 65536
 

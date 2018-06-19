@@ -11,6 +11,10 @@
 typedef HANDLE iodevTy;
 typedef SOCKET socketTy;
 typedef HANDLE timerTy;
+#if defined(_MSC_VER)
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
 #elif defined(OS_COMMONUNIX)
 #include <time.h>
 #include <arpa/inet.h>
