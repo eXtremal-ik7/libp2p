@@ -236,6 +236,29 @@ TEST(basic, test_udp_rw)
   ASSERT_TRUE(context.success);
 }
 
+void test_userevent_cb(asyncBase *base, aioObject *event, void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+  ctx->state++;
+  if (ctx->state == 9) {
+    userEventActivate(event);
+  } else if (ctx->state == 10) {
+    ctx->success = true;
+    postQuitOperation(base);
+  }
+}
+
+TEST(basic, test_userevent)
+{
+  TestContext context;
+  aioObject *event = newUserEvent(gBase, test_userevent_cb, &context);
+  userEventStartTimer(event, 5000, 8);
+  userEventActivate(event);
+  asyncLoop(gBase);  
+  deleteAioObject(event);
+  ASSERT_TRUE(context.success);  
+}
+
 void coroutine_create_proc(void *arg)
 {
   int *x = (int*)arg;
