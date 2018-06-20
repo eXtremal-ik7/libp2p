@@ -276,7 +276,7 @@ void deleteAioObject(aioObject *object)
   if (object->root.type == ioObjectUserEvent) {
     asyncOpRoot *op = object->root.readQueue.head;
     objectRelease(&op->base->pool, op, op->poolId);
-    object->root.destructor(&object->root);
+	free(object);
   } else {
     if (object->root.type == ioObjectDevice)
       serialPortClose(object->hDevice);

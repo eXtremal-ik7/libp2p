@@ -107,7 +107,7 @@ static VOID CALLBACK ioFinishedTimerCb(LPVOID lpArgToCompletionRoutine,
                                        DWORD dwTimerLowValue,
                                        DWORD dwTimerHighValue)
 {
-  // Принудительное завершение асинхронной операции
+  // TODO: use CancelIoEx
   iocpOp *op = lpArgToCompletionRoutine;
   iocpBase *localBase = (iocpBase*)op->info.root.base;
 
@@ -292,7 +292,6 @@ void iocpNextFinishedOperation(asyncBase *base)
   overlappedExtra *overlapped = 0;
   
   AsyncOpStatus result;
-  int needRemoveFromTimeoutQueue;
   int error;
 
   while (1) {    
@@ -305,11 +304,14 @@ void iocpNextFinishedOperation(asyncBase *base)
     
     if (key) {
       op = (iocpOp*)key;
-      needRemoveFromTimeoutQueue = 0;  
+	  aioObject *object = getObject(op);
+	  if (object->root.type == ioObjectUserEvent)
+		userEventTrigger(object);
+	  else
+		finishOperation(&op->info.root, aosTimeout, 0);
     } else if (overlapped) {
       op = overlapped->op;
       aioObject *object = getObject(op);
-      needRemoveFromTimeoutQueue = 1;
       
       // additional disconnect check
       error = WSAGetLastError();
@@ -371,13 +373,12 @@ void iocpNextFinishedOperation(asyncBase *base)
           op->info.bytesTransferred = bytesNum;
         }
       }
+
+	  finishOperation(&op->info.root, result, 1);
     } else if (status == TRUE) {
       processTimeoutQueue(base);
       return;
     }
-
-    if (op)
-      finishOperation(&op->info.root, result, needRemoveFromTimeoutQueue);
 
     processTimeoutQueue(base);
   }

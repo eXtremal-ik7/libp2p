@@ -240,6 +240,7 @@ void test_userevent_cb(asyncBase *base, aioObject *event, void *arg)
 {
   TestContext *ctx = (TestContext*)arg;
   ctx->state++;
+
   if (ctx->state == 9) {
     userEventActivate(event);
   } else if (ctx->state == 10) {
