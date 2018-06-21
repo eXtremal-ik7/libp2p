@@ -6,7 +6,7 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
   
-typedef void aioEventCb(asyncBase *base, aioObject *event, void *arg);
+typedef void aioEventCb(asyncBase *base, aioUserEvent *event, void *arg);
 typedef void aioConnectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg);
 typedef void aioAcceptCb(AsyncOpStatus status, asyncBase *base, aioObject *listener, HostAddress client, socketTy socket, void *arg);
 typedef void aioCb(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg);
@@ -20,10 +20,11 @@ aioObject *newSocketIo(asyncBase *base, socketTy hSocket);
 aioObject *newDeviceIo(asyncBase *base, iodevTy hDevice);
 void deleteAioObject(aioObject *object);
 
-aioObject *newUserEvent(asyncBase *base, aioEventCb callback, void *arg);
-void userEventStartTimer(aioObject *event, uint64_t usTimeout, int counter);
-void userEventStopTimer(aioObject *event);
-void userEventActivate(aioObject *event);
+aioUserEvent *newUserEvent(asyncBase *base, aioEventCb callback, void *arg);
+void userEventStartTimer(aioUserEvent *event, uint64_t usTimeout, int counter);
+void userEventStopTimer(aioUserEvent *event);
+void userEventActivate(aioUserEvent *event);
+void deleteUserEvent(aioUserEvent *event);
 
 void aioConnect(asyncBase *base, 
                 aioObject *op,
@@ -82,7 +83,7 @@ ssize_t ioRead(asyncBase *base, aioObject *op, void *buffer, size_t size, AsyncF
 ssize_t ioReadMsg(asyncBase *base, aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
 ssize_t ioWrite(asyncBase *base, aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
 ssize_t ioWriteMsg(asyncBase *base, aioObject *op, const HostAddress *address, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
-void ioSleep(aioObject *event, uint64_t usTimeout);
+void ioSleep(aioUserEvent *event, uint64_t usTimeout);
 
 void asyncLoop(asyncBase *base);
 void postQuitOperation(asyncBase *base);

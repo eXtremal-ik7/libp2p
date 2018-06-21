@@ -15,6 +15,7 @@ typedef struct asyncOpRoot asyncOpRoot;
 typedef struct coroutineTy coroutineTy;
 
 typedef struct aioObject aioObject;
+typedef struct aioUserEvent aioUserEvent;
 typedef struct asyncOp asyncOp;
 
 typedef asyncOpRoot *newAsyncOpTy(asyncBase*);
@@ -33,7 +34,6 @@ typedef enum AsyncMethod {
 
 
 typedef enum IoObjectTy {
-  ioObjectUserEvent = 0,
   ioObjectSocket,
   ioObjectDevice,
   ioObjectUserDefined
@@ -96,9 +96,10 @@ struct asyncOpRoot {
   void *arg;
   int opCode;
   int flags;
-  uint64_t endTime;
-  timerTy timerId;
-  int counter;  
+  union {
+    uint64_t endTime;
+    void *timerId;
+  };
 };
 
 aioObjectRoot *initObjectRoot(int type, size_t size, aioObjectDestructor destructor);

@@ -198,7 +198,7 @@ void test_udp_rw_client_readcb(AsyncOpStatus status, asyncBase *base, aioObject 
   if (status == aosSuccess && transferred == 6 && ctx->state == 0) {
     ctx->success = memcmp(ctx->clientBuffer, "234567", 6) == 0;
   } 
-    
+
   deleteAioObject(socket);    
   postQuitOperation(base);  
 }
@@ -211,9 +211,6 @@ void test_udp_rw_server_readcb(AsyncOpStatus status, asyncBase *base, aioObject 
       ctx->serverBuffer[i]++;
     aioWriteMsg(base, socket, &address, ctx->serverBuffer, transferred, afNone, 0, 0, 0);
     aioReadMsg(base, socket, ctx->serverBuffer, sizeof(ctx->serverBuffer), afNone, 1000000, test_udp_rw_server_readcb, ctx);
-  } else {
-    deleteAioObject(socket);
-    postQuitOperation(base);    
   }
 }
 
@@ -236,7 +233,7 @@ TEST(basic, test_udp_rw)
   ASSERT_TRUE(context.success);
 }
 
-void test_userevent_cb(asyncBase *base, aioObject *event, void *arg)
+void test_userevent_cb(asyncBase *base, aioUserEvent *event, void *arg)
 {
   TestContext *ctx = (TestContext*)arg;
   ctx->state++;
@@ -252,11 +249,11 @@ void test_userevent_cb(asyncBase *base, aioObject *event, void *arg)
 TEST(basic, test_userevent)
 {
   TestContext context;
-  aioObject *event = newUserEvent(gBase, test_userevent_cb, &context);
+  aioUserEvent *event = newUserEvent(gBase, test_userevent_cb, &context);
   userEventStartTimer(event, 5000, 8);
   userEventActivate(event);
   asyncLoop(gBase);  
-  deleteAioObject(event);
+  deleteUserEvent(event);
   ASSERT_TRUE(context.success);  
 }
 

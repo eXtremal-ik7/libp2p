@@ -126,7 +126,7 @@ void readCb(AsyncOpStatus status, asyncBase *base, aioObject *rawSocket, HostAdd
   aioReadMsg(base, rawSocket, client->buffer, sizeof(client->buffer), afNone, 0, readCb, client);
 }
 
-void pingTimerCb(asyncBase *base, aioObject *event, void *arg)
+void pingTimerCb(asyncBase *base, aioUserEvent *event, void *arg)
 {
   ICMPClientData *clientData = (ICMPClientData*)arg;
   clientData->id++;
@@ -143,7 +143,7 @@ void pingTimerCb(asyncBase *base, aioObject *event, void *arg)
 }
 
 
-void printTimerCb(asyncBase *base, aioObject *event, void *arg)
+void printTimerCb(asyncBase *base, aioUserEvent *event, void *arg)
 {
   std::vector<uint32_t> forDelete;
   ICMPClientData *clientData = (ICMPClientData*)arg;
@@ -235,11 +235,10 @@ int main(int argc, char **argv)
   client.data.icmp_seq = 0;
 
   asyncBase *base = createAsyncBase(amOSDefault);
-  aioObject *pingTimer = newUserEvent(base, pingTimerCb, &client);
-  aioObject *printTimer = newUserEvent(base, printTimerCb, &client);
+  aioUserEvent *pingTimer = newUserEvent(base, pingTimerCb, &client);
+  aioUserEvent *printTimer = newUserEvent(base, printTimerCb, &client);
   client.rawSocket = newSocketIo(base, S);
 
-//   dynamicBufferInit(&client.buffer, 1024);
   aioReadMsg(base, client.rawSocket, client.buffer, sizeof(client.buffer), afNone, 0, readCb, &client);
   userEventStartTimer(printTimer, 100000, -1);
   userEventStartTimer(pingTimer, (uint64_t)(gInterval*1000000), -1);

@@ -33,7 +33,7 @@ void readCb(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t tra
 }
 
 
-void pingTimerCb(asyncBase *base, aioObject *event, void *arg)
+void pingTimerCb(asyncBase *base, aioUserEvent *event, void *arg)
 {
   ClientData *data = (ClientData*)arg;
   if (data->isConnected) {
@@ -98,7 +98,7 @@ int main(int argc, char **argv)
 
   ClientData data;  
   aioObject *socketOp = newSocketIo(base, hSocket);
-  aioObject *stdInputOp = newUserEvent(base, pingTimerCb, &data);
+  aioUserEvent *stdInputOp = newUserEvent(base, pingTimerCb, &data);
 
   address.family = AF_INET;
   address.ipv4 = inet_addr(argv[2]);

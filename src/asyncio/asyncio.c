@@ -10,6 +10,7 @@
 
 const char *poolId = "asyncIo";
 const char *timerPoolId = "asyncIoTimer";
+const char *eventPoolId = "asyncIoEvent";
 
 #ifdef OS_WINDOWS
 asyncBase *iocpNewAsyncBase();
@@ -29,12 +30,10 @@ typedef struct coroReturnStruct {
   size_t bytesTransferred;
 } coroReturnStruct;
 
-void userEventTrigger(aioObjectRoot *event)
+
+static asyncOpRoot *userEventAlloc(asyncBase *base)
 {
-  // timer must be already stopped if need
-  asyncOpRoot *root = event->readQueue.head;
-  if (root->callback)
-    ((aioEventCb*)root->callback)(root->base, (aioObject*)event, root->arg);
+  return (asyncOpRoot*)malloc(sizeof(aioUserEvent));
 }
 
 static void startMethod(asyncOpRoot *root)
@@ -96,6 +95,10 @@ static void finishMethod(asyncOpRoot *root, int status)
   }
 }
 
+static void eventFinish(asyncOpRoot *root, int status)
+{
+  ((aioEventCb*)root->callback)(root->base, (aioUserEvent*)root, root->arg);
+}
 
 static asyncOp *initAsyncOp(asyncBase *base,
                             aioObject *object,
@@ -250,13 +253,16 @@ void postQuitOperation(asyncBase *base)
 }
 
 
-aioObject *newUserEvent(asyncBase *base, aioEventCb callback, void *arg)
+aioUserEvent *newUserEvent(asyncBase *base, aioEventCb callback, void *arg)
 {
-  aioObject *object = malloc(sizeof(aioObject));
-  object->root.type = ioObjectUserEvent;  
-  object->root.readQueue.head =
-    (asyncOpRoot*)initAsyncOp(base, object, callback, arg, 0, 0, 0, 0, actNoAction);
-  return object;
+  aioUserEvent *event =
+    (aioUserEvent*)initAsyncOpRoot(base,
+                                   eventPoolId, eventPoolId,
+                                   userEventAlloc,
+                                   0, eventFinish, 0, callback, arg,
+                                   0, actUserEvent, 0);
+  event->counter = 0;
+  return event;
 }
 
 
@@ -273,39 +279,39 @@ aioObject *newDeviceIo(asyncBase *base, iodevTy hDevice)
 void deleteAioObject(aioObject *object)
 {
   object->root.links--; // TODO: atomic
-  if (object->root.type == ioObjectUserEvent) {
-    asyncOpRoot *op = object->root.readQueue.head;
-    objectRelease(&op->base->pool, op, op->poolId);
-	free(object);
-  } else {
-    if (object->root.type == ioObjectDevice)
-      serialPortClose(object->hDevice);
-    else if (object->root.type == ioObjectSocket)
-      socketClose(object->hSocket);
-    checkForDeleteObject(&object->root);
-  }
+  if (object->root.type == ioObjectDevice)
+    serialPortClose(object->hDevice);
+  else if (object->root.type == ioObjectSocket)
+    socketClose(object->hSocket);
+  checkForDeleteObject(&object->root);
 }
 
-void userEventStartTimer(aioObject *event, uint64_t usTimeout, int counter)
+void userEventStartTimer(aioUserEvent *event, uint64_t usTimeout, int counter)
 {
-  asyncOpRoot *op = event->root.readQueue.head;  
-  op->base->methodImpl.startTimer(op, usTimeout, counter);
+  event->counter = counter;
+  event->timeout = usTimeout;
+  event->root.base->methodImpl.startTimer(&event->root, usTimeout);
 }
 
 
-void userEventStopTimer(aioObject *event)
+void userEventStopTimer(aioUserEvent *event)
+{   
+  event->counter = 0;  
+  event->root.base->methodImpl.stopTimer(&event->root);
+}
+
+
+void userEventActivate(aioUserEvent *event)
+{  
+  event->root.base->methodImpl.activate(&event->root);
+}
+
+void deleteUserEvent(aioUserEvent *event)
 {
-  asyncOpRoot *op = event->root.readQueue.head;    
-  op->base->methodImpl.stopTimer(op);
+  asyncOpRoot *root = &event->root;
+  root->base->methodImpl.stopTimer(root);
+  objectRelease(&root->base->pool, root, root->poolId);
 }
-
-
-void userEventActivate(aioObject *event)
-{
-  asyncOpRoot *op = event->root.readQueue.head;    
-  op->base->methodImpl.activate(op);
-}
-
 
 void *queryObject(asyncBase *base, const void *id)
 {
@@ -469,12 +475,12 @@ ssize_t ioWriteMsg(asyncBase *base, aioObject *op, const HostAddress *address, v
 }
 
 
-void ioSleep(aioObject *event, uint64_t usTimeout)
+void ioSleep(aioUserEvent *event, uint64_t usTimeout)
 {
   coroReturnStruct r = {coroutineCurrent()};  
-  asyncOpRoot *op = event->root.readQueue.head;
-  op->callback = coroutineEventCb;
-  op->arg = &r;
-  op->base->methodImpl.startTimer(op, usTimeout, 1);
+  event->root.callback = coroutineEventCb;
+  event->root.arg = &r;
+  event->counter = 1;
+  event->root.base->methodImpl.startTimer(&event->root, usTimeout);
   coroutineYield();
 }

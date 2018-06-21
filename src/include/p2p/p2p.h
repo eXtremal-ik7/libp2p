@@ -23,11 +23,11 @@ struct p2pEventHandler {
 
 struct p2pPeer {
 private:
-  static void clientNetworkWaitEnd(asyncBase *base, aioObject *event, void *arg);  
+  static void clientNetworkWaitEnd(asyncBase *base, aioUserEvent *event, void *arg);  
   static void clientNetworkConnectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg);
   static void clientP2PConnectCb(int status, asyncBase *base, p2pConnection *connection, void *arg);  
   static void clientReceiver(int status, asyncBase *base, p2pConnection *connection, p2pHeader header, void *arg);  
-  static void checkTimeout(asyncBase *base, aioObject *event, void *arg) { ((p2pPeer*)arg)->checkTimeout(); }
+  static void checkTimeout(asyncBase *base, aioUserEvent *event, void *arg) { ((p2pPeer*)arg)->checkTimeout(); }
   static p2pErrorTy nodeAcceptCb(int status, asyncBase *base, p2pConnection *connection, p2pConnectData *data, void *arg);
   static void nodeMsgHandlerEP(void *peer) { ((p2pPeer*)peer)->nodeMsgHandler(); }
   
@@ -35,8 +35,8 @@ private:
   
 public:
   asyncBase *_base;
-  aioObject *_event;
-  aioObject *_checkTimeoutEvent;
+  aioUserEvent *_event;
+  aioUserEvent *_checkTimeoutEvent;
   p2pNode *_node;  
   HostAddress _address;
   bool _connected;

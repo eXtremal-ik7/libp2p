@@ -4,6 +4,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -12,8 +13,6 @@
 #include <sys/epoll.h>
 
 #define MAX_EVENTS 256
-
-void userEventTrigger(aioObjectRoot *event);
 
 enum pipeDescrs {
   Read = 0,
@@ -58,7 +57,8 @@ aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data);
 asyncOpRoot *epollNewAsyncOp(asyncBase *base);
 void epollDeleteObject(aioObject *object);
 void epollFinishOp(epollOp *op);
-void epollStartTimer(asyncOpRoot *op, uint64_t usTimeout, int count);
+void epollInitializeTimer(asyncOpRoot *op);
+void epollStartTimer(asyncOpRoot *op, uint64_t usTimeout);
 void epollStopTimer(asyncOpRoot *op);
 void epollActivate(asyncOpRoot *op);
 void epollAsyncConnect(epollOp *op,
@@ -79,6 +79,7 @@ static struct asyncImpl epollImpl = {
   epollNewAsyncOp,
   epollDeleteObject,
   (finishOpTy*)epollFinishOp,
+  epollInitializeTimer,
   (startTimerTy*)epollStartTimer,
   (stopTimerTy*)epollStopTimer,
   (activateTy*)epollActivate,
@@ -178,11 +179,14 @@ static void timerCb(int sig, siginfo_t *si, void *uc)
 {
   asyncOpRoot *op = (asyncOpRoot*)si->si_value.sival_ptr;
   epollBase *base = (epollBase *)op->base;
-
   pipeMsg msg = {Timeout, (void *)op};
 
-  if (op->counter > 0)
-    op->counter--;
+  if (op->opCode == actUserEvent) {
+    aioUserEvent *event = (aioUserEvent*)op;
+    if (event->counter > 0)
+      event->counter--;
+  }
+  
   write(base->pipeFd[Write], &msg, sizeof(pipeMsg));
 }
 
@@ -201,7 +205,6 @@ static void startTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic)
 static void stopTimer(asyncOpRoot *op)
 {
   struct itimerspec its;
-  op->counter = 0;
   memset(&its, 0, sizeof(its));
   if (timer_settime(op->timerId, 0, &its, NULL) == -1) {
     fprintf(stderr, " * epollStopTimer: timer_settime error\n");
@@ -402,24 +405,23 @@ void epollNextFinishedOperation(asyncBase *base)
         for (i = 0; i < available / sizeof(pipeMsg); i++) {
           read(localBase->pipeFd[Read], &msg, sizeof(pipeMsg));
           asyncOpRoot *op = (asyncOpRoot*)msg.data;
-          aioObjectRoot *object;
           switch (msg.cmd) {
             case Reset :
               return;
             case Timeout :
-              object = op->object;
-              if (object->type == ioObjectUserEvent) {
-                if (op->counter == 0)
-                  stopTimer(op);
-                userEventTrigger(object);
+              if (op->opCode == actUserEvent) {
+                aioUserEvent *event = (aioUserEvent*)op;
+                if (event->counter == 0)
+                  stopTimer(&event->root);
+                event->root.finishMethod(&event->root, aosSuccess);
               } else {
-                if (object->type != ioObjectUserDefined)
+                if (op->object->type != ioObjectUserDefined)
                   asyncOpUnlink((epollOp*)op);
                 finishOperation(op, aosTimeout, 0);
               }
               break;
             case UserEvent :
-              userEventTrigger(op->object);
+              op->finishMethod(op, aosSuccess);
               break;
           }
         }
@@ -474,17 +476,25 @@ void epollFinishOp(epollOp *op)
   asyncOpUnlink(op);
 }
 
-void epollStartTimer(asyncOpRoot *op, uint64_t usTimeout, int count)
+void epollInitializeTimer(asyncOpRoot *op)
 {
-  // only for user event, 'op' must have timer
-  op->counter = (count > 0) ? count : -1;
-  startTimer(op, usTimeout, 1);
+  timer_t timerId = 0;
+  struct sigevent sEvent;
+  sEvent.sigev_notify = SIGEV_SIGNAL;
+  sEvent.sigev_signo = SIGRTMIN;
+  sEvent.sigev_value.sival_ptr = op;
+  timer_create(CLOCK_REALTIME, &sEvent, &timerId);
+  op->timerId = (void*)timerId;
+}
+
+void epollStartTimer(asyncOpRoot *op, uint64_t usTimeout)
+{
+  startTimer(op, usTimeout, op->opCode == actUserEvent);
 }
 
 
 void epollStopTimer(asyncOpRoot *op)
 {
-  // only for user event, 'op' must have timer  
   stopTimer(op);
 }
 

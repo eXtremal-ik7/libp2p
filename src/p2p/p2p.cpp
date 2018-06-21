@@ -84,7 +84,7 @@ void p2pPeer::clientP2PConnectCb(int status, asyncBase *base, p2pConnection *con
   }
 }
 
-void p2pPeer::clientNetworkWaitEnd(asyncBase *base, aioObject *event, void *arg)
+void p2pPeer::clientNetworkWaitEnd(asyncBase *base, aioUserEvent *event, void *arg)
 { 
   ((p2pPeer*)arg)->connect();
 }

@@ -8,7 +8,8 @@ typedef enum IoActionTy {
   actRead,
   actWrite,
   actReadMsg,
-  actWriteMsg
+  actWriteMsg,
+  actUserEvent
 } IoActionTy;
 
 
@@ -17,7 +18,8 @@ typedef void nextFinishedOperationTy(asyncBase*);
 typedef aioObject *newAioObjectTy(asyncBase*, IoObjectTy, void*);
 typedef void deleteObjectTy(aioObject*);
 typedef void finishOpTy(asyncOp*);
-typedef void startTimerTy(asyncOpRoot*, uint64_t, int);
+typedef void initializeTimerTy(asyncOpRoot*);
+typedef void startTimerTy(asyncOpRoot*, uint64_t);
 typedef void stopTimerTy(asyncOpRoot*);
 typedef void activateTy(asyncOpRoot*);
 typedef void asyncConnectTy(asyncOp*, const HostAddress*);
@@ -34,6 +36,7 @@ struct asyncImpl {
   newAsyncOpTy *newAsyncOp;
   deleteObjectTy *deleteObject;
   finishOpTy *finishOp;
+  initializeTimerTy *initializeTimer;
   startTimerTy *startTimer;
   stopTimerTy *stopTimer;
   activateTy *activate;
@@ -76,6 +79,12 @@ struct asyncOp {
 
   void *internalBuffer;
   size_t internalBufferSize;  
+};
+
+struct aioUserEvent {
+  asyncOpRoot root;
+  uint64_t timeout;
+  int counter;
 };
 
 void pageMapInit(pageMap *map);

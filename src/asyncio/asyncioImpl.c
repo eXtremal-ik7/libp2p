@@ -87,30 +87,6 @@ void pageMapRemove(pageMap *map, asyncOpRoot *op)
     op->timeoutQueue.next->timeoutQueue.prev = op->timeoutQueue.prev;
 }
 
-timerTy nullTimer()
-{
-#ifdef WIN32
-  return INVALID_HANDLE_VALUE;
-#else
-  return 0;
-#endif
-}
-
-timerTy createTimer(void *arg)
-{
-#ifdef WIN32
-  return CreateWaitableTimer(NULL, FALSE, NULL);
-#else
-  timerTy timerId = 0;
-  struct sigevent sEvent;
-  sEvent.sigev_notify = SIGEV_SIGNAL;
-  sEvent.sigev_signo = SIGRTMIN;
-  sEvent.sigev_value.sival_ptr = arg;
-  timer_create(CLOCK_REALTIME, &sEvent, &timerId);
-  return timerId;
-#endif
-}
-
 void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op)
 {
   // TODO acquireSpinlock(base)
@@ -185,7 +161,7 @@ void cancelIo(aioObjectRoot *object, asyncBase *base)
       return;
     }
     
-    if (op->timerId != nullTimer()) {
+    if (op->flags & afRealtime) {
       base->methodImpl.stopTimer(op);
     } else if (op->endTime) {
       removeFromTimeoutQueue(base, op);
@@ -214,7 +190,7 @@ void cancelIo(aioObjectRoot *object, asyncBase *base)
       return;
     }
     
-    if (op->timerId != nullTimer()) {
+    if (op->flags & afRealtime) {
       base->methodImpl.stopTimer(op);
     } else if (op->endTime) {
       removeFromTimeoutQueue(base, op);
@@ -241,17 +217,17 @@ asyncOpRoot *initAsyncOpRoot(asyncBase *base,
                              int opCode,
                              uint64_t timeout)
 {
-  int realtime = (object->type == ioObjectUserEvent) || (flags & afRealtime);
+  int realtime = (opCode == actUserEvent) || (flags & afRealtime);
   const char *pool = realtime ? timerPool : nonTimerPool;  
   asyncOpRoot *op = (asyncOpRoot*)objectGet(&base->pool, pool);  
   if (!op) {
     op = newOpProc(base);
-    op->timerId = realtime ? createTimer(op) : nullTimer();
-    op->base = base;
+    op->base = base;    
     op->poolId = pool;
     op->startMethod = startMethod;
     op->finishMethod = finishMethod;
-
+    if (realtime)
+      op->base->methodImpl.initializeTimer(op);
   }
   
   op->executeQueue.prev = 0;
@@ -261,15 +237,13 @@ asyncOpRoot *initAsyncOpRoot(asyncBase *base,
   op->object = object;
   op->flags = flags;
   op->opCode = opCode;
-  op->endTime = 0;
   op->callback = callback;
   op->arg = arg;
-  op->counter = 0;  
   
   if (timeout) {
     if (realtime) {
       // start timer for this operation
-      op->base->methodImpl.startTimer(op, timeout, 1);
+      op->base->methodImpl.startTimer(op, timeout);
     } else {
       // add operation to timeout grid
       op->endTime = ((uint64_t)time(0))*1000000ULL + timeout;
@@ -350,7 +324,7 @@ void finishOperation(asyncOpRoot *op, int status, int needRemoveFromTimeGrid)
   aioObjectRoot *object = op->object;
   object->links++; // TODO: atomic
   
-  if (op->timerId != nullTimer()) {
+  if (op->flags & afRealtime) {
     base->methodImpl.stopTimer(op);
   } else if (op->endTime && needRemoveFromTimeGrid) {
     removeFromTimeoutQueue(base, op);

@@ -49,7 +49,8 @@ aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data);
 asyncOpRoot *selectNewAsyncOp(asyncBase *base);
 void selectDeleteObject(aioObject *object);
 void selectFinishOp(selectOp *op);
-void selectStartTimer(asyncOpRoot *op, uint64_t usTimeout, int count);
+void selectInitializeTimer(asyncOpRoot *op);
+void selectStartTimer(asyncOpRoot *op, uint64_t usTimeout);
 void selectStopTimer(asyncOpRoot *op);
 void selectActivate(asyncOpRoot *op);
 void selectAsyncConnect(selectOp *op, const HostAddress *address, uint64_t usTimeout);
@@ -67,6 +68,7 @@ static struct asyncImpl selectImpl = {
   selectNewAsyncOp,
   selectDeleteObject,
   (finishOpTy*)selectFinishOp,
+  selectInitializeTimer,
   (startTimerTy*)selectStartTimer,
   (stopTimerTy*)selectStopTimer,
   (activateTy*)selectActivate,
@@ -147,8 +149,12 @@ static void timerCb(int sig, siginfo_t *si, void *uc)
   asyncOpRoot *op = (asyncOpRoot*)si->si_value.sival_ptr;
   selectBase *base = (selectBase*)op->base;
   
-  if (op->counter > 0)
-    op->counter--;
+  if (op->opCode == actUserEvent) {
+    aioUserEvent *event = (aioUserEvent*)op;
+    if (event->counter > 0)
+      event->counter--;
+  }
+  
   write(base->pipeFd[1], &op, sizeof(op));
 }
 
@@ -169,7 +175,6 @@ static void startTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic)
 static void stopTimer(asyncOpRoot *op)
 {
   struct itimerspec its;   
-  op->counter = 0;
   memset(&its, 0, sizeof(its));
   if (timer_settime(op->timerId, 0, &its, NULL) == -1) {
     fprintf(stderr, " * selectStopTimer: timer_settime error\n");    
@@ -405,13 +410,13 @@ void selectNextFinishedOperation(asyncBase *base)
           return;
     
         if (op) {
-          aioObjectRoot *object = op->object;
-          if (object->type == ioObjectUserEvent) {
-            if (op->counter == 0)
+          if (op->opCode == actUserEvent) {
+            aioUserEvent *event = (aioUserEvent*)op;
+            if (event->counter == 0)
               stopTimer(op);
-            userEventTrigger(object);
+            event->root.finishMethod(&event->root, aosSuccess);
           } else {
-            if (object->type != ioObjectUserDefined)
+            if (op->object->type != ioObjectUserDefined)
               asyncOpUnlink((selectOp*)op);
             finishOperation(op, aosTimeout, 0);
           }
@@ -465,17 +470,25 @@ void selectFinishOp(selectOp *op)
   asyncOpUnlink(op);
 }
 
-void selectStartTimer(asyncOpRoot *op, uint64_t usTimeout, int count)
+void selectInitializeTimer(asyncOpRoot *op)
 {
-  // only for user event, 'op' must have timer
-  op->counter = (count > 0) ? count : -1;
-  startTimer(op, usTimeout, 1); 
+  timer_t timerId = 0;
+  struct sigevent sEvent;
+  sEvent.sigev_notify = SIGEV_SIGNAL;
+  sEvent.sigev_signo = SIGRTMIN;
+  sEvent.sigev_value.sival_ptr = op;
+  timer_create(CLOCK_REALTIME, &sEvent, &timerId);
+  op->timerId = (void*)timerId;
+}
+
+void selectStartTimer(asyncOpRoot *op, uint64_t usTimeout)
+{
+  startTimer(op, usTimeout, op->opCode == actUserEvent);
 }
 
 
 void selectStopTimer(asyncOpRoot *op)
 {
-  // only for user event, 'op' must have timer
   stopTimer(op);
 }
 
