@@ -69,6 +69,8 @@ void pageMapAdd(pageMap *map, asyncOpRoot *op)
   
   op->timeoutQueue.prev = 0;
   op->timeoutQueue.next = p1[lo];
+  if (p1[lo])
+    p1[lo]->timeoutQueue.prev = op;
   p1[lo] = op;
 }
 

@@ -395,8 +395,6 @@ void epollNextFinishedOperation(asyncBase *base)
     do {
       nfds = epoll_wait(localBase->epollFd, events, MAX_EVENTS, 1000);
     } while (nfds <= 0 && errno == EINTR);
-    
-    processTimeoutQueue(base);
 
     for (n = 0; n < nfds; n++) {
       if (events[n].data.fd == localBase->pipeFd[Read]) {
@@ -432,6 +430,8 @@ void epollNextFinishedOperation(asyncBase *base)
           processReadyFd(localBase, events[n].data.fd, 0);
       }
     }
+    
+    processTimeoutQueue(base);
   }
 }
 

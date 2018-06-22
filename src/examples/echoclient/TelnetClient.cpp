@@ -16,6 +16,14 @@ struct ClientData {
   uint8_t buffer[clientBufferSize];
 };
 
+void writeCb(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
+{
+  ClientData *data = (ClientData*)arg;
+  if (status != aosSuccess) {
+    printf("write error\n");
+    postQuitOperation(data->base);
+  }
+}
 
 void readCb(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
 {
@@ -40,7 +48,7 @@ void pingTimerCb(asyncBase *base, aioUserEvent *event, void *arg)
     char symbol = 32 + rand() % 96;
     printf("%02X:", (int)symbol);
     fflush(stdout);
-    aioWrite(base, data->socket, &symbol, 1, afNone, 1000000, 0, 0);
+    aioWrite(base, data->socket, &symbol, 1, afNone, 1000000, writeCb, data);
     aioRead(base, data->socket, data->buffer, clientBufferSize, afNone, 1000000, readCb, data);
   }
 }
