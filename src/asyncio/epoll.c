@@ -46,8 +46,6 @@ typedef struct epollBase {
   int pipeFd[2];
 
   fdStruct *fdMap;
-  int fdMapSize;
-  
   int epollFd;
 } epollBase;
 
@@ -133,22 +131,7 @@ static int getFd(epollOp *op)
 
 static fdStruct *getFdStruct(epollBase *base, int fd)
 {
-  fdStruct *fds;
-  if (fd < base->fdMapSize) {
-    fds = &base->fdMap[fd];
-  } else {
-    int newfdMapSize = base->fdMapSize;
-    while (newfdMapSize <= fd)
-      newfdMapSize *= 2;
-
-    base->fdMap = realloc(base->fdMap, newfdMapSize*sizeof(fdStruct));
-    memset(&base->fdMap[base->fdMapSize], 0, (newfdMapSize-base->fdMapSize)*sizeof(fdStruct));
-    base->fdMapSize = newfdMapSize;
-    
-    fds = &base->fdMap[fd];
-  }
-  
-  return fds;  
+  return &base->fdMap[fd];
 }
 
 static void asyncOpLink(fdStruct *fds, epollOp *op)
@@ -227,10 +210,7 @@ asyncBase *epollNewAsyncBase()
 
     pipe(base->pipeFd);
     base->B.methodImpl = epollImpl;
-
-    base->fdMap = (fdStruct*)calloc(MAX_EVENTS, sizeof(fdStruct));
-    base->fdMapSize = MAX_EVENTS;
-
+    base->fdMap = (fdStruct*)calloc(getdtablesize(), sizeof(fdStruct));
     base->epollFd = epoll_create(MAX_EVENTS);
     if (base->epollFd == -1) {
       fprintf(stderr, " * epollNewAsyncBase: epoll_create ");
@@ -393,7 +373,9 @@ void epollNextFinishedOperation(asyncBase *base)
 
   while (1) {
     do {
-      nfds = epoll_wait(localBase->epollFd, events, MAX_EVENTS, 1000);
+      nfds = epoll_wait(localBase->epollFd, events, MAX_EVENTS, 500);
+      if (nfds == 0)
+        processTimeoutQueue(base);
     } while (nfds <= 0 && errno == EINTR);
 
     for (n = 0; n < nfds; n++) {
@@ -430,8 +412,6 @@ void epollNextFinishedOperation(asyncBase *base)
           processReadyFd(localBase, events[n].data.fd, 0);
       }
     }
-    
-    processTimeoutQueue(base);
   }
 }
 

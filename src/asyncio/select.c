@@ -4,16 +4,15 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/types.h>
-
-#include <map>
 #include <stdio.h>
 
-extern "C" void userEventTrigger(aioObjectRoot *event);
+void userEventTrigger(aioObjectRoot *event);
 
 typedef struct selectOp {
   asyncOp info;
@@ -26,20 +25,15 @@ typedef enum {
   mtError = 4
 } MaskTy;
 
-struct fdStruct {
+typedef struct fdStruct {
   aioObject *object;
   int mask;
-};
-
-
-typedef std::map<int, fdStruct*> OpLinksMap;
-
+} fdStruct;
 
 typedef struct selectBase {
   asyncBase B;
   int pipeFd[2];  
-  OpLinksMap readOps;
-  OpLinksMap writeOps;
+  fdStruct *fdMap;
 } selectBase;
 
 
@@ -109,16 +103,9 @@ static int getFd(selectOp *op)
   }
 }
 
-static fdStruct *getFdOperations(OpLinksMap &opMap, int fd)
+static fdStruct *getFdOperations(selectBase *base, int fd)
 {
-  OpLinksMap::iterator F = opMap.find(fd);
-  if (F == opMap.end()) {
-    fdStruct *list = new fdStruct;
-    list->object = 0;
-    list->mask = 0;
-    F = opMap.insert(F, std::make_pair(fd, list));
-  }
-  return F->second;
+  return &base->fdMap[fd];  
 }
 
 
@@ -133,16 +120,10 @@ static void asyncOpUnlink(selectOp *op)
 {
   if (!op->info.root.executeQueue.next) {
     selectBase *localBase = (selectBase*)op->info.root.base;
-    OpLinksMap &links = isWriteOperation(op->info.root.opCode) ?
-      localBase->writeOps : localBase->readOps;
-    fdStruct *list = getFdOperations(links, getFd(op));
+    fdStruct *list = getFdOperations(localBase, getFd(op));
     list->mask &= ~(isWriteOperation(op->info.root.opCode) ? mtWrite : mtRead);
   }
 }
-
-
-
-
 
 static void timerCb(int sig, siginfo_t *si, void *uc)
 {
@@ -187,21 +168,22 @@ static void startOperation(selectOp *op,
                            uint64_t usTimeout)
 {
   selectBase *localBase = (selectBase*)op->info.root.base;
-
+/*
   OpLinksMap &links = isWriteOperation(action) ?
-    localBase->writeOps : localBase->readOps;
+    localBase->writeOps : localBase->readOps;*/
   
-  asyncOpLink(getFdOperations(links, getFd(op)), op);    
+  asyncOpLink(getFdOperations(localBase, getFd(op)), op);    
 }
 
 
-extern "C" asyncBase *selectNewAsyncBase()
+asyncBase *selectNewAsyncBase()
 {
-  selectBase *base = new selectBase;
+  selectBase *base = malloc(sizeof(selectBase));
   if (base) {
     struct sigaction sAction;
 
     pipe(base->pipeFd);    
+    base->fdMap = (fdStruct*)calloc(getdtablesize(), sizeof(fdStruct));
     base->B.methodImpl = selectImpl;
 
 #ifdef OS_QNX    
@@ -242,17 +224,16 @@ static void finish(selectOp *op, AsyncOpStatus status)
 
 
 static void processReadyFds(selectBase *base,
-                            OpLinksMap &links,
                             fd_set *fds,
+                            int nfds,
                             int isRead)
 {
-  for (OpLinksMap::iterator I = links.begin(), IE = links.end(); I != IE; ++I) {
-    int fd = I->first;    
-    if (!FD_ISSET(fd, fds))
+  for (int fd = 0; fd < nfds; fd++) {
+    fdStruct *list = getFdOperations(base, fd);
+    if (!FD_ISSET(fd, fds) || !list->object)
       continue;
   
     int available;
-    fdStruct *list = getFdOperations(links, fd);
     aioObject *object = list->object;
     selectOp *op = (selectOp*)(isRead ? object->root.readQueue.head : object->root.writeQueue.head);    
     if (!op)
@@ -280,7 +261,7 @@ static void processReadyFds(selectBase *base,
         struct sockaddr_in clientAddr;
         socklen_t clientAddrSize = sizeof(clientAddr);
         op->info.acceptSocket =
-          accept(fd, (sockaddr*)&clientAddr, &clientAddrSize);
+          accept(fd, (struct sockaddr*)&clientAddr, &clientAddrSize);
                 
         if (op->info.acceptSocket != -1) {
           op->info.host.family = 0;
@@ -296,10 +277,11 @@ static void processReadyFds(selectBase *base,
                 
       case actRead : {
         int readyForRead = 0;
-        uint8_t *ptr = (uint8_t*)op->info.buffer + op->info.bytesTransferred;
+        uint8_t *ptr = (uint8_t *)op->info.buffer + op->info.bytesTransferred;
         readyForRead =
-          std::min(op->info.transactionSize - op->info.bytesTransferred,
-                   (size_t)available);
+          (op->info.transactionSize - op->info.bytesTransferred < (size_t)available) ?
+            op->info.transactionSize - op->info.bytesTransferred :
+            (size_t)available;
         read(fd, ptr, readyForRead);
         op->info.bytesTransferred += readyForRead;
         if (op->info.bytesTransferred == op->info.transactionSize ||
@@ -352,7 +334,7 @@ static void processReadyFds(selectBase *base,
         remoteAddress.sin_port = op->info.host.port;
 
         sendto(fd, ptr, op->info.transactionSize, 0,
-               (sockaddr*)&remoteAddress, sizeof(remoteAddress));
+               (struct sockaddr*)&remoteAddress, sizeof(remoteAddress));
         finish(op, aosSuccess);
         break;
       }
@@ -367,6 +349,7 @@ static void processReadyFds(selectBase *base,
 void selectNextFinishedOperation(asyncBase *base)
 {
   selectBase *localBase = (selectBase*)base;
+  struct timeval tv;
   
   while (1) {
     int nfds;
@@ -378,26 +361,21 @@ void selectNextFinishedOperation(asyncBase *base)
     FD_SET(localBase->pipeFd[0], &readFds);
 
     nfds = localBase->pipeFd[0] + 1;      
-    for (OpLinksMap::iterator I = localBase->readOps.begin(),
-         IE = localBase->readOps.end(); I != IE; ++I) {
-      if (I->second->mask & mtRead) {
-        nfds = std::max(nfds, I->first+1);
-        FD_SET(I->first, &readFds);
-      }
-    }
-      
-    for (OpLinksMap::iterator I = localBase->writeOps.begin(),
-         IE = localBase->writeOps.end(); I != IE; ++I) {  
-      if (I->second->mask & mtWrite) {
-        nfds = std::max(nfds, I->first+1);
-        if (I->second->object->root.type == ioObjectSocket)
-          FD_SET(I->first, &readFds);
-        FD_SET(I->first, &writeFds);
-      }
+    for (int i = 0; i < FD_SETSIZE; i++) {
+      fdStruct *fds = getFdOperations(localBase, i);
+      if (fds->mask & mtRead)
+        FD_SET(i, &readFds);
+      if (fds->mask & mtWrite)
+        FD_SET(i, &writeFds);
+      nfds = i+1;
     }
 
     do {
-      result = select(nfds, &readFds, &writeFds, NULL, NULL);
+      tv.tv_sec = 0;
+      tv.tv_usec = 500*1000;      
+      result = select(nfds, &readFds, &writeFds, NULL, &tv);
+      if (result == 0)
+        processTimeoutQueue(base);
     } while (result <= 0 && errno == EINTR);
 
     if (FD_ISSET(localBase->pipeFd[0], &readFds)) {
@@ -424,8 +402,8 @@ void selectNextFinishedOperation(asyncBase *base)
       }
     }
 
-    processReadyFds(localBase, localBase->readOps, &readFds, 1);
-    processReadyFds(localBase, localBase->writeOps, &writeFds, 0);
+    processReadyFds(localBase, &readFds, nfds, 1);
+    processReadyFds(localBase, &writeFds, nfds, 0);
   } 
 }
 
@@ -450,7 +428,7 @@ aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 
 asyncOpRoot *selectNewAsyncOp(asyncBase *base)
 {
-  selectOp *op = new selectOp;
+  selectOp *op = malloc(sizeof(selectOp));
   if (op) {
     op->info.internalBuffer = 0;
     op->info.internalBufferSize = 0;
@@ -508,7 +486,7 @@ void selectAsyncConnect(selectOp *op,
   localAddress.sin_family = address->family;
   localAddress.sin_addr.s_addr = address->ipv4;
   localAddress.sin_port = address->port;
-  int err = connect(getObject(op)->hSocket, (sockaddr*)&localAddress, sizeof(localAddress));
+  int err = connect(getObject(op)->hSocket, (struct sockaddr*)&localAddress, sizeof(localAddress));
 
   if (err == -1 && errno != EINPROGRESS) {
     fprintf(stderr, "connect error, errno: %s\n", strerror(errno));

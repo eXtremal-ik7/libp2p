@@ -1,3 +1,7 @@
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "asyncio/api.h"
 #include "asyncio/objectPool.h"
 
@@ -93,3 +97,7 @@ void pageMapAdd(pageMap *map, asyncOpRoot *op);
 void pageMapRemove(pageMap *map, asyncOpRoot *op);
 
 void processTimeoutQueue(asyncBase *base);
+
+#ifdef __cplusplus
+}
+#endif

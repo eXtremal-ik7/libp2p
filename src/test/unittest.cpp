@@ -233,6 +233,67 @@ TEST(basic, test_udp_rw)
   ASSERT_TRUE(context.success);
 }
 
+void test_timeout_readcb(AsyncOpStatus status, asyncBase *base, aioObject *socket, HostAddress address, size_t transferred, void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+  if (status == aosTimeout) {
+    ctx->state++;
+    if (ctx->state == 4) {
+      ctx->success = true;
+      postQuitOperation(base);
+    }
+  }
+}
+
+TEST(basic, test_timeout)
+{
+  TestContext context;
+  context.serverSocket = startUDPServer(gBase, test_udp_rw_server_readcb, &context, context.serverBuffer, sizeof(context.serverBuffer), gPort);
+  ASSERT_NE(context.serverSocket, (void*)0);
+  aioReadMsg(gBase, context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afRealtime, 1000, test_timeout_readcb, &context);
+  aioReadMsg(gBase, context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afRealtime, 5000, test_timeout_readcb, &context);  
+  aioReadMsg(gBase, context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afRealtime, 10000, test_timeout_readcb, &context);    
+  aioReadMsg(gBase, context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afNone, 100000, test_timeout_readcb, &context);  
+  asyncLoop(gBase);
+  deleteAioObject(context.serverSocket);
+  ASSERT_TRUE(context.success);
+}
+
+void test_delete_object_eventcb(asyncBase *base, aioUserEvent *event, void *arg)
+{
+  printf("test_delete_object_eventcb\n");
+  TestContext *ctx = (TestContext*)arg;
+  deleteAioObject(ctx->serverSocket);
+}
+
+void test_delete_object_readcb(AsyncOpStatus status, asyncBase *base, aioObject *socket, HostAddress address, size_t transferred, void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+  if (status != aosSuccess) {
+    ctx->state++;
+    if (ctx->state == 1000) {
+      ctx->success = true;
+      postQuitOperation(base);
+    }
+  }
+}
+
+TEST(basic, test_delete_object)
+{
+  TestContext context;
+  context.serverSocket = startUDPServer(gBase, test_udp_rw_server_readcb, &context, context.serverBuffer, sizeof(context.serverBuffer), gPort);
+  ASSERT_NE(context.serverSocket, (void*)0);
+  
+  for (int i = 0; i < 1000; i++)
+    aioReadMsg(gBase, context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afNone, 10*1000000, test_delete_object_readcb, &context); 
+  
+  aioUserEvent *event = newUserEvent(gBase, test_delete_object_eventcb, &context);
+  userEventStartTimer(event, 5000, 1);
+  asyncLoop(gBase);  
+  deleteUserEvent(event);
+  ASSERT_TRUE(context.success);  
+}
+
 void test_userevent_cb(asyncBase *base, aioUserEvent *event, void *arg)
 {
   TestContext *ctx = (TestContext*)arg;
@@ -317,9 +378,26 @@ TEST(coroutine, nested)
 
 int main(int argc, char **argv)
 {
+  AsyncMethod method = amOSDefault;
+  if (argc >= 2) {
+    if (strcmp(argv[1], "default") == 0) {
+      method = amOSDefault;
+    } else if (strcmp(argv[1], "select") == 0) {
+      method = amSelect;
+    } else if (strcmp(argv[1], "epoll") == 0) {
+      method = amEPoll;
+    } else if (strcmp(argv[1], "kqueue") == 0) {
+      method = amKQueue;
+    } else if (strcmp(argv[1], "iocp") == 0) {
+      method = amIOCP;
+    } else {
+      fprintf(stderr, "ERROR: unknown method %s, default used\n", argv[1]);
+    }  
+  }
+  
   initializeSocketSubsystem();
   
-  gBase = createAsyncBase(amOSDefault);
+  gBase = createAsyncBase(method);
   
   ::testing::InitGoogleTest(&argc, argv); 
   return RUN_ALL_TESTS();
