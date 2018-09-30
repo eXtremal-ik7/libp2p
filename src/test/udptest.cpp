@@ -3,14 +3,22 @@
 #include "asyncio/socket.h"
 #include "asyncio/timer.h"
 #include <errno.h>
+#include <inttypes.h>
 #include <memory.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <thread>
+#ifndef OS_WINDOWS
+#include <unistd.h>
+#endif
  
 static unsigned gPortBase = 63300;
+#ifdef OS_WINDOWS
+// Windows have low performance loopback interface
+static uint64_t gTotalPacketNum = 640000ULL;
+#else
 static uint64_t gTotalPacketNum = 4000000ULL;
+#endif
 static unsigned gGroupSize = 1000;
 static unsigned gMessageSize = 16;
 
@@ -188,7 +196,11 @@ void *test_sync_receiver(void *arg)
   for (;;) {
     for (unsigned i = 0; i < receiverCtx->config->groupSize; i++) {
       sockaddr_in addr;
+#ifdef OS_WINDOWS
+      int len = sizeof(addr);
+#else
       socklen_t len = sizeof(addr);
+#endif
       recvfrom(receiverCtx->serverSocket, msg, sizeof(msg), 0, (sockaddr*)&addr, &len);
       if (!receiverCtx->started) {
         receiverCtx->started = true;
@@ -351,7 +363,7 @@ void test_aio(unsigned senderThreads, unsigned receiverThreads, int port, AIOSen
   address.family = AF_INET;
   address.ipv4 = INADDR_ANY;
   address.port = htons(ctx.port);
-  socketTy serverSocket = socketCreate(AF_INET, SOCK_DGRAM, IPPROTO_UDP, 0);
+  socketTy serverSocket = socketCreate(AF_INET, SOCK_DGRAM, IPPROTO_UDP, receiverTy == aioReceiverBlocking ? 0 : 1);
   socketReuseAddr(serverSocket);
   if (socketBind(serverSocket, &address) != 0)
     return;
@@ -362,7 +374,8 @@ void test_aio(unsigned senderThreads, unsigned receiverThreads, int port, AIOSen
     allReceivers[i].config = &ctx;
     allReceivers[i].type = receiverTy;
     allReceivers[i].serverSocket = serverSocket;
-    allReceivers[i].server = newSocketIo(base, serverSocket);        
+    if (receiverTy != aioReceiverBlocking)
+      allReceivers[i].server = newSocketIo(base, serverSocket);
     allReceivers[i].beginPt = pt;
     allReceivers[i].endPt = pt;    
     
@@ -394,7 +407,7 @@ void test_aio(unsigned senderThreads, unsigned receiverThreads, int port, AIOSen
     address.family = AF_INET;
     address.ipv4 = INADDR_ANY;
     address.port = 0;
-    socketTy clientSocket = socketCreate(AF_INET, SOCK_DGRAM, IPPROTO_UDP, 0);
+    socketTy clientSocket = socketCreate(AF_INET, SOCK_DGRAM, IPPROTO_UDP, senderTy == aioSenderBlocking ? 0 : 1);
     if (socketBind(clientSocket, &address) != 0)
       exit(1);
     
@@ -439,7 +452,11 @@ void test_aio(unsigned senderThreads, unsigned receiverThreads, int port, AIOSen
     if (!receivingActive)
       break;
     
+#ifdef OS_WINDOWS
+    Sleep(1000);
+#else
     sleep(1);
+#endif
   }  
   
   postQuitOperation(base);
@@ -457,7 +474,7 @@ void test_aio(unsigned senderThreads, unsigned receiverThreads, int port, AIOSen
   
   double totalSeconds = usDiff(beginPt, endPt) / 1000000.0;
 
-  printf("Threads S/R %u/%u sender=%s, receiver=%s, total messages: %lu, packet lost: %.2lf%%, elapsed time: %.3lf, rate: %.3lf msg/s\n",
+  printf("Threads S/R %u/%u sender=%s, receiver=%s, total messages: %" PRIu64 ", packet lost: %.2lf%%, elapsed time: %.3lf, rate: %.3lf msg/s\n",
          senderThreads,
          receiverThreads,
          aioSenderName[senderTy],

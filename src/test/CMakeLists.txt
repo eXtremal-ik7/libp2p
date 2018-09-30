@@ -1,3 +1,4 @@
+set(CMAKE_CXX_STANDARD 11)
 find_package(GTest REQUIRED)
 
 if (WIN32)
@@ -16,10 +17,6 @@ add_executable(udptest
 
 include_directories(unittest
   ${GTEST_INCLUDE_DIRS}
-)
-
-SET_TARGET_PROPERTIES(udptest PROPERTIES
-  COMPILE_FLAGS "-std=c++11"
 )
 
 target_link_libraries(unittest ${LIBRARIES} ${GTEST_LIBRARIES})
