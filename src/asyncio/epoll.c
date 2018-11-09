@@ -249,6 +249,7 @@ static void finish(epollOp *op, AsyncOpStatus status)
 {
   asyncOpUnlink(op);
   finishOperation(&op->info.root, status, 1);
+  currentFinishedSync = 0;
 }
 
 
@@ -371,10 +372,17 @@ void epollNextFinishedOperation(asyncBase *base)
   epollBase *localBase = (epollBase *)base;
   pipeMsg msg;
 
+  messageLoopThreadId = __sync_fetch_and_add(&base->messageLoopThreadCounter, 1);
+
   while (1) {
     do {
-      nfds = epoll_wait(localBase->epollFd, events, MAX_EVENTS, 500);
-      if (nfds == 0)
+      executeLocalFinishQueue();
+
+      nfds = epoll_wait(localBase->epollFd, events, MAX_EVENTS, lfHead ? 0 : 500);
+      // TODO:
+      //   * Remove one time() call
+      //   * Check for data race in processTimeoutQueue call
+      if (time(0) % base->messageLoopThreadCounter == messageLoopThreadId)
         processTimeoutQueue(base);
     } while (nfds <= 0 && errno == EINTR);
 

@@ -293,11 +293,12 @@ void iocpNextFinishedOperation(asyncBase *base)
   
   while (1) {
     ULONG N, i;
+    executeLocalFinishQueue();
     BOOL status = GetQueuedCompletionStatusEx(localBase->completionPort,
                                               entries,
                                               maxEntriesNum,
                                               &N,
-                                              INFINITE,
+                                              lfHead ? 0 : INFINITE,
                                               TRUE);
     
     // ignore false status
@@ -350,6 +351,7 @@ void iocpNextFinishedOperation(asyncBase *base)
           }
         }
         
+        currentFinishedSync = 0;
         finishOperation(&op->info.root, result, 1);
       } else {
         processTimeoutQueue(base);

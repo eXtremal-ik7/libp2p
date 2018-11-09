@@ -9,6 +9,10 @@ extern "C" {
 #include <stdint.h>
 #include "asyncio/asyncioTypes.h"
 
+#define MAX_SYNCHRONOUS_FINISHED_OPERATION 32
+
+typedef uint64_t tag_t;
+  
 typedef struct asyncBase asyncBase;
 typedef struct aioObjectRoot aioObjectRoot;
 typedef struct asyncOpRoot asyncOpRoot;
@@ -22,6 +26,18 @@ typedef asyncOpRoot *newAsyncOpTy(asyncBase*);
 typedef void aioStartProc(asyncOpRoot*);
 typedef void aioFinishProc(asyncOpRoot*, int);
 typedef void aioObjectDestructor(aioObjectRoot*);
+
+#ifndef OS_WINDOWS
+extern __thread asyncOpRoot *lfHead;
+extern __thread asyncOpRoot *lfTail;
+extern __thread int currentFinishedSync;
+extern __thread int messageLoopThreadId;
+#else
+extern __declspec(thread) asyncOpRoot *lfHead;
+extern __declspec(thread) asyncOpRoot *lfTail;
+extern __declspec(thread) int currentFinishedSync;
+extern __declspec(thread) int messageLoopThreadId;
+#endif
 
 typedef enum AsyncMethod {
   amOSDefault = 0,
@@ -59,6 +75,10 @@ typedef enum AsyncFlags {
   afRealtime = 4
 } AsyncFlags;
 
+typedef struct AsyncOpLink {
+  asyncOpRoot *op;
+  tag_t tag;
+} AsyncOpLink;
 
 typedef struct List {
   asyncOpRoot *head;
@@ -75,6 +95,7 @@ typedef struct pageMap {
 } pageMap;
 
 struct aioObjectRoot {
+  tag_t tag;
   List readQueue;
   List writeQueue;
   int type;
@@ -84,6 +105,7 @@ struct aioObjectRoot {
 
 struct asyncOpRoot {
   // constant members
+  tag_t tag;
   asyncBase *base;
   const char *poolId;
   aioStartProc *startMethod;
@@ -105,6 +127,14 @@ struct asyncOpRoot {
 aioObjectRoot *initObjectRoot(int type, size_t size, aioObjectDestructor destructor);
 void checkForDeleteObject(aioObjectRoot *object);
 void cancelIo(aioObjectRoot *object, asyncBase *base);
+
+
+tag_t object_try_lock(aioObjectRoot *object);
+tag_t object_try_delete(aioObjectRoot *object);
+int asyncop_try_lock(asyncOpRoot *op, tag_t tag);
+
+void addToLocalFinishQueue(asyncOpRoot *op);
+void executeLocalFinishQueue();
 
 asyncOpRoot *initAsyncOpRoot(asyncBase *base,
                              const char *nonTimerPool,

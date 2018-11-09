@@ -59,6 +59,7 @@ struct asyncBase {
   struct ObjectPool pool;
   struct pageMap timerMap;
   time_t lastCheckPoint;  
+  volatile int messageLoopThreadCounter;
 #ifndef NDEBUG
   int opsCount;
 #endif

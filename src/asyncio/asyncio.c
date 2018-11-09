@@ -235,9 +235,9 @@ asyncBase *createAsyncBase(AsyncMethod method)
 #ifndef NDEBUG
   base->opsCount = 0;
 #endif
-  pageMapInit(&base->timerMap);
+  base->messageLoopThreadCounter = 0;
   base->lastCheckPoint = time(0);
-  
+  pageMapInit(&base->timerMap);
   return base;
 }
 
@@ -386,7 +386,6 @@ void aioWrite(asyncBase *base,
     startMethod(&newOp->root);  
 }
 
-
 void aioReadMsg(asyncBase *base,
                 aioObject *op,
                 void *buffer,
@@ -396,9 +395,28 @@ void aioReadMsg(asyncBase *base,
                 aioReadMsgCb callback,
                 void *arg)
 {
-  asyncOp *newOp = initAsyncOp(base, op, callback, arg, buffer, size, flags, usTimeout, actReadMsg);
-  if (addToExecuteQueue((aioObjectRoot*)op, (asyncOpRoot*)newOp, 0))
-    startMethod(&newOp->root);  
+  struct sockaddr_in source;
+  socketLenTy addrlen = sizeof(source);
+  ssize_t result = recvfrom(op->hSocket, buffer, size, 0, (struct sockaddr*)&source, &addrlen);
+  if (result != -1) {
+    // Data received synchronously
+    HostAddress host;
+    host.family = 0;
+    host.ipv4 = source.sin_addr.s_addr;
+    host.port = source.sin_port;
+    if (++currentFinishedSync >= MAX_SYNCHRONOUS_FINISHED_OPERATION) {
+      asyncOp *newOp = initAsyncOp(base, op, callback, arg, buffer, size, 0, 0, actReadMsg);
+      newOp->bytesTransferred = result;
+      newOp->host = host;
+      addToLocalFinishQueue(&newOp->root);
+    } else {
+      callback(aosSuccess, base, op, host, result, arg);
+    }
+  } else {
+    asyncOp *newOp = initAsyncOp(base, op, callback, arg, buffer, size, flags, usTimeout, actReadMsg);
+    if (addToExecuteQueue(&op->root, &newOp->root, 0))
+      startMethod(&newOp->root);
+  }
 }
 
 
@@ -413,10 +431,26 @@ void aioWriteMsg(asyncBase *base,
                  aioCb callback,
                  void *arg)
 {
-  asyncOp *newOp = initAsyncOp(base, op, callback, arg, buffer, size, flags, usTimeout, actWriteMsg);  
-  newOp->host = *address;
-  if (addToExecuteQueue((aioObjectRoot*)op, (asyncOpRoot*)newOp, 1))
-    startMethod(&newOp->root);  
+  // Datagram socket can be accessed by multiple threads without lock
+  struct sockaddr_in remoteAddress;
+  remoteAddress.sin_family = address->family;
+  remoteAddress.sin_addr.s_addr = address->ipv4;
+  remoteAddress.sin_port = address->port;
+  ssize_t result = sendto(op->hSocket, buffer, size, 0, (struct sockaddr *)&remoteAddress, sizeof(remoteAddress));
+  if (result != -1) {
+    if (++currentFinishedSync >= MAX_SYNCHRONOUS_FINISHED_OPERATION) {
+      asyncOp *newOp = initAsyncOp(base, op, callback, arg, buffer, size, 0, 0, actWriteMsg);
+      newOp->bytesTransferred = result;
+      addToLocalFinishQueue(&newOp->root);
+    } else {
+      callback(aosSuccess, base, op, size, arg);
+    }
+  } else {
+    asyncOp *newOp = initAsyncOp(base, op, callback, arg, buffer, size, flags, usTimeout, actWriteMsg);
+    newOp->host = *address;
+    if (addToExecuteQueue(&op->root, &newOp->root, 1))
+      startMethod(&newOp->root);
+  }
 }
 
 
@@ -458,18 +492,59 @@ ssize_t ioWrite(asyncBase *base, aioObject *op, void *buffer, size_t size, Async
 
 ssize_t ioReadMsg(asyncBase *base, aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-  coroReturnStruct r = {coroutineCurrent()};  
-  aioReadMsg(base, op, buffer, size, flags, usTimeout, coroutineReadMsgCb, &r);
+  // Datagram socket can be accessed by multiple threads without lock
+  struct sockaddr_in source;
+  socketLenTy addrlen = sizeof(source);
+  ssize_t result = recvfrom(op->hSocket, buffer, size, 0, (struct sockaddr*)&source, &addrlen);
+  if (result != -1) {
+    // Data received synchronously
+    if (++currentFinishedSync >= MAX_SYNCHRONOUS_FINISHED_OPERATION) {
+      coroReturnStruct r = {coroutineCurrent(), aosSuccess};
+      asyncOp *newOp = initAsyncOp(base, op, coroutineReadMsgCb, &r, buffer, size, 0, 0, actReadMsg);
+      newOp->bytesTransferred = result;
+      addToLocalFinishQueue(&newOp->root);
+      coroutineYield();
+      return r.status == aosSuccess ? r.bytesTransferred : -1;
+    } else {
+      return result;
+    }
+  }
+
+  coroReturnStruct r = {coroutineCurrent()};
+  asyncOp *newOp = initAsyncOp(base, op, coroutineReadMsgCb, &r, buffer, size, flags, usTimeout, actReadMsg);
+  if (addToExecuteQueue((aioObjectRoot*)op, (asyncOpRoot*)newOp, 0))
+    startMethod(&newOp->root);
   coroutineYield();
   return r.status == aosSuccess ? r.bytesTransferred : -1;
 }
 
-
-
 ssize_t ioWriteMsg(asyncBase *base, aioObject *op, const HostAddress *address, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-  coroReturnStruct r = {coroutineCurrent()};  
-  aioWriteMsg(base, op, address, buffer, size, flags, usTimeout, coroutineCb, &r);
+  // Datagram socket can be accessed by multiple threads without lock
+  struct sockaddr_in remoteAddress;
+  remoteAddress.sin_family = address->family;
+  remoteAddress.sin_addr.s_addr = address->ipv4;
+  remoteAddress.sin_port = address->port;
+  ssize_t result = sendto(op->hSocket, buffer, size, 0, (struct sockaddr *)&remoteAddress, sizeof(remoteAddress));
+  if (result != -1) {
+    // Data received synchronously
+    if (++currentFinishedSync >= MAX_SYNCHRONOUS_FINISHED_OPERATION) {
+      coroReturnStruct r = {coroutineCurrent()};
+      asyncOp *newOp = initAsyncOp(base, op, coroutineCb, &r, buffer, size, 0, 0, actWriteMsg);
+      newOp->host = *address;
+      addToLocalFinishQueue(&newOp->root);
+      coroutineYield();
+      return r.status == aosSuccess ? r.bytesTransferred : -1;
+    } else {
+      return result;
+    }
+  }
+
+  coroReturnStruct r = {coroutineCurrent()};
+  asyncOp *newOp = initAsyncOp(base, op, coroutineCb, &r, buffer, size, flags, usTimeout, actWriteMsg);
+  newOp->host = *address;
+  if (addToExecuteQueue((aioObjectRoot*)op, (asyncOpRoot*)newOp, 1))
+    startMethod(&newOp->root);
   coroutineYield();
   return r.status == aosSuccess ? r.bytesTransferred : -1;
 }

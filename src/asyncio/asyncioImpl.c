@@ -9,6 +9,18 @@
 
 #define PAGE_MAP_SIZE (1u << 16)
 
+#ifndef OS_WINDOWS
+__thread asyncOpRoot *lfHead = 0;
+__thread asyncOpRoot *lfTail = 0;
+__thread int currentFinishedSync = 0;
+__thread int messageLoopThreadId = 0;
+#else
+__declspec(thread) asyncOpRoot *lfHead = 0;
+__declspec(thread) asyncOpRoot *lfTail = 0;
+__declspec(thread) int currentFinishedSync = 0;
+__declspec(thread) int messageLoopThreadId = 0;
+#endif
+
 static inline uint64_t getPt(uint64_t endTime)
 {
   return (endTime / 1000000) + (endTime % 1000000 != 0);
@@ -206,6 +218,34 @@ void cancelIo(aioObjectRoot *object, asyncBase *base)
   checkForDeleteObject(object);
 }
 
+
+tag_t object_try_lock(aioObjectRoot *object)
+{
+#ifdef OS_WINDOWS
+
+#else
+  return __sync_fetch_and_add(&object->tag, ((tag_t)1));
+#endif
+}
+
+tag_t object_try_delete(aioObjectRoot *object)
+{
+#ifdef OS_WINDOWS
+
+#else
+  return __sync_fetch_and_add(&object->tag, ((tag_t)1) << (sizeof(tag_t)/2));
+#endif
+}
+
+int asyncop_try_lock(asyncOpRoot *op, tag_t tag)
+{
+#ifdef OS_WINDOWS
+
+#else
+  return __sync_fetch_and_add(&op->tag, 1) == tag;
+#endif
+}
+
 asyncOpRoot *initAsyncOpRoot(asyncBase *base,
                              const char *nonTimerPool,
                              const char *timerPool,
@@ -256,6 +296,30 @@ asyncOpRoot *initAsyncOpRoot(asyncBase *base,
   return op;
 }
 
+void addToLocalFinishQueue(asyncOpRoot *op)
+{
+  op->executeQueue.prev = lfTail;
+  op->executeQueue.next = 0;
+  if (lfTail)
+    lfTail->executeQueue.next = op;
+  lfTail = op;
+  if (op->executeQueue.prev == 0)
+    lfHead = op;
+}
+
+void executeLocalFinishQueue()
+{
+  asyncOpRoot *op = lfHead;
+  lfHead = 0;
+  lfTail = 0;
+  while (op) {
+    currentFinishedSync = 0;
+    asyncOpRoot *nextOp = op->executeQueue.next;
+    objectRelease(&op->base->pool, op, op->poolId);
+    op->finishMethod(op, aosSuccess);
+    op = nextOp;
+  }
+}
 
 int addToExecuteQueue(aioObjectRoot *object, asyncOpRoot *op, int isWriteQueue)
 {

@@ -10,6 +10,7 @@
 #include <windows.h>
 typedef HANDLE iodevTy;
 typedef SOCKET socketTy;
+typedef int socketLenTy;
 #if defined(_MSC_VER)
 #include <BaseTsd.h>
 typedef SSIZE_T ssize_t;
@@ -20,6 +21,7 @@ typedef SSIZE_T ssize_t;
 #include <sys/types.h>
 typedef int iodevTy;
 typedef int socketTy;
+typedef socklen_t socketLenTy;
 #define INVALID_SOCKET -1
 #endif
 

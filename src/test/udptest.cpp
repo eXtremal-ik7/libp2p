@@ -21,6 +21,7 @@ static uint64_t gTotalPacketNum = 4000000ULL;
 #endif
 static unsigned gGroupSize = 1000;
 static unsigned gMessageSize = 16;
+static unsigned gBatchSend = 0;
 
 struct Context {
   uint64_t totalPacketNum;
@@ -131,6 +132,23 @@ void test_aio_writecb(AsyncOpStatus status, asyncBase *base, aioObject *object, 
   aioWriteMsg(base, object, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb, senderCtx);
 }
 
+void test_aio_writecb_nobatch(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
+{
+  SenderCtx *senderCtx = (SenderCtx*)arg;
+  if (senderCtx->counter >= senderCtx->config->totalPacketNum) {
+    postQuitOperation(base);
+    return;
+  }
+
+  HostAddress address;
+  address.family = AF_INET;
+  address.ipv4 = inet_addr("127.0.0.1");
+  address.port = htons(senderCtx->config->port);
+
+  senderCtx->counter++;
+  aioWriteMsg(base, object, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb_nobatch, senderCtx);
+}
+
 void *test_aio_sender(void *arg)
 {
   SenderCtx *senderCtx = (SenderCtx*)arg;
@@ -145,10 +163,16 @@ void *test_aio_sender(void *arg)
   address.family = AF_INET;
   address.ipv4 = inet_addr("127.0.0.1");
   address.port = htons(senderCtx->config->port);
-  senderCtx->counter += senderCtx->config->groupSize;  
-  for (unsigned i = 0; i < senderCtx->config->groupSize-1; i++)
-    aioWriteMsg(localBase, senderCtx->client, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, 0, 0);
-  aioWriteMsg(localBase, senderCtx->client, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb, senderCtx);
+
+  if (gBatchSend) {
+    senderCtx->counter += senderCtx->config->groupSize;
+    for (unsigned i = 0; i < senderCtx->config->groupSize-1; i++)
+      aioWriteMsg(localBase, senderCtx->client, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, 0, 0);
+    aioWriteMsg(localBase, senderCtx->client, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb, senderCtx);
+  } else {
+    senderCtx->counter++;
+    aioWriteMsg(localBase, senderCtx->client, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb_nobatch, senderCtx);
+  }
   
   asyncLoop(localBase);
   return 0;
@@ -196,11 +220,7 @@ void *test_sync_receiver(void *arg)
   for (;;) {
     for (unsigned i = 0; i < receiverCtx->config->groupSize; i++) {
       sockaddr_in addr;
-#ifdef OS_WINDOWS
-      int len = sizeof(addr);
-#else
-      socklen_t len = sizeof(addr);
-#endif
+      socketLenTy len = sizeof(addr);
       recvfrom(receiverCtx->serverSocket, msg, sizeof(msg), 0, (sockaddr*)&addr, &len);
       if (!receiverCtx->started) {
         receiverCtx->started = true;
@@ -496,40 +516,40 @@ int main(int argc, char **argv)
   test_aio(4, 1, port++, aioSenderBlocking, aioReceiverBlocking);
   test_aio(1, 2, port++, aioSenderBlocking, aioReceiverBlocking);
   test_aio(1, 4, port++, aioSenderBlocking, aioReceiverBlocking);
-  test_aio(4, 4, port++, aioSenderBlocking, aioReceiverBlocking);  
+  test_aio(4, 4, port++, aioSenderBlocking, aioReceiverBlocking);
   
   // Senders test with blocking receiver
   test_aio(1, 1, port++, aioSenderAsync, aioReceiverBlocking);
-  test_aio(4, 1, port++, aioSenderAsync, aioReceiverBlocking);    
+  test_aio(4, 1, port++, aioSenderAsync, aioReceiverBlocking);
   test_aio(1, 1, port++, aioSenderCoroutine, aioReceiverBlocking);
-  test_aio(4, 1, port++, aioSenderCoroutine, aioReceiverBlocking);  
-  
+  test_aio(4, 1, port++, aioSenderCoroutine, aioReceiverBlocking);
+
   // Receivers test with blocking sender
   test_aio(1, 1, port++, aioSenderBlocking, aioReceiverAsync);
-  test_aio(4, 1, port++, aioSenderBlocking, aioReceiverAsync);  
+  test_aio(4, 1, port++, aioSenderBlocking, aioReceiverAsync);
   test_aio(1, 1, port++, aioSenderBlocking, aioReceiverAsyncTimer);
   test_aio(4, 1, port++, aioSenderBlocking, aioReceiverAsyncTimer);
   test_aio(1, 1, port++, aioSenderBlocking, aioReceiverAsyncRT);
   test_aio(4, 1, port++, aioSenderBlocking, aioReceiverAsyncRT);
   test_aio(1, 1, port++, aioSenderBlocking, aioReceiverCoroutine);
-  test_aio(4, 1, port++, aioSenderBlocking, aioReceiverCoroutine);  
+  test_aio(4, 1, port++, aioSenderBlocking, aioReceiverCoroutine);
 
   // Multi-threading receivers
   test_aio(1, 2, port++, aioSenderBlocking, aioReceiverAsync);
-  test_aio(1, 4, port++, aioSenderBlocking, aioReceiverAsync);  
+  test_aio(1, 4, port++, aioSenderBlocking, aioReceiverAsync);
   test_aio(4, 4, port++, aioSenderBlocking, aioReceiverAsync);
   
   test_aio(1, 2, port++, aioSenderBlocking, aioReceiverAsyncTimer);
-  test_aio(1, 4, port++, aioSenderBlocking, aioReceiverAsyncTimer);  
-  test_aio(4, 4, port++, aioSenderBlocking, aioReceiverAsyncTimer);    
+  test_aio(1, 4, port++, aioSenderBlocking, aioReceiverAsyncTimer);
+  test_aio(4, 4, port++, aioSenderBlocking, aioReceiverAsyncTimer);
 
   test_aio(1, 2, port++, aioSenderBlocking, aioReceiverAsyncRT);
-  test_aio(1, 4, port++, aioSenderBlocking, aioReceiverAsyncRT);  
+  test_aio(1, 4, port++, aioSenderBlocking, aioReceiverAsyncRT);
   test_aio(4, 4, port++, aioSenderBlocking, aioReceiverAsyncRT);
   
   test_aio(1, 2, port++, aioSenderBlocking, aioReceiverCoroutine);
-  test_aio(1, 4, port++, aioSenderBlocking, aioReceiverCoroutine);  
-  test_aio(4, 4, port++, aioSenderBlocking, aioReceiverCoroutine);      
+  test_aio(1, 4, port++, aioSenderBlocking, aioReceiverCoroutine);
+  test_aio(4, 4, port++, aioSenderBlocking, aioReceiverCoroutine);
   
   return 0;
 }
