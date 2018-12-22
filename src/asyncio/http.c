@@ -50,30 +50,30 @@ static void finish(asyncOpRoot *root)
     // cleanup child operation after timeout
   if (status == aosTimeout || status == aosCanceled)
 //     cancelIoForParentOp(client->isHttps ? (aioObjectRoot*)client->sslSocket : (aioObjectRoot*)client->plainSocket, root);  
-    cancelIo(client->isHttps ? (aioObjectRoot*)client->sslSocket : (aioObjectRoot*)client->plainSocket, root->base);
+    cancelIo(client->isHttps ? (aioObjectRoot*)client->sslSocket : (aioObjectRoot*)client->plainSocket);
   
   if (root->callback && status != aosCanceled) {
      switch (root->opCode) {
        case httpOpConnect :
-         ((httpConnectCb*)root->callback)(status, root->base, client, root->arg);
+         ((httpConnectCb*)root->callback)(status, client, root->arg);
          break;
        case httpOpRequest :
          client->contentType = op->contentType;
          client->body = op->body;
-         ((httpRequestCb*)root->callback)(status, root->base, client, op->resultCode, root->arg);
+         ((httpRequestCb*)root->callback)(status, client, op->resultCode, root->arg);
          break;
      }
   }
 }
 
-static void coroutineConnectCb(AsyncOpStatus status, asyncBase *base, HTTPClient *client, void *arg)
+static void coroutineConnectCb(AsyncOpStatus status, HTTPClient *client, void *arg)
 {
   coroReturnStruct *r = (coroReturnStruct*)arg;
   r->status = status;
   coroutineCall(r->coroutine);
 }
 
-static void coroutineRequestCb(AsyncOpStatus status, asyncBase *base, HTTPClient *client, int resultCode, void *arg)
+static void coroutineRequestCb(AsyncOpStatus status, HTTPClient *client, int resultCode, void *arg)
 {
   coroReturnStruct *r = (coroReturnStruct*)arg;
   r->status = status;
@@ -81,8 +81,7 @@ static void coroutineRequestCb(AsyncOpStatus status, asyncBase *base, HTTPClient
   coroutineCall(r->coroutine);
 }
 
-static asyncOpRoot *allocHttpOp(asyncBase *base,
-                                HTTPClient *client,
+static asyncOpRoot *allocHttpOp(HTTPClient *client,
                                 int type,
                                 httpParseCb parseCallback,
                                 void *callback,
@@ -90,7 +89,7 @@ static asyncOpRoot *allocHttpOp(asyncBase *base,
                                 uint64_t timeout)
 {
   HTTPOp *op = (HTTPOp*)
-    initAsyncOpRoot(base, httpPoolId, httpPoolTimerId, alloc, start, finish, &client->root, callback, arg, 0, type, timeout);
+    initAsyncOpRoot(httpPoolId, httpPoolTimerId, alloc, start, finish, &client->root, callback, arg, 0, type, timeout);
 
   op->parseCallback = parseCallback;
   op->resultCode = 0;
@@ -188,7 +187,7 @@ void httpParseStart(HTTPOp *op)
         memcpy(client->inBuffer, httpDataPtr(&client->state), offset);
       
       if (client->isHttps)
-        aioSslRead(op->root.base,
+        aioSslRead(0,
                    client->sslSocket,
                    client->inBuffer+offset,
                    client->inBufferSize-offset,
@@ -197,8 +196,7 @@ void httpParseStart(HTTPOp *op)
                    httpsRequestProc,
                    op);
       else
-        aioRead(op->root.base,
-                client->plainSocket,
+        aioRead(client->plainSocket,
                 client->inBuffer+offset,
                 client->inBufferSize-offset,
                 afNone,
@@ -268,12 +266,12 @@ void aioHttpConnect(asyncBase *base,
                     httpConnectCb callback,
                     void *arg)
 {
-  asyncOpRoot *op = allocHttpOp(base, client, httpOpConnect, 0, callback, arg, usTimeout);
+  asyncOpRoot *op = allocHttpOp(client, httpOpConnect, 0, callback, arg, usTimeout);
   if (addToExecuteQueue(&client->root, op, 1)) {
     if (client->isHttps)
       aioSslConnect(base, client->sslSocket, address, usTimeout, httpsConnectProc, op);
     else
-      aioConnect(base, client->plainSocket, address, usTimeout, httpConnectProc, op);
+      aioConnect(client->plainSocket, address, usTimeout, httpConnectProc, op);
   }
 }
 
@@ -286,12 +284,12 @@ void aioHttpRequest(asyncBase *base,
                     httpRequestCb callback,
                     void *arg)
 {
-  asyncOpRoot *op = allocHttpOp(base, client, httpOpRequest, parseCallback, callback, arg, usTimeout);
+  asyncOpRoot *op = allocHttpOp(client, httpOpRequest, parseCallback, callback, arg, usTimeout);
   
   if (client->isHttps)
     aioSslWrite(base, client->sslSocket, (void*)request, requestSize, afNone, 0, 0, 0);
   else
-    aioWrite(base, client->plainSocket, (void*)request, requestSize, afNone, 0, 0, 0);  
+    aioWrite(client->plainSocket, (void*)request, requestSize, afNone, 0, 0, 0);
   
   if (addToExecuteQueue(&client->root, op, 0))
     start(op);

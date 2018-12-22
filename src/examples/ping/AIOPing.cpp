@@ -101,7 +101,7 @@ void printHelpMessage(const char *appName)
 }
 
 
-void readCb(AsyncOpStatus status, asyncBase *base, aioObject *rawSocket, HostAddress address, size_t transferred, void *arg)
+void readCb(AsyncOpStatus status, aioObject *rawSocket, HostAddress address, size_t transferred, void *arg)
 {
   ICMPClientData *client = (ICMPClientData*)arg;
   if (status == aosSuccess && transferred >= (sizeof(ip) + sizeof(icmp))) {
@@ -123,10 +123,10 @@ void readCb(AsyncOpStatus status, asyncBase *base, aioObject *rawSocket, HostAdd
     }
   }
   
-  aioReadMsg(base, rawSocket, client->buffer, sizeof(client->buffer), afNone, 0, readCb, client);
+  aioReadMsg(rawSocket, client->buffer, sizeof(client->buffer), afNone, 0, readCb, client);
 }
 
-void pingTimerCb(asyncBase *base, aioUserEvent *event, void *arg)
+void pingTimerCb(aioUserEvent *event, void *arg)
 {
   ICMPClientData *clientData = (ICMPClientData*)arg;
   clientData->id++;
@@ -135,7 +135,7 @@ void pingTimerCb(asyncBase *base, aioUserEvent *event, void *arg)
   clientData->data.icmp_cksum =
     InternetChksum((uint16_t*)&clientData->data, sizeof(icmp));
     
-  aioWriteMsg(base, clientData->rawSocket,
+  aioWriteMsg(clientData->rawSocket,
               &clientData->remoteAddress,
               &clientData->data, sizeof(icmp),
               afNone, 1000000, 0, 0);
@@ -143,7 +143,7 @@ void pingTimerCb(asyncBase *base, aioUserEvent *event, void *arg)
 }
 
 
-void printTimerCb(asyncBase *base, aioUserEvent *event, void *arg)
+void printTimerCb(aioUserEvent *event, void *arg)
 {
   std::vector<uint32_t> forDelete;
   ICMPClientData *clientData = (ICMPClientData*)arg;
@@ -239,7 +239,7 @@ int main(int argc, char **argv)
   aioUserEvent *printTimer = newUserEvent(base, printTimerCb, &client);
   client.rawSocket = newSocketIo(base, S);
 
-  aioReadMsg(base, client.rawSocket, client.buffer, sizeof(client.buffer), afNone, 0, readCb, &client);
+  aioReadMsg(client.rawSocket, client.buffer, sizeof(client.buffer), afNone, 0, readCb, &client);
   userEventStartTimer(printTimer, 100000, -1);
   userEventStartTimer(pingTimer, (uint64_t)(gInterval*1000000), -1);
   asyncLoop(base);

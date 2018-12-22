@@ -18,9 +18,9 @@ enum p2pStatusTy {
 };
 
 
-typedef p2pErrorTy p2pAcceptCb(int, asyncBase*, p2pConnection*, p2pConnectData*, void*);
-typedef void p2pConnectCb(int, asyncBase*, p2pConnection*, void*);
-typedef void p2pCb(int, asyncBase*, p2pConnection*, p2pHeader, void*);
+typedef p2pErrorTy p2pAcceptCb(int, p2pConnection*, p2pConnectData*, void*);
+typedef void p2pConnectCb(int, p2pConnection*, void*);
+typedef void p2pCb(int, p2pConnection*, p2pHeader, void*);
 
 struct p2pOp {
   asyncOpRoot root;

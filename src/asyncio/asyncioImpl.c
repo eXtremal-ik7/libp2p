@@ -238,7 +238,7 @@ void initObjectRoot(aioObjectRoot *object, asyncBase *base, IoObjectTy type, aio
   object->destructor = destructor;
 }
 
-void cancelIo(aioObjectRoot *object, asyncBase *base)
+void cancelIo(aioObjectRoot *object)
 {
   if (__tag_atomic_fetch_and_add(&object->tag, TAG_CANCELIO) == 0)
     object->base->methodImpl.combiner(object, TAG_CANCELIO, 0, aaNone);
@@ -292,8 +292,7 @@ tag_t opEncodeTag(asyncOpRoot *op, tag_t tag)
   return ((op->tag >> TAG_STATUS_SIZE) & ~((tag_t)TAGGED_POINTER_DATA_MASK)) | (tag & (tag_t)TAGGED_POINTER_DATA_MASK);
 }
 
-asyncOpRoot *initAsyncOpRoot(asyncBase *base,
-                             const char *nonTimerPool,
+asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
                              const char *timerPool,
                              newAsyncOpTy *newOpProc,
                              aioExecuteProc *startMethod,
@@ -301,7 +300,7 @@ asyncOpRoot *initAsyncOpRoot(asyncBase *base,
                              aioObjectRoot *object,
                              void *callback,
                              void *arg,
-                             int flags,
+                             AsyncFlags flags,
                              int opCode,
                              uint64_t timeout)
 {
@@ -309,11 +308,10 @@ asyncOpRoot *initAsyncOpRoot(asyncBase *base,
   const char *pool = realtime ? timerPool : nonTimerPool;  
   asyncOpRoot *op = (asyncOpRoot*)objectGet(pool);
   if (!op) {
-    op = newOpProc(base);
-    op->base = base;    
+    op = newOpProc();
     op->poolId = pool;
     if (realtime)
-      op->base->methodImpl.initializeTimer(base, op);
+      object->base->methodImpl.initializeTimer(object->base, op);
     op->tag = 0;
   }
 

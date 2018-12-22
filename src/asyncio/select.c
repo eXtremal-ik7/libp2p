@@ -119,7 +119,7 @@ static fdStruct *getFdOperations(selectBase *base, int fd)
 static void asyncOpUnlink(selectOp *op)
 {
   if (!op->info.root.executeQueue.next) {
-    selectBase *localBase = (selectBase*)op->info.root.base;
+    selectBase *localBase = (selectBase*)op->info.root.object->base;
     fdStruct *list = getFdOperations(localBase, getFd(op));
     list->mask &= ~(isWriteOperation(op->info.root.opCode) ? mtWrite : mtRead);
   }
@@ -128,7 +128,7 @@ static void asyncOpUnlink(selectOp *op)
 static void timerCb(int sig, siginfo_t *si, void *uc)
 {
   asyncOpRoot *op = (asyncOpRoot*)si->si_value.sival_ptr;
-  selectBase *base = (selectBase*)op->base;
+  selectBase *base = (selectBase*)op->object->base;
   
   if (op->opCode == actUserEvent) {
     aioUserEvent *event = (aioUserEvent*)op;
@@ -473,7 +473,7 @@ void selectStopTimer(asyncOpRoot *op)
 
 void selectActivate(asyncOpRoot *op)
 {
-  selectBase *localBase = (selectBase*)op->base;
+  selectBase *localBase = (selectBase*)op->object->base;
   write(localBase->pipeFd[1], op, sizeof(op));
 }
 

@@ -16,7 +16,7 @@ struct ClientData {
   uint8_t buffer[clientBufferSize];
 };
 
-void writeCb(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
+void writeCb(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 {
   ClientData *data = (ClientData*)arg;
   if (status != aosSuccess) {
@@ -25,7 +25,7 @@ void writeCb(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t tr
   }
 }
 
-void readCb(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
+void readCb(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 {
   ClientData *data = (ClientData*)arg;  
   if (status == aosSuccess) {
@@ -41,20 +41,20 @@ void readCb(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t tra
 }
 
 
-void pingTimerCb(asyncBase *base, aioUserEvent *event, void *arg)
+void pingTimerCb(aioUserEvent *event, void *arg)
 {
   ClientData *data = (ClientData*)arg;
   if (data->isConnected) {
     char symbol = 32 + rand() % 96;
     printf("%02X:", (int)symbol);
     fflush(stdout);
-    aioWrite(base, data->socket, &symbol, 1, afNone, 1000000, writeCb, data);
-    aioRead(base, data->socket, data->buffer, clientBufferSize, afNone, 1000000, readCb, data);
+    aioWrite(data->socket, &symbol, 1, afNone, 1000000, writeCb, data);
+    aioRead(data->socket, data->buffer, clientBufferSize, afNone, 1000000, readCb, data);
   }
 }
 
 
-void connectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg)
+void connectCb(AsyncOpStatus status, aioObject *object, void *arg)
 {
   ClientData *data = (ClientData*)arg;
   if (status == aosSuccess) {
@@ -114,7 +114,7 @@ int main(int argc, char **argv)
   data.base = base;
   data.socket = socketOp;
   data.isConnected = false;    
-  aioConnect(base, socketOp, &address, 3000000, connectCb, &data);
+  aioConnect(socketOp, &address, 3000000, connectCb, &data);
   userEventStartTimer(stdInputOp, 1000000, -1);
   asyncLoop(base);
   return 0;

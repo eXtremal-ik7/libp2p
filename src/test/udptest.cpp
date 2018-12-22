@@ -118,11 +118,11 @@ void *test_sync_sender(void *arg)
   return 0;
 }
 
-void test_aio_writecb(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
+void test_aio_writecb(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 { 
   SenderCtx *senderCtx = (SenderCtx*)arg;  
   if (senderCtx->counter >= senderCtx->config->totalPacketNum) {
-    postQuitOperation(base);
+    postQuitOperation(aioGetBase(object));
     return;
   }
   
@@ -133,15 +133,15 @@ void test_aio_writecb(AsyncOpStatus status, asyncBase *base, aioObject *object, 
   
   senderCtx->counter += senderCtx->config->groupSize;  
   for (unsigned i = 0; i < senderCtx->config->groupSize-1; i++)
-    aioWriteMsg(base, object, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, 0, 0);
-  aioWriteMsg(base, object, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb, senderCtx);
+    aioWriteMsg(object, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, 0, 0);
+  aioWriteMsg(object, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb, senderCtx);
 }
 
-void test_aio_writecb_nobatch(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
+void test_aio_writecb_nobatch(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 {
   SenderCtx *senderCtx = (SenderCtx*)arg;
   if (senderCtx->counter >= senderCtx->config->totalPacketNum) {
-    postQuitOperation(base);
+    postQuitOperation(aioGetBase(object));
     return;
   }
 
@@ -151,7 +151,7 @@ void test_aio_writecb_nobatch(AsyncOpStatus status, asyncBase *base, aioObject *
   address.port = htons(senderCtx->config->port);
 
   senderCtx->counter++;
-  aioWriteMsg(base, object, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb_nobatch, senderCtx);
+  aioWriteMsg(object, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb_nobatch, senderCtx);
 }
 
 void *test_aio_sender(void *arg)
@@ -172,11 +172,11 @@ void *test_aio_sender(void *arg)
   if (gBatchSend) {
     senderCtx->counter += senderCtx->config->groupSize;
     for (unsigned i = 0; i < senderCtx->config->groupSize-1; i++)
-      aioWriteMsg(localBase, senderCtx->client, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, 0, 0);
-    aioWriteMsg(localBase, senderCtx->client, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb, senderCtx);
+      aioWriteMsg(senderCtx->client, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, 0, 0);
+    aioWriteMsg(senderCtx->client, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb, senderCtx);
   } else {
     senderCtx->counter++;
-    aioWriteMsg(localBase, senderCtx->client, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb_nobatch, senderCtx);
+    aioWriteMsg(senderCtx->client, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb_nobatch, senderCtx);
   }
   
   asyncLoop(localBase);
@@ -194,7 +194,7 @@ void test_coroutine_sender_coro(void *arg)
   address.ipv4 = inet_addr("127.0.0.1");
   address.port = htons(senderCtx->config->port); 
   for (uint64_t i = 0; i < senderCtx->config->totalPacketNum; i++)
-    ioWriteMsg(senderCtx->localBase, senderCtx->client, &address, msg, senderCtx->config->messageSize, afNone, 0);
+    ioWriteMsg(senderCtx->client, &address, msg, senderCtx->config->messageSize, afNone, 0);
 }
 
 void *test_coroutine_sender(void *arg)
@@ -240,7 +240,6 @@ void *test_sync_receiver(void *arg)
 
 // Asynchronous receiver callback
 void test_readcb(AsyncOpStatus status,
-                 asyncBase *base,
                  aioObject *socket,
                  HostAddress address,
                  size_t transferred,
@@ -254,12 +253,11 @@ void test_readcb(AsyncOpStatus status,
   ctx->packetsNum++;
   if (ctx->packetsNum % ctx->config->groupSize == 0)
     ctx->endPt = getTimeMark();
-  aioReadMsg(base, socket, &ctx->buffer, sizeof(ctx->buffer), afNone, 0, test_readcb, ctx);
+  aioReadMsg(socket, &ctx->buffer, sizeof(ctx->buffer), afNone, 0, test_readcb, ctx);
 }
 
 // Asynchronous receiver with timer callback
 void test_readcb_timer(AsyncOpStatus status,
-                       asyncBase *base,
                        aioObject *socket,
                        HostAddress address,
                        size_t transferred,
@@ -275,20 +273,19 @@ void test_readcb_timer(AsyncOpStatus status,
     ctx->packetsNum++;
     if (ctx->packetsNum % ctx->config->groupSize == 0)
       ctx->endPt = getTimeMark();
-    aioReadMsg(base, socket, &ctx->buffer, sizeof(ctx->buffer), afNone, 1000000, test_readcb_timer, ctx);
+    aioReadMsg(socket, &ctx->buffer, sizeof(ctx->buffer), afNone, 1000000, test_readcb_timer, ctx);
   } else {
     if (!ctx->started || ctx->oldPacketsNum != ctx->packetsNum) {
       ctx->oldPacketsNum = ctx->packetsNum;
-      aioReadMsg(base, socket, &ctx->buffer, sizeof(ctx->buffer), afNone, 1000000, test_readcb_timer, ctx);
+      aioReadMsg(socket, &ctx->buffer, sizeof(ctx->buffer), afNone, 1000000, test_readcb_timer, ctx);
     } else {
-      postQuitOperation(base);
+      postQuitOperation(aioGetBase(socket));
     }
   }
 }
 
 // Asynchronous receiver with RT timer callback
 void test_readcb_timer_rt(AsyncOpStatus status,
-                          asyncBase *base,
                           aioObject *socket,
                           HostAddress address,
                           size_t transferred,
@@ -306,13 +303,13 @@ void test_readcb_timer_rt(AsyncOpStatus status,
     ctx->packetsNum++;
     if (ctx->packetsNum % ctx->config->groupSize == 0)
       ctx->endPt = getTimeMark();
-    aioReadMsg(base, socket, &ctx->buffer, sizeof(ctx->buffer), afRealtime, 1000000, test_readcb_timer_rt, ctx);
+    aioReadMsg(socket, &ctx->buffer, sizeof(ctx->buffer), afRealtime, 1000000, test_readcb_timer_rt, ctx);
   } else {
     if (!ctx->started || ctx->oldPacketsNum != ctx->packetsNum) {
       ctx->oldPacketsNum = ctx->packetsNum;
-      aioReadMsg(base, socket, &ctx->buffer, sizeof(ctx->buffer), afRealtime, 1000000, test_readcb_timer_rt, ctx);
+      aioReadMsg(socket, &ctx->buffer, sizeof(ctx->buffer), afRealtime, 1000000, test_readcb_timer_rt, ctx);
     } else {
-      postQuitOperation(base);
+      postQuitOperation(aioGetBase(socket));
     }
   }
 }
@@ -325,13 +322,13 @@ void *test_aio_receiver(void *arg)
   threadPacketsNum = 0;
   switch (ctx->type) {
     case aioReceiverAsync :
-      aioReadMsg(ctx->base, ctx->server, &ctx->buffer, sizeof(ctx->buffer), afNone, 0, test_readcb, ctx);
+      aioReadMsg(ctx->server, &ctx->buffer, sizeof(ctx->buffer), afNone, 0, test_readcb, ctx);
       break;
     case aioReceiverAsyncTimer :
-      aioReadMsg(ctx->base, ctx->server, &ctx->buffer, sizeof(ctx->buffer), afNone, 1000000, test_readcb_timer, ctx);
+      aioReadMsg(ctx->server, &ctx->buffer, sizeof(ctx->buffer), afNone, 1000000, test_readcb_timer, ctx);
       break;      
     case aioReceiverAsyncRT :
-      aioReadMsg(ctx->base, ctx->server, &ctx->buffer, sizeof(ctx->buffer), afRealtime, 1000000, test_readcb_timer_rt, ctx);
+      aioReadMsg(ctx->server, &ctx->buffer, sizeof(ctx->buffer), afRealtime, 1000000, test_readcb_timer_rt, ctx);
       break;
     default :
       fprintf(stderr, "Invalid receiver type, exiting...\n");
@@ -352,7 +349,7 @@ void test_coroutine_receiver_coro(void *arg)
   
   for (;;) {
     for (unsigned i = 0; i < receiverCtx->config->groupSize; i++) {
-      ssize_t result = ioReadMsg(receiverCtx->base, receiverCtx->server, msg, sizeof(msg), afNone, 1000000);
+      ssize_t result = ioReadMsg(receiverCtx->server, msg, sizeof(msg), afNone, 1000000);
       if (result == -1)
         return;
 

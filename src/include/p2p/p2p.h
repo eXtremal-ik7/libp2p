@@ -23,12 +23,12 @@ struct p2pEventHandler {
 
 struct p2pPeer {
 private:
-  static void clientNetworkWaitEnd(asyncBase *base, aioUserEvent *event, void *arg);  
-  static void clientNetworkConnectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg);
-  static void clientP2PConnectCb(int status, asyncBase *base, p2pConnection *connection, void *arg);  
-  static void clientReceiver(int status, asyncBase *base, p2pConnection *connection, p2pHeader header, void *arg);  
-  static void checkTimeout(asyncBase *base, aioUserEvent *event, void *arg) { ((p2pPeer*)arg)->checkTimeout(); }
-  static p2pErrorTy nodeAcceptCb(int status, asyncBase *base, p2pConnection *connection, p2pConnectData *data, void *arg);
+  static void clientNetworkWaitEnd(aioUserEvent *event, void *arg);
+  static void clientNetworkConnectCb(AsyncOpStatus status, aioObject *object, void *arg);
+  static void clientP2PConnectCb(int status, p2pConnection *connection, void *arg);
+  static void clientReceiver(int status, p2pConnection *connection, p2pHeader header, void *arg);
+  static void checkTimeout(aioUserEvent *event, void *arg) { ((p2pPeer*)arg)->checkTimeout(); }
+  static p2pErrorTy nodeAcceptCb(int status, p2pConnection *connection, p2pConnectData *data, void *arg);
   static void nodeMsgHandlerEP(void *peer) { ((p2pPeer*)peer)->nodeMsgHandler(); }
   
   void nodeMsgHandler();
@@ -100,7 +100,7 @@ private:
   bool _coroutineMode;
   
 private:  
-  static void listener(AsyncOpStatus status, asyncBase *base, aioObject *listener, HostAddress client, socketTy socket, void *arg);
+  static void listener(AsyncOpStatus status, aioObject *listener, HostAddress client, socketTy socket, void *arg);
 
   p2pNode(asyncBase *base, const char *clusterName, bool coroutineMode) :
     _base(base), _clusterName(clusterName), _coroutineMode(coroutineMode),

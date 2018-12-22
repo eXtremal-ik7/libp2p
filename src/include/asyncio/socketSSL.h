@@ -11,8 +11,8 @@ extern "C" {
 typedef struct SSLOp SSLOp;
 typedef struct SSLSocket SSLSocket;
 
-typedef void sslConnectCb(AsyncOpStatus status, asyncBase *base, SSLSocket *object, void *arg);
-typedef void sslCb(AsyncOpStatus status, asyncBase *base, SSLSocket *object, size_t transferred, void *arg);
+typedef void sslConnectCb(AsyncOpStatus status, SSLSocket *object, void *arg);
+typedef void sslCb(AsyncOpStatus status, SSLSocket *object, size_t transferred, void *arg);
 
 typedef struct SSLSocket {
   aioObjectRoot root;

@@ -35,7 +35,7 @@ void p2pPeer::checkTimeout()
   }  
 }
 
-void p2pPeer::clientReceiver(int status, asyncBase *base, p2pConnection *connection, p2pHeader header, void *arg)
+void p2pPeer::clientReceiver(int status, p2pConnection *connection, p2pHeader header, void *arg)
 {
   p2pPeer *peer = (p2pPeer*)arg;
   
@@ -72,7 +72,7 @@ void p2pPeer::clientReceiver(int status, asyncBase *base, p2pConnection *connect
   }
 }
 
-void p2pPeer::clientP2PConnectCb(int status, asyncBase *base, p2pConnection *connection, void *arg)
+void p2pPeer::clientP2PConnectCb(int status, p2pConnection *connection, void *arg)
 {
   p2pPeer *peer = (p2pPeer*)arg;
   if (status == aosSuccess) {
@@ -84,12 +84,12 @@ void p2pPeer::clientP2PConnectCb(int status, asyncBase *base, p2pConnection *con
   }
 }
 
-void p2pPeer::clientNetworkWaitEnd(asyncBase *base, aioUserEvent *event, void *arg)
+void p2pPeer::clientNetworkWaitEnd(aioUserEvent *event, void *arg)
 { 
   ((p2pPeer*)arg)->connect();
 }
 
-void p2pPeer::clientNetworkConnectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg)
+void p2pPeer::clientNetworkConnectCb(AsyncOpStatus status, aioObject *object, void *arg)
 {
   p2pPeer *peer = (p2pPeer*)arg;
   if (status == aosSuccess) {
@@ -108,7 +108,7 @@ void p2pPeer::clientNetworkConnectCb(AsyncOpStatus status, asyncBase *base, aioO
   }
 }
 
-p2pErrorTy p2pPeer::nodeAcceptCb(int status, asyncBase *base, p2pConnection *connection, p2pConnectData *data, void *arg)
+p2pErrorTy p2pPeer::nodeAcceptCb(int status, p2pConnection *connection, p2pConnectData *data, void *arg)
 {
   p2pPeer *peer = (p2pPeer*)arg;
   return p2pOk;
@@ -176,7 +176,7 @@ void p2pPeer::connect()
   _node->connectionTimeout();
   destroyConnection();
   if (createConnection()) {
-    aioConnect(_base, connection->socket, &_address, 3000000, clientNetworkConnectCb, this);
+    aioConnect(connection->socket, &_address, 3000000, clientNetworkConnectCb, this);
   } else {
     userEventStartTimer(_event, 1000000, 1);
   }
@@ -302,7 +302,7 @@ bool p2pNode::ioRequest(void *data, size_t size, uint64_t timeout, void *out, si
 
 
 
-void p2pNode::listener(AsyncOpStatus status, asyncBase *base, aioObject *listenSocket, HostAddress client, socketTy clientSocket, void *arg)
+void p2pNode::listener(AsyncOpStatus status, aioObject *listenSocket, HostAddress client, socketTy clientSocket, void *arg)
 {
   p2pNode *node = (p2pNode*)arg;
   
@@ -313,7 +313,7 @@ void p2pNode::listener(AsyncOpStatus status, asyncBase *base, aioObject *listenS
     peer->accept(node->_coroutineMode, connection);
   }
   
-  aioAccept(node->_base, listenSocket, 0, listener, node);
+  aioAccept(listenSocket, 0, listener, node);
 }
 
 
@@ -332,7 +332,7 @@ p2pNode* p2pNode::createNode(asyncBase *base,
 
   p2pNode *node = new p2pNode(base, clusterName, coroutineMode);
   node->_listenerSocket = socketOp;
-  aioAccept(base, socketOp, 0, listener, node);
+  aioAccept(socketOp, 0, listener, node);
   return node;
 }
 

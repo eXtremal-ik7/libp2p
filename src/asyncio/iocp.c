@@ -41,13 +41,13 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
 void postEmptyOperation(asyncBase *base);
 void iocpNextFinishedOperation(asyncBase *base);
 aioObject *iocpNewAioObject(asyncBase *base, IoObjectTy type, void *data);
-asyncOpRoot *iocpNewAsyncOp(asyncBase *base);
+asyncOpRoot *iocpNewAsyncOp();
 void iocpDeleteObject(aioObject *op);
 void iocpFinishOp(asyncOpRoot *opptr, tag_t generation, AsyncOpStatus status);
 void iocpInitializeTimer(asyncBase *base, asyncOpRoot *op);
 void iocpStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic);
 void iocpStopTimer(asyncOpRoot *op);
-void iocpActivate(asyncOpRoot *op);
+void iocpActivate(aioUserEvent *event);
 AsyncOpStatus iocpAsyncConnect(asyncOpRoot *op);
 AsyncOpStatus iocpAsyncAccept(asyncOpRoot *op);
 AsyncOpStatus iocpAsyncRead(asyncOpRoot *op);
@@ -160,13 +160,14 @@ static void opRun(asyncOpRoot *op, List *list)
 {
   eqPushBack(list, op);
   if (op->timeout) {
+    asyncBase *base = op->object->base;
     if (op->flags & afRealtime) {
       // start timer for this operation
-      op->base->methodImpl.startTimer(op, op->timeout, op->opCode == actUserEvent);
+      base->methodImpl.startTimer(op, op->timeout, op->opCode == actUserEvent);
     } else {
       // add operation to timeout grid
       op->endTime = ((uint64_t)time(0)) * 1000000ULL + op->timeout;
-      addToTimeoutQueue(op->base, op);
+      addToTimeoutQueue(base, op);
     }
   }
 }
@@ -447,7 +448,7 @@ aioObject *iocpNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 }
 
 
-asyncOpRoot *iocpNewAsyncOp(asyncBase *base)
+asyncOpRoot *iocpNewAsyncOp()
 {
   iocpOp *op;
   op = malloc(sizeof(iocpOp));
@@ -519,10 +520,10 @@ void iocpStopTimer(asyncOpRoot *op)
 }
 
 
-void iocpActivate(asyncOpRoot *op)
+void iocpActivate(aioUserEvent *event)
 {
-  iocpBase *localBase = (iocpBase*)op->base;
-  PostQueuedCompletionStatus(localBase->completionPort, 0, (ULONG_PTR)op, 0);
+  iocpBase *localBase = (iocpBase*)event->base;
+  PostQueuedCompletionStatus(localBase->completionPort, 0, (ULONG_PTR)&event->root, 0);
 }
 
 

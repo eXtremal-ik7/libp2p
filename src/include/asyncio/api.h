@@ -89,7 +89,7 @@ typedef struct ListMt {
 } ListMt;
 
 typedef void processOperationCb(asyncOpRoot*, AsyncOpActionTy, List*, tag_t*);
-typedef asyncOpRoot *newAsyncOpTy(asyncBase*);
+typedef asyncOpRoot *newAsyncOpTy();
 typedef AsyncOpStatus aioExecuteProc(asyncOpRoot*);
 typedef void aioFinishProc(asyncOpRoot*);
 typedef void aioObjectDestructor(aioObjectRoot*);
@@ -249,12 +249,10 @@ struct aioObjectRoot {
 };
 
 struct asyncOpRoot {
-  asyncBase *base;
+  volatile tag_t tag;
   const char *poolId;
   aioExecuteProc *executeMethod;
   aioFinishProc *finishMethod;  
-
-  volatile tag_t tag;
   ListImpl executeQueue;
   asyncOpRoot *next;
   aioObjectRoot *object;
@@ -273,7 +271,7 @@ void initObjectRoot(aioObjectRoot *object, asyncBase *base, IoObjectTy type, aio
 
 
 
-void cancelIo(aioObjectRoot *object, asyncBase *base);
+void cancelIo(aioObjectRoot *object);
 void objectAddRef(aioObjectRoot *object);
 void objectDeleteRef(aioObjectRoot *object, tag_t count);
 
@@ -295,8 +293,7 @@ void opCancel(asyncOpRoot *op, tag_t generation, AsyncOpStatus status);
 void addToThreadLocalQueue(asyncOpRoot *op);
 void executeThreadLocalQueue();
 
-asyncOpRoot *initAsyncOpRoot(asyncBase *base,
-                             const char *nonTimerPool,
+asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
                              const char *timerPool,
                              newAsyncOpTy *newOpProc,
                              aioExecuteProc *startMethod,
@@ -304,7 +301,7 @@ asyncOpRoot *initAsyncOpRoot(asyncBase *base,
                              aioObjectRoot *object,
                              void *callback,
                              void *arg,
-                             int flags,
+                             AsyncFlags flags,
                              int opCode,
                              uint64_t timeout);
 

@@ -24,7 +24,7 @@ typedef void finishOpTy(asyncOpRoot*, tag_t, AsyncOpStatus);
 typedef void initializeTimerTy(asyncBase*, asyncOpRoot*);
 typedef void startTimerTy(asyncOpRoot*, uint64_t, int);
 typedef void stopTimerTy(asyncOpRoot*);
-typedef void activateTy(asyncOpRoot*);
+typedef void activateTy(aioUserEvent*);
 
 struct asyncImpl {
   combinerTy *combiner;

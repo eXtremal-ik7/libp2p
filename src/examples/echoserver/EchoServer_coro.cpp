@@ -28,9 +28,9 @@ void readerProc(void *arg)
   readerContext *reader = (readerContext*)arg;
   uint8_t echoBuffer[1024];
   while (true) {
-    ssize_t bytesRead = ioRead(reader->base, reader->socket, echoBuffer, sizeof(echoBuffer), afNone, 0);
+    ssize_t bytesRead = ioRead(reader->socket, echoBuffer, sizeof(echoBuffer), afNone, 0);
     if (bytesRead != -1) {
-      ioWrite(reader->base, reader->socket, echoBuffer, bytesRead, afNone, 0);
+      ioWrite(reader->socket, echoBuffer, bytesRead, afNone, 0);
     } else {
       fprintf(stderr, " * asyncRead error, exiting..\n");
       deleteAioObject(reader->socket);
@@ -43,7 +43,7 @@ void listenerProc(void *arg)
 {
   listenerContext *ctx = (listenerContext*)arg;
   while (true) {
-    socketTy acceptSocket = ioAccept(ctx->base, ctx->socket, 0);
+    socketTy acceptSocket = ioAccept(ctx->socket, 0);
     if (acceptSocket != INVALID_SOCKET) {
       fprintf(stderr, "new connection accepted\n");
       readerContext *reader = new readerContext;

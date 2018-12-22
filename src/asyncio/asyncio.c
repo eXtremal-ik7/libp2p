@@ -31,12 +31,6 @@ typedef struct coroReturnStruct {
   size_t bytesTransferred;
 } coroReturnStruct;
 
-
-static asyncOpRoot *userEventAlloc(asyncBase *base)
-{
-  return (asyncOpRoot*)malloc(sizeof(aioUserEvent));
-}
-
 static void finishMethod(asyncOpRoot *root)
 {
   if (!root->callback)
@@ -47,33 +41,32 @@ static void finishMethod(asyncOpRoot *root)
   aioObject *object = (aioObject*)root->object;
   switch (root->opCode) {
     case actConnect :
-      ((aioConnectCb*)root->callback)(status, root->base, object, root->arg);
+      ((aioConnectCb*)root->callback)(status, object, root->arg);
       break;
     case actAccept :
-      ((aioAcceptCb*)root->callback)(status, root->base, object, op->host, op->acceptSocket, root->arg);
+      ((aioAcceptCb*)root->callback)(status, object, op->host, op->acceptSocket, root->arg);
       break;
     case actRead :
-      ((aioCb*)root->callback)(status, root->base, object, op->bytesTransferred, root->arg);
+      ((aioCb*)root->callback)(status, object, op->bytesTransferred, root->arg);
       break;      
     case actWrite :
-      ((aioCb*)root->callback)(status, root->base, object, op->bytesTransferred, root->arg);
+      ((aioCb*)root->callback)(status, object, op->bytesTransferred, root->arg);
       break;      
     case actReadMsg :
-      ((aioReadMsgCb*)root->callback)(status, root->base, object, op->host, op->bytesTransferred, root->arg);
+      ((aioReadMsgCb*)root->callback)(status, object, op->host, op->bytesTransferred, root->arg);
       break;      
     case actWriteMsg :
-      ((aioCb*)root->callback)(status, root->base, object, op->bytesTransferred, root->arg);
+      ((aioCb*)root->callback)(status, object, op->bytesTransferred, root->arg);
       break;
   }
 }
 
 static void eventFinish(asyncOpRoot *root)
 {
-  ((aioEventCb*)root->callback)(root->base, (aioUserEvent*)root, root->arg);
+  ((aioEventCb*)root->callback)((aioUserEvent*)root, root->arg);
 }
 
-static asyncOp *initAsyncOp(asyncBase *base,
-                            aioObject *object,
+static asyncOp *initAsyncOp(aioObject *object,
                             void *callback,
                             void *arg,
                             void *buffer,
@@ -83,9 +76,8 @@ static asyncOp *initAsyncOp(asyncBase *base,
                             int opCode,
                             aioExecuteProc *startProc)
 {
-  asyncOp *op = (asyncOp*)initAsyncOpRoot(base,
-                                          poolId, timerPoolId,
-                                          base->methodImpl.newAsyncOp,
+  asyncOp *op = (asyncOp*)initAsyncOpRoot(poolId, timerPoolId,
+                                          object->root.base->methodImpl.newAsyncOp,
                                           startProc, finishMethod,
                                           &object->root, callback, arg,
                                           flags, opCode, timeout);
@@ -111,14 +103,14 @@ static asyncOp *initAsyncOp(asyncBase *base,
   return op;
 }
 
-static void coroutineEventCb(asyncBase *base, aioObject *event, void *arg)
+static void coroutineEventCb(aioObject *event, void *arg)
 {
   coroReturnStruct *r = (coroReturnStruct*)arg;
   assert(coroutineIsMain() && "no main coroutine!\n");
   ioCoroutineCall(r->coroutine);
 }
 
-static void coroutineConnectCb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg)
+static void coroutineConnectCb(AsyncOpStatus status, aioObject *object, void *arg)
 {
   coroReturnStruct *r = (coroReturnStruct*)arg;
   r->status = status;
@@ -126,7 +118,7 @@ static void coroutineConnectCb(AsyncOpStatus status, asyncBase *base, aioObject 
   ioCoroutineCall(r->coroutine);
 }
 
-static void coroutineAcceptCb(AsyncOpStatus status, asyncBase *base, aioObject *listener, HostAddress address, socketTy socket, void *arg)
+static void coroutineAcceptCb(AsyncOpStatus status, aioObject *listener, HostAddress address, socketTy socket, void *arg)
 {
   coroReturnStruct *r = (coroReturnStruct*)arg;
   r->status = status;
@@ -135,16 +127,16 @@ static void coroutineAcceptCb(AsyncOpStatus status, asyncBase *base, aioObject *
   ioCoroutineCall(r->coroutine);
 }
 
-static void coroutineCb(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t transferred, void *arg)
+static void coroutineCb(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 {
   coroReturnStruct *r = (coroReturnStruct*)arg;
   r->status = status;  
   r->bytesTransferred = transferred;
-  if (r->coroutine != coroutineCurrent())
+  assert(coroutineIsMain() && "no main coroutine!\n");
   ioCoroutineCall(r->coroutine);
 }
 
-static void coroutineReadMsgCb(AsyncOpStatus status, asyncBase *base, aioObject *object, HostAddress address, size_t transferred, void *arg)
+static void coroutineReadMsgCb(AsyncOpStatus status, aioObject *object, HostAddress address, size_t transferred, void *arg)
 {
   coroReturnStruct *r = (coroReturnStruct*)arg;
   r->status = status;  
@@ -222,12 +214,17 @@ void postQuitOperation(asyncBase *base)
 
 aioUserEvent *newUserEvent(asyncBase *base, aioEventCb callback, void *arg)
 {
-  aioUserEvent *event =
-    (aioUserEvent*)initAsyncOpRoot(base,
-                                   eventPoolId, eventPoolId,
-                                   userEventAlloc,
-                                   0, eventFinish, 0, callback, arg,
-                                   0, actUserEvent, 0);
+  aioUserEvent *event = (aioUserEvent*)objectGet(eventPoolId);
+  if (!event) {
+    event = malloc(sizeof(aioUserEvent));
+    event->root.poolId = eventPoolId;
+    base->methodImpl.initializeTimer(base, &event->root);
+  }
+
+  event->root.opCode = actUserEvent;
+  event->root.finishMethod = eventFinish;
+  event->root.callback = (void*)callback;
+  event->root.arg = arg;
   event->base = base;
   event->counter = 0;
   return event;
@@ -246,35 +243,39 @@ aioObject *newDeviceIo(asyncBase *base, iodevTy hDevice)
 
 void deleteAioObject(aioObject *object)
 {
-  cancelIo(&object->root, 0);
+  cancelIo(&object->root);
   objectDeleteRef(&object->root, 1);
+}
+
+asyncBase *aioGetBase(aioObject *object)
+{
+  return object->root.base;
 }
 
 void userEventStartTimer(aioUserEvent *event, uint64_t usTimeout, int counter)
 {
   event->counter = counter;
   event->timeout = usTimeout;
-  event->root.base->methodImpl.startTimer(&event->root, usTimeout, 1);
+  event->base->methodImpl.startTimer(&event->root, usTimeout, 1);
 }
 
 
 void userEventStopTimer(aioUserEvent *event)
 {   
   event->counter = 0;  
-  event->root.base->methodImpl.stopTimer(&event->root);
+  event->base->methodImpl.stopTimer(&event->root);
 }
 
 
 void userEventActivate(aioUserEvent *event)
 {  
-  event->root.base->methodImpl.activate(&event->root);
+  event->base->methodImpl.activate(event);
 }
 
 void deleteUserEvent(aioUserEvent *event)
 {
-  asyncOpRoot *root = &event->root;
-  root->base->methodImpl.stopTimer(root);
-  objectRelease(root, root->poolId);
+  event->base->methodImpl.stopTimer(&event->root);
+  objectRelease(&event->root, event->root.poolId);
 }
 
 void *queryObject(asyncBase *base, const void *id)
@@ -296,44 +297,31 @@ void releaseObject(asyncBase *base, void *object, const void *type)
 }
 
 
-void aioConnect(asyncBase *base,
-                aioObject *object,
+void aioConnect(aioObject *object,
                 const HostAddress *address,
                 uint64_t usTimeout,
                 aioConnectCb callback,
                 void *arg)
 {
   objectAddRef(&object->root);
-  asyncOp *op = initAsyncOp(base, object, callback, arg, 0, 0, afNone, usTimeout, actConnect, base->methodImpl.connect);
+  asyncOp *op = initAsyncOp(object, callback, arg, 0, 0, afNone, usTimeout, actConnect, object->root.base->methodImpl.connect);
   op->host = *address;
   opStart(&op->root);
-  //addToExecuteQueue2(&object->root, &op->root);
-
-  //asyncOp *newOp = initAsyncOp(base, op, callback, arg, 0, 0, afNone, usTimeout, actConnect, base->methodImpl.connect);
-  //if (addToExecuteQueue((aioObjectRoot*)op, (asyncOpRoot*)newOp, 1))
-  //  ((asyncOpRoot*)newOp)->base->methodImpl.connect(newOp, address);
 }
 
 
-void aioAccept(asyncBase *base,
-               aioObject *object,
+void aioAccept(aioObject *object,
                uint64_t usTimeout,
                aioAcceptCb callback,
                void *arg)
 {
   objectAddRef(&object->root);
-  asyncOp *op = initAsyncOp(base, object, callback, arg, 0, 0, afNone, usTimeout, actAccept, base->methodImpl.accept);
+  asyncOp *op = initAsyncOp(object, callback, arg, 0, 0, afNone, usTimeout, actAccept, object->root.base->methodImpl.accept);
   opStart(&op->root);
-  //addToExecuteQueue2(&object->root, &op->root);
-
-  //asyncOp *newOp = initAsyncOp(base, op, callback, arg, 0, 0, afNone, usTimeout, actAccept, base->methodImpl.accept);
-  //if (addToExecuteQueue((aioObjectRoot*)op, (asyncOpRoot*)newOp, 0))
-  //  ((asyncOpRoot*)newOp)->base->methodImpl.accept(newOp);
 }
 
 
-void aioRead(asyncBase *base,
-             aioObject *object,
+void aioRead(aioObject *object,
              void *buffer,
              size_t size,
              AsyncFlags flags,
@@ -342,16 +330,12 @@ void aioRead(asyncBase *base,
              void *arg)
 {
   objectAddRef(&object->root);
-  asyncOp *op = initAsyncOp(base, object, callback, arg, buffer, size, flags, usTimeout, actRead, base->methodImpl.read);
+  asyncOp *op = initAsyncOp(object, callback, arg, buffer, size, flags, usTimeout, actRead, object->root.base->methodImpl.read);
   opStart(&op->root);
-  //asyncOp *newOp = initAsyncOp(base, op, callback, arg, buffer, size, flags, usTimeout, actRead, base->methodImpl.read);
-  //if (addToExecuteQueue((aioObjectRoot*)op, (asyncOpRoot*)newOp, 0))
-  //  startMethod(&newOp->root);  
 }
 
 
-void aioWrite(asyncBase *base,
-              aioObject *object,
+void aioWrite(aioObject *object,
               void *buffer,
               size_t size,
               AsyncFlags flags,
@@ -360,14 +344,11 @@ void aioWrite(asyncBase *base,
               void *arg)
 {
   objectAddRef(&object->root);
-  asyncOp *op = initAsyncOp(base, object, callback, arg, buffer, size, flags, usTimeout, actWrite, base->methodImpl.write);
+  asyncOp *op = initAsyncOp(object, callback, arg, buffer, size, flags, usTimeout, actWrite, object->root.base->methodImpl.write);
   opStart(&op->root);
-  //if (addToExecuteQueue((aioObjectRoot*)op, (asyncOpRoot*)newOp, 1))
-  //  startMethod(&newOp->root);  
 }
 
-void aioReadMsg(asyncBase *base,
-                aioObject *object,
+void aioReadMsg(aioObject *object,
                 void *buffer,
                 size_t size,
                 AsyncFlags flags,
@@ -390,26 +371,25 @@ void aioReadMsg(asyncBase *base,
     host.ipv4 = source.sin_addr.s_addr;
     host.port = source.sin_port;
     currentFinishedSync++;
-    if (!callback || ((currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION) && (flags & afActiveOnce))) {
+    if (callback == 0 || ((currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION) && (flags & afActiveOnce))) {
       objectDeleteRef(&object->root, 1);
       return;
     } else {
-      asyncOp *op = initAsyncOp(base, object, (void*)callback, arg, buffer, size, 0, 0, actReadMsg, base->methodImpl.readMsg);
+      asyncOp *op = initAsyncOp(object, (void*)callback, arg, buffer, size, 0, 0, actReadMsg, object->root.base->methodImpl.readMsg);
       op->bytesTransferred = result;
       op->host = host;
       opForceStatus(&op->root, aosSuccess);
       addToThreadLocalQueue(&op->root);
     }
   } else {
-    asyncOp *op = initAsyncOp(base, object, (void*)callback, arg, buffer, size, flags, usTimeout, actReadMsg, base->methodImpl.readMsg);
+    asyncOp *op = initAsyncOp(object, (void*)callback, arg, buffer, size, flags, usTimeout, actReadMsg, object->root.base->methodImpl.readMsg);
     opStart(&op->root);
   }
 }
 
 
 
-void aioWriteMsg(asyncBase *base,
-                 aioObject *object,
+void aioWriteMsg(aioObject *object,
                  const HostAddress *address,
                  void *buffer,
                  size_t size,
@@ -432,59 +412,59 @@ void aioWriteMsg(asyncBase *base,
 #endif
   if (result != -1) {
     currentFinishedSync++;
-    if (!callback || ((currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION) && (flags & afActiveOnce))) {
+    if (callback == 0 || ((currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION) && (flags & afActiveOnce))) {
       objectDeleteRef(&object->root, 1);
       return;
     } else {
-      asyncOp *op = initAsyncOp(base, object, (void*)callback, arg, buffer, size, 0, 0, actWriteMsg, base->methodImpl.writeMsg);
+      asyncOp *op = initAsyncOp(object, (void*)callback, arg, buffer, size, 0, 0, actWriteMsg, object->root.base->methodImpl.writeMsg);
       op->bytesTransferred = result;
       opForceStatus(&op->root, aosSuccess);
       addToThreadLocalQueue(&op->root);
     }
   } else {
-    asyncOp *op = initAsyncOp(base, object, (void*)callback, arg, buffer, size, flags, usTimeout, actWriteMsg, base->methodImpl.writeMsg);
+    asyncOp *op = initAsyncOp(object, (void*)callback, arg, buffer, size, flags, usTimeout, actWriteMsg, object->root.base->methodImpl.writeMsg);
     op->host = *address;
     opStart(&op->root);
   }
 }
 
 
-int ioConnect(asyncBase *base, aioObject *op, const HostAddress *address, uint64_t usTimeout)
+int ioConnect(aioObject *op, const HostAddress *address, uint64_t usTimeout)
 {
   coroReturnStruct r = {coroutineCurrent()};
-  aioConnect(base, op, address, usTimeout, coroutineConnectCb, &r);
+  aioConnect(op, address, usTimeout, coroutineConnectCb, &r);
   coroutineYield();
   return r.status == aosSuccess ? 0 : -1;
 }
 
 
-socketTy ioAccept(asyncBase *base, aioObject *op, uint64_t usTimeout)
+socketTy ioAccept(aioObject *op, uint64_t usTimeout)
 {
   coroReturnStruct r = {coroutineCurrent()};
-  aioAccept(base, op, usTimeout, coroutineAcceptCb, &r); 
+  aioAccept(op, usTimeout, coroutineAcceptCb, &r);
   coroutineYield();  
   return r.status == aosSuccess ? r.acceptSocket : -1;
 }
 
 
-ssize_t ioRead(asyncBase *base, aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
+ssize_t ioRead(aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
   coroReturnStruct r = {coroutineCurrent()};  
-  aioRead(base, op, buffer, size, flags, usTimeout, coroutineCb, &r);
+  aioRead(op, buffer, size, flags, usTimeout, coroutineCb, &r);
   coroutineYield();
   return r.status == aosSuccess ? r.bytesTransferred : -1;  
 }
 
 
-ssize_t ioWrite(asyncBase *base, aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
+ssize_t ioWrite(aioObject *op, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
   coroReturnStruct r = {coroutineCurrent()};  
-  aioWrite(base, op, buffer, size, flags, usTimeout, coroutineCb, &r);
+  aioWrite(op, buffer, size, flags, usTimeout, coroutineCb, &r);
   coroutineYield();
   return r.status == aosSuccess ? r.bytesTransferred : -1;
 }
 
-ssize_t ioReadMsg(asyncBase *base, aioObject *object, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
+ssize_t ioReadMsg(aioObject *object, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
   objectAddRef(&object->root);
 
@@ -500,7 +480,7 @@ ssize_t ioReadMsg(asyncBase *base, aioObject *object, void *buffer, size_t size,
     // Data received synchronously
     if (++currentFinishedSync >= MAX_SYNCHRONOUS_FINISHED_OPERATION) {
       coroReturnStruct r = {coroutineCurrent()};
-      asyncOp *op = initAsyncOp(base, object, coroutineReadMsgCb, &r, buffer, size, 0, 0, actReadMsg, base->methodImpl.readMsg);
+      asyncOp *op = initAsyncOp(object, coroutineReadMsgCb, &r, buffer, size, 0, 0, actReadMsg, object->root.base->methodImpl.readMsg);
       op->bytesTransferred = result;
       opForceStatus(&op->root, aosSuccess);
       addToThreadLocalQueue(&op->root);
@@ -513,12 +493,12 @@ ssize_t ioReadMsg(asyncBase *base, aioObject *object, void *buffer, size_t size,
   }
 
   coroReturnStruct r = {coroutineCurrent()};
-  lastOp = (asyncOpRoot*)initAsyncOp(base, object, coroutineReadMsgCb, &r, buffer, size, flags, usTimeout, actReadMsg, base->methodImpl.readMsg);
+  lastOp = (asyncOpRoot*)initAsyncOp(object, coroutineReadMsgCb, &r, buffer, size, flags, usTimeout, actReadMsg, object->root.base->methodImpl.readMsg);
   coroutineYield();
   return r.status == aosSuccess ? r.bytesTransferred : -1;
 }
 
-ssize_t ioWriteMsg(asyncBase *base, aioObject *object, const HostAddress *address, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
+ssize_t ioWriteMsg(aioObject *object, const HostAddress *address, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
   objectAddRef(&object->root);
 
@@ -536,7 +516,7 @@ ssize_t ioWriteMsg(asyncBase *base, aioObject *object, const HostAddress *addres
     // Data received synchronously
     if (++currentFinishedSync >= MAX_SYNCHRONOUS_FINISHED_OPERATION) {
       coroReturnStruct r = {coroutineCurrent()};
-      asyncOp *newOp = initAsyncOp(base, object, coroutineCb, &r, buffer, size, 0, 0, actWriteMsg, base->methodImpl.writeMsg);
+      asyncOp *newOp = initAsyncOp(object, coroutineCb, &r, buffer, size, 0, 0, actWriteMsg, object->root.base->methodImpl.writeMsg);
       newOp->host = *address;
       addToThreadLocalQueue(&newOp->root);
       coroutineYield();
@@ -548,7 +528,7 @@ ssize_t ioWriteMsg(asyncBase *base, aioObject *object, const HostAddress *addres
   }
 
   coroReturnStruct r = {coroutineCurrent()};
-  asyncOp *op = initAsyncOp(base, object, coroutineCb, &r, buffer, size, flags, usTimeout, actWriteMsg, base->methodImpl.writeMsg);
+  asyncOp *op = initAsyncOp(object, coroutineCb, &r, buffer, size, flags, usTimeout, actWriteMsg, object->root.base->methodImpl.writeMsg);
   op->host = *address;
   lastOp = &op->root;
   coroutineYield();
@@ -562,6 +542,6 @@ void ioSleep(aioUserEvent *event, uint64_t usTimeout)
   event->root.callback = coroutineEventCb;
   event->root.arg = &r;
   event->counter = 1;
-  event->root.base->methodImpl.startTimer(&event->root, usTimeout, 0);
+  event->base->methodImpl.startTimer(&event->root, usTimeout, 0);
   coroutineYield();
 }

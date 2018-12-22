@@ -17,8 +17,8 @@ typedef struct HTTPClient HTTPClient;
 typedef struct HTTPInfo HTTPInfo;
 typedef struct HTTPOp HTTPOp;
 
-typedef void httpConnectCb(AsyncOpStatus, asyncBase*, HTTPClient*, void*);
-typedef void httpRequestCb(AsyncOpStatus, asyncBase*, HTTPClient*, int, void*);
+typedef void httpConnectCb(AsyncOpStatus, HTTPClient*, void*);
+typedef void httpRequestCb(AsyncOpStatus, HTTPClient*, int, void*);
 
 typedef struct HTTPClient {
   aioObjectRoot root;

@@ -50,13 +50,13 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
 void epollPostEmptyOperation(asyncBase *base);
 void epollNextFinishedOperation(asyncBase *base);
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data);
-asyncOpRoot *epollNewAsyncOp(asyncBase *base);
+asyncOpRoot *epollNewAsyncOp();
 void epollDeleteObject(aioObject *object);
 void epollFinishOp(asyncOpRoot *op, tag_t generation, AsyncOpStatus status);
 void epollInitializeTimer(asyncBase *base, asyncOpRoot *op);
 void epollStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic);
 void epollStopTimer(asyncOpRoot *op);
-void epollActivate(asyncOpRoot *op);
+void epollActivate(aioUserEvent *op);
 AsyncOpStatus epollAsyncConnect(asyncOpRoot *opptr);
 AsyncOpStatus epollAsyncAccept(asyncOpRoot *opptr);
 AsyncOpStatus epollAsyncRead(asyncOpRoot *opptr);
@@ -141,13 +141,14 @@ static void opRun(asyncOpRoot *op, List *list)
 {
   eqPushBack(list, op);
   if (op->timeout) {
+    asyncBase *base = op->object->base;
     if (op->flags & afRealtime) {
       // start timer for this operation
-      op->base->methodImpl.startTimer(op, op->timeout, op->opCode == actUserEvent);
+      base->methodImpl.startTimer(op, op->timeout, op->opCode == actUserEvent);
     } else {
       // add operation to timeout grid
       op->endTime = ((uint64_t)time(0)) * 1000000ULL + op->timeout;
-      addToTimeoutQueue(op->base, op);
+      addToTimeoutQueue(base, op);
     }
   }
 }
@@ -373,7 +374,7 @@ aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
   return object;
 }
 
-asyncOpRoot *epollNewAsyncOp(asyncBase *base)
+asyncOpRoot *epollNewAsyncOp()
 {
   asyncOp *op = malloc(sizeof(asyncOp));
   if (op) {
@@ -443,7 +444,7 @@ void epollStopTimer(asyncOpRoot *op)
 }
 
 
-void epollActivate(asyncOpRoot *op)
+void epollActivate(aioUserEvent *op)
 {
   pipeMsg msg = {UserEvent, (void *)op};
   epollBase *localBase = (epollBase *)op->base;
