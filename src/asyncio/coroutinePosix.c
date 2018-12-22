@@ -1,65 +1,81 @@
-#undef _FORTIFY_SOURCE
-#include <setjmp.h>
+#include <assert.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <ucontext.h>
 #include "asyncio/coroutine.h"
 #include "config.h"
 
+typedef struct contextTy {
+#ifdef __i386__
+#define CTX_EIP_INDEX 0
+#define CTX_ESP_INDEX 1
+  uint32_t registers[8];
+#elif __x86_64__
+#define CTX_RIP_INDEX 4
+#define CTX_RSP_INDEX 5
+  uint64_t registers[9];
+#else
+#error "Platform not supported"
+#endif
+} contextTy;
+
 typedef struct coroutineTy {
+  contextTy context;
   struct coroutineTy *prev;
   void *stack;
-  ucontext_t initialContext;
-  jmp_buf context;
+  coroutineProcTy *entryPoint;
+  void *arg;
+  int finished;
+  int counter;
 } coroutineTy;
 
-__thread coroutineTy *currentCoroutine = 0;
-__thread char cleanupFiberStack[4096];
+static __thread coroutineTy *mainCoroutine;
+static __thread coroutineTy *currentCoroutine;
 
-#include <stdio.h>
-void splitPtr(void *ptr, unsigned *lo, unsigned *hi)
-{
-  uintptr_t p = (uintptr_t)ptr;
-  *lo = p & 0xFFFFFFFF;
-  *hi = p >> 32;
-}
+void switchContext(contextTy *from, contextTy *to);
+void x86InitFPU(contextTy *context);
 
-void *makePtr(unsigned lo, unsigned hi)
+static void fiberEntryPoint(coroutineTy *coroutine)
 {
-  return (void*)((((intptr_t)hi) << 32) | lo);
-}
-
-static void fiberDestroy()
-{
-  // free stack & jump caller fiber
-  free(currentCoroutine->stack);
-  currentCoroutine->stack = 0; 
-  
+  coroutine->entryPoint(coroutine->arg);
+  coroutine->finished = 1;
   currentCoroutine = currentCoroutine->prev;
-  _longjmp(currentCoroutine->context, 1);
+  switchContext(&coroutine->context, &currentCoroutine->context);
 }
 
-static void fiberStart(unsigned coroPtrLo, unsigned coroPtrHi, unsigned procPtrLo, unsigned procPtrHi, unsigned argPtrLo, unsigned argPtrHi)
+static void fiberInit(coroutineTy *coroutine, size_t stackSize)
 {
-  coroutineTy *coroutine = makePtr(coroPtrLo, coroPtrHi);
-  coroutineProcTy *proc = makePtr(procPtrLo, procPtrHi);
-  void *arg = makePtr(argPtrLo, argPtrHi);  
-  
-  if (_setjmp(coroutine->context) != 0) {
-    proc(arg); 
-    
-    // change stack frame before its release
-    // switch to temporary cleanup fiber    
-    ucontext_t cleanupFiberCtx;
-    getcontext(&cleanupFiberCtx);
-    cleanupFiberCtx.uc_stack.ss_sp = cleanupFiberStack;
-    cleanupFiberCtx.uc_stack.ss_size = sizeof(cleanupFiberStack);
-    cleanupFiberCtx.uc_stack.ss_flags = 0;
-    cleanupFiberCtx.uc_link = 0;
-    makecontext(&cleanupFiberCtx, (void(*)())fiberDestroy, 0);
-    setcontext(&cleanupFiberCtx);
-  }
+#ifdef __i386__
+  // x86 arch
+  // EIP = fiberEntryPoint
+  // ESP = stack + stackSize - 4
+  // [ESP] = coroutine
+  void *stack;
+  posix_memalign(&stack, 16, stackSize);
+  uintptr_t *esp = ((uintptr_t*)stack) + (stackSize - 4)/sizeof(uintptr_t);
+  *esp = (uintptr_t)coroutine;
+  coroutine->context.registers[CTX_EIP_INDEX] = (uintptr_t)fiberEntryPoint;
+  coroutine->context.registers[CTX_ESP_INDEX] = (uintptr_t)esp;
+  x86InitFPU(&coroutine->context);
+#elif __x86_64__
+  // x86_64 arch
+  // RIP = fiberEntryPoint
+  // RSP = stack + stackSize - 128 - 16
+  // RDI = coroutine
+  void *stack;
+  posix_memalign(&stack, 32, stackSize);
+  uintptr_t *rsp = ((uintptr_t*)stack) + (stackSize - 128 - 8)/sizeof(uintptr_t);
+  coroutine->context.registers[CTX_RIP_INDEX] = (uintptr_t)fiberEntryPoint;
+  coroutine->context.registers[CTX_RSP_INDEX] = (uintptr_t)rsp;
+  x86InitFPU(&coroutine->context);
+#else
+#error "Platform not supported"
+#endif
+}
+
+int coroutineIsMain()
+{
+  return currentCoroutine == mainCoroutine;
 }
 
 coroutineTy *coroutineCurrent()
@@ -69,7 +85,7 @@ coroutineTy *coroutineCurrent()
 
 int coroutineFinished(coroutineTy *coroutine)
 {
-  return coroutine->stack == 0;
+  return coroutine->finished;
 }
 
 /// coroutineNew - create coroutine
@@ -82,55 +98,45 @@ coroutineTy *coroutineNew(coroutineProcTy entry, void *arg, unsigned stackSize)
   
   // Create main fiber if it not exists
   if (currentCoroutine == 0)
-    currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
+    mainCoroutine = currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
   
-  coroutineTy *coroutine = (coroutineTy*)malloc(sizeof(coroutineTy));
+  coroutineTy *coroutine;
+  posix_memalign((void**)&coroutine, 8, sizeof(coroutineTy));
+  fiberInit(coroutine, stackSize);
+  coroutine->entryPoint = entry;
+  coroutine->arg = arg;
   coroutine->prev = currentCoroutine;
-
-  // Stack allocate & fill context with stack pointer
-  coroutine->stack = malloc(stackSize);
-  getcontext(&coroutine->initialContext);
-  coroutine->initialContext.uc_stack.ss_sp = coroutine->stack;
-  coroutine->initialContext.uc_stack.ss_size = stackSize;
-  coroutine->initialContext.uc_stack.ss_flags = 0;
-  
-  {
-    // Create new fiber context with 'makecontext'
-    // Switch to new fiber with 'swapcontext'
-    // Get point for 'longjmp' function
-    // Switch back to caller fiber    
-    ucontext_t callerCtx;
-    coroutine->initialContext.uc_link = &callerCtx;
-    
-    // TODO: now only for x86_64    
-    unsigned coroPtrLo, coroPtrHi, procPtrLo, procPtrHi, argPtrLo, argPtrHi;
-    splitPtr(coroutine, &coroPtrLo, &coroPtrHi);
-    splitPtr(entry, &procPtrLo, &procPtrHi);
-    splitPtr(arg, &argPtrLo, &argPtrHi);
-    makecontext(&coroutine->initialContext, (void(*)())fiberStart, 6, coroPtrLo, coroPtrHi, procPtrLo, procPtrHi, argPtrLo, argPtrHi);
-    swapcontext(&callerCtx, &coroutine->initialContext);
-  }
-  
+  coroutine->finished = 0;
+  coroutine->counter = 0;
   sigprocmask(SIG_SETMASK, &old, 0);  
   return coroutine;
 }
 
 void coroutineDelete(coroutineTy *coroutine)
 {
-  if (coroutine->stack)
-    free(coroutine->stack);
+  free(coroutine->stack);
   free(coroutine);
 }
-
 int coroutineCall(coroutineTy *coroutine)
 {
+  assert(__sync_fetch_and_add(&coroutine->counter, 1) == 0 &&
+         "Call coroutine from multiple threads detected!");
   if (!coroutineFinished(coroutine)) {
+    // Create main fiber if it not exists
+    if (currentCoroutine == 0)
+      mainCoroutine = currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
     coroutine->prev = currentCoroutine;
     currentCoroutine = coroutine;
-    if (_setjmp(coroutine->prev->context) == 0)
-      _longjmp(coroutine->context, 1);
-    
-    return coroutineFinished(coroutine);
+
+    switchContext(&coroutine->prev->context, &coroutine->context);
+
+    int finished = coroutine->finished;
+    if (finished) {
+      free(coroutine->stack);
+      free(coroutine);
+    }
+
+    return finished;
   } else {
     return 1;
   }
@@ -141,7 +147,8 @@ void coroutineYield()
   if (currentCoroutine && currentCoroutine->prev) {
     coroutineTy *old = currentCoroutine;
     currentCoroutine = currentCoroutine->prev;
-    if (_setjmp(old->context) == 0)
-      _longjmp(currentCoroutine->context, 1);
+    assert(__sync_fetch_and_add(&old->counter, -1) == 1 &&
+           "Multiple yield from one coroutine detected!");
+    switchContext(&old->context, &currentCoroutine->context);
   }
 }

@@ -43,7 +43,7 @@ static asyncOpRoot *alloc(asyncBase *base)
   return (asyncOpRoot*)op;
 }
 
-static void start(asyncOpRoot *op)
+static AsyncOpStatus start(asyncOpRoot *op)
 {
   SSLSocket *S = (SSLSocket*)op->object;
   switch (op->opCode) {
@@ -55,12 +55,15 @@ static void start(asyncOpRoot *op)
       aioRead(op->base, S->object, S->sslReadBuffer, S->sslReadBufferSize, afNone, 0, readProc, op);  
       break;
   }
+
+  return aosPending;
 }
 
-static void finish(asyncOpRoot *root, int status)
+static void finish(asyncOpRoot *root)
 {
   SSLOp *op = (SSLOp*)root;
   SSLSocket *S = (SSLSocket*)root->object;  
+  AsyncOpStatus status = opGetStatus(root);
   
     // cleanup child operation after timeout
   if (status == aosTimeout || status == aosCanceled)
@@ -120,7 +123,8 @@ size_t copyFromOut(SSLSocket *S, SSLOp *Op)
     Op->sslBufferSize = nBytes;
   }
   
-  BIO_read(S->bioOut, Op->sslBuffer, nBytes);  
+  // TODO: correct processing >4Gb data blocks
+  BIO_read(S->bioOut, Op->sslBuffer, (int)nBytes);  
   return nBytes;
 }
 
@@ -131,7 +135,8 @@ void connectProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_
   SSLSocket *S = (SSLSocket*)Op->root.object;
   if (status == aosSuccess) {
     if (Op->state == sslStReadNewFrame) {
-      BIO_write(S->bioIn, S->sslReadBuffer, transferred);
+      // TODO: correct processing >4Gb data blocks
+      BIO_write(S->bioIn, S->sslReadBuffer, (int)transferred);
       Op->state = sslStConnecting;
     }
 
@@ -165,7 +170,8 @@ void readProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t t
   SSLSocket *S = (SSLSocket*)Op->root.object;
   if (status == aosSuccess) {
     if (Op->state == sslStReadNewFrame) {
-      BIO_write(S->bioIn, S->sslReadBuffer, transferred);
+      // TODO: correct processing >4Gb data blocks
+      BIO_write(S->bioIn, S->sslReadBuffer, (int)transferred);
       Op->state = sslStReading;
     }
     
@@ -174,7 +180,8 @@ void readProc(AsyncOpStatus status, asyncBase *base, aioObject *object, size_t t
     
     int readResult = 0;
     int R;
-    while ( (R = SSL_read(S->ssl, ptr, size)) > 0) {
+    // TODO: correct processing >4Gb data blocks
+    while ( (R = SSL_read(S->ssl, ptr, (int)size)) > 0) {
       readResult += R;
       ptr += R;
       size -= R;
@@ -212,7 +219,8 @@ void sslSocketDestructor(aioObjectRoot *root)
 
 SSLSocket *sslSocketNew(asyncBase *base)
 {
-  SSLSocket *S = (SSLSocket*)initObjectRoot(ioObjectUserDefined, sizeof(SSLSocket), sslSocketDestructor);
+  SSLSocket *S = (SSLSocket*)malloc(sizeof(SSLSocket));
+  initObjectRoot(&S->root, base, ioObjectUserDefined, sslSocketDestructor);
   S->sslContext = SSL_CTX_new (TLSv1_1_client_method());
   S->ssl = SSL_new(S->sslContext);  
   S->bioIn = BIO_new(BIO_s_mem());
@@ -228,9 +236,9 @@ SSLSocket *sslSocketNew(asyncBase *base)
 
 void sslSocketDelete(SSLSocket *socket)
 {
-  deleteAioObject(socket->object);
-  socket->root.links--;   // TODO: atomic
-  checkForDeleteObject(&socket->root);
+  //deleteAioObject(socket->object);
+  //socket->root.refs--;   // TODO: atomic
+  //checkForDeleteObject(&socket->root);
 }
 
 socketTy sslGetSocket(const SSLSocket *socket)
@@ -278,7 +286,8 @@ void aioSslWrite(asyncBase *base,
                  sslCb callback,
                  void *arg)
 {
-  SSL_write(socket->ssl, buffer, size);
+  // TODO: correct processing >4Gb data blocks
+  SSL_write(socket->ssl, buffer, (int)size);
   
   // Allocate operation only for buffer
   SSLOp *newOp = allocSSLOp(base, socket, callback, arg, buffer, size, afNone, sslOpWrite, usTimeout);  

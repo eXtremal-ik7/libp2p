@@ -18,7 +18,7 @@ struct readerContext {
 void printhex(uint8_t *data, size_t size)
 {
   for (size_t i = 0; i < size; i++) {
-    fprintf(stderr, "%02X", data[i]);
+    fprintf(stderr, "%02X", (unsigned)data[i]);
   }
   fprintf(stderr, "\n");   
 }
@@ -30,7 +30,6 @@ void readerProc(void *arg)
   while (true) {
     ssize_t bytesRead = ioRead(reader->base, reader->socket, echoBuffer, sizeof(echoBuffer), afNone, 0);
     if (bytesRead != -1) {
-      printhex(echoBuffer, bytesRead);
       ioWrite(reader->base, reader->socket, echoBuffer, bytesRead, afNone, 0);
     } else {
       fprintf(stderr, " * asyncRead error, exiting..\n");

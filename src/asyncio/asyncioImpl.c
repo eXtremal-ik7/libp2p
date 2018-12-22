@@ -1,4 +1,5 @@
 #include "asyncioImpl.h"
+#include "asyncio/coroutine.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,31 +10,69 @@
 
 #define PAGE_MAP_SIZE (1u << 16)
 
-#ifndef OS_WINDOWS
-__thread asyncOpRoot *lfHead = 0;
-__thread asyncOpRoot *lfTail = 0;
-__thread int currentFinishedSync = 0;
-__thread int messageLoopThreadId = 0;
-#else
-__declspec(thread) asyncOpRoot *lfHead = 0;
-__declspec(thread) asyncOpRoot *lfTail = 0;
-__declspec(thread) int currentFinishedSync = 0;
-__declspec(thread) int messageLoopThreadId = 0;
-#endif
+#define TAGGED_POINTER_DATA_SIZE 6
+#define TAGGED_POINTER_ALIGNMENT (((intptr_t)1) << TAGGED_POINTER_DATA_SIZE)
+#define TAGGED_POINTER_DATA_MASK (TAGGED_POINTER_ALIGNMENT-1)
+#define TAGGED_POINTER_PTR_MASK (~TAGGED_POINTER_DATA_MASK)
+
+#define TAG_STATUS_SIZE 8
+#define TAG_STATUS_MASK ((((tag_t)1) << TAG_STATUS_SIZE)-1)
+#define TAG_GENERATION_MASK (~TAG_STATUS_MASK)
+
+__tls List threadLocalQueue;
+__tls asyncOpRoot *lastOp;
+__tls tag_t lastTag;
+__tls unsigned currentFinishedSync;
+__tls unsigned messageLoopThreadId;
+
+const char *asyncOpLinkListPool = "asyncOpLinkListPool";
+const char *asyncOpActionPool = "asyncOpActionPool";
+
+void eqRemove(List *list, asyncOpRoot *op)
+{
+  if (op->executeQueue.prev) {
+    op->executeQueue.prev->executeQueue.next = op->executeQueue.next;
+  } else {
+    list->head = op->executeQueue.next;
+    if (list->head == 0)
+      list->tail = 0;
+  }
+
+  if (op->executeQueue.next) {
+    op->executeQueue.next->executeQueue.prev = op->executeQueue.prev;
+  } else {
+    list->tail = op->executeQueue.prev;
+    if (list->tail == 0)
+      list->head = 0;
+  }
+}
+
+void eqPushBack(List *list, asyncOpRoot *op)
+{
+  op->executeQueue.prev = list->tail;
+  op->executeQueue.next = 0;
+  if (list->tail) {
+    list->tail->executeQueue.next = op;
+    list->tail = op;
+  } else {
+    list->head = list->tail = op;
+  }
+}
+
+void fnPushBack(List *list, asyncOpRoot *op)
+{
+  op->next = 0;
+  if (list->tail) {
+    list->tail->next = op;
+    list->tail = op;
+  } else {
+    list->head = list->tail = op;
+  }
+}
 
 static inline uint64_t getPt(uint64_t endTime)
 {
   return (endTime / 1000000) + (endTime % 1000000 != 0);
-}
-
-static inline void acquireSpinlock(aioObjectRoot *object)
-{
-  // TODO: implement
-}
-
-static inline void releaseSpinlock(aioObjectRoot *object)
-{
-  // TODO: implement
 }
 
 static inline void pageMapKeys(time_t tm, uint32_t *lo, uint32_t *hi)
@@ -48,209 +87,216 @@ static inline void *pageMapAlloc()
   return calloc(PAGE_MAP_SIZE, sizeof(void*));
 }
 
-void pageMapInit(pageMap *map)
+void *__tagged_alloc(size_t size)
 {
-  map->map = (asyncOpRoot***)pageMapAlloc();
+#ifdef OS_COMMONUNIX
+  void *memptr;
+  return posix_memalign(&memptr, TAGGED_POINTER_ALIGNMENT, size) == 0 ? memptr: 0;
+#else
+  return _aligned_malloc(size, TAGGED_POINTER_ALIGNMENT);
+#endif
 }
 
-asyncOpRoot *pageMapExtractAll(pageMap *map, time_t tm)
+void *__tagged_pointer_make(void *ptr, tag_t data)
+{
+  return (void*)(((intptr_t)ptr) + ((intptr_t)(data & TAGGED_POINTER_DATA_MASK)));
+}
+
+void __tagged_pointer_decode(void *ptr, void **outPtr, tag_t *outData)
+{
+  intptr_t p = (intptr_t)ptr;
+  *outPtr = (void*)(p & TAGGED_POINTER_PTR_MASK);
+  *outData = p & TAGGED_POINTER_DATA_MASK;
+}
+
+void pageMapInit(pageMap *map)
+{
+  map->map = (asyncOpListLink***)pageMapAlloc();
+  map->lock = 0;
+}
+
+asyncOpListLink *pageMapExtractAll(pageMap *map, time_t tm)
 {
   uint32_t lo;
   uint32_t hi;
   pageMapKeys(tm, &lo, &hi);
-  asyncOpRoot **p1 = map->map[hi];
+  asyncOpListLink **p1 = map->map[hi];
+
   if (p1) {
-    asyncOpRoot *first = p1[lo];
+  __spinlock_acquire(&map->lock);
+  asyncOpListLink *first = p1[lo];
     p1[lo] = 0;
+    __spinlock_release(&map->lock);
     return first;
   } else {
     return 0;
   }
 }
 
-void pageMapAdd(pageMap *map, asyncOpRoot *op)
+void pageMapAdd(pageMap *map, asyncOpListLink *link)
 {
   uint32_t lo;
   uint32_t hi;
-  pageMapKeys(getPt(op->endTime), &lo, &hi);
-  asyncOpRoot **p1 = map->map[hi];
+  pageMapKeys(getPt(link->op->endTime), &lo, &hi);
+  asyncOpListLink **p1 = map->map[hi];
   if (!p1) {
-    p1 = (asyncOpRoot**)pageMapAlloc();
-    map->map[hi] = p1;
+    p1 = (asyncOpListLink**)pageMapAlloc();
+    if (!__pointer_atomic_compare_and_swap((void* volatile*)&map->map[hi], 0, p1)) {
+      free(p1);
+      p1 = map->map[hi];
+    }
   }
   
-  op->timeoutQueue.prev = 0;
-  op->timeoutQueue.next = p1[lo];
+  link->prev = 0;
+
+  __spinlock_acquire(&map->lock);
+  link->next = p1[lo];
   if (p1[lo])
-    p1[lo]->timeoutQueue.prev = op;
-  p1[lo] = op;
+    p1[lo]->prev = link;
+  p1[lo] = link;
+  __spinlock_release(&map->lock);
 }
 
-void pageMapRemove(pageMap *map, asyncOpRoot *op)
+int pageMapRemove(pageMap *map, asyncOpListLink *link)
 {
+  int removed = 0;
   uint32_t lo;
   uint32_t hi;
-  pageMapKeys(getPt(op->endTime), &lo, &hi);
-  asyncOpRoot **p1 = map->map[hi];
-  if (p1 && op == p1[lo])
-    p1[lo] = op->timeoutQueue.next;
-  
-  if (op->timeoutQueue.prev)
-    op->timeoutQueue.prev->timeoutQueue.next = op->timeoutQueue.next;
-  if (op->timeoutQueue.next)
-    op->timeoutQueue.next->timeoutQueue.prev = op->timeoutQueue.prev;
+  pageMapKeys(getPt(link->op->endTime), &lo, &hi);
+  asyncOpListLink **p1 = map->map[hi];
+  if (!p1)
+    return removed;
+
+  __spinlock_acquire(&map->lock);
+  if (p1[lo]) {
+    if (link == p1[lo])
+      p1[lo] = link->next;
+    if (link->prev)
+      link->prev->next = link->next;
+    if (link->next)
+      link->next->prev = link->prev;
+    removed = 1;
+  }
+  __spinlock_release(&map->lock);
+
+  return removed;
 }
 
 void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op)
 {
-  // TODO acquireSpinlock(base)
-  pageMapAdd(&base->timerMap, op);
-  // TODO releaseSpinlock(base)
+  asyncOpListLink *timerLink = objectGet(asyncOpLinkListPool);
+  if (!timerLink)
+    timerLink = malloc(sizeof(asyncOpListLink));
+  timerLink->op = op;
+  timerLink->tag = opGetGeneration(op);
+  pageMapAdd(&base->timerMap, timerLink);
+  op->timerId = timerLink;
 }
 
 
 void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op)
 {
-  pageMapRemove(&base->timerMap, op);
-}
-
-void processTimeoutQueue(asyncBase *base)
-{
-  // check timeout queue
-  time_t currentTime = time(0);  
-  time_t begin = base->lastCheckPoint;
-  for (; begin <= currentTime; begin++) {
-    // TODO acquireSpinlock(base)
-    asyncOpRoot *op = pageMapExtractAll(&base->timerMap, begin);
-    // TODO releaseSpinlock(base)
-    while (op) {
-      asyncOpRoot *next = op->timeoutQueue.next;
-      finishOperation(op, aosTimeout, 0);
-      op = next;
-    }
-      
-    begin++;
+  asyncOpListLink *timerLink = (asyncOpListLink*)op->timerId;
+  if (timerLink && pageMapRemove(&base->timerMap, timerLink)) {
+    objectRelease(timerLink, asyncOpLinkListPool);
+    op->timerId = 0;
   }
-  
-  // TODO acquireSpinlock(base)
+}
+
+void processTimeoutQueue(asyncBase *base, time_t currentTime)
+{
+  // TODO: handle system date change
+  if (base->lastCheckPoint >= currentTime || !__spinlock_try_acquire(&base->timerMapLock))
+    return;
+
+  // check timeout queue
+  time_t begin = base->lastCheckPoint;
+  for (; begin < currentTime; begin++) {
+    asyncOpListLink *link = pageMapExtractAll(&base->timerMap, begin);
+    while (link) {
+      asyncOpListLink *next = link->next;
+      opCancel(link->op, link->tag, aosTimeout);
+      objectRelease(link, asyncOpLinkListPool);
+      link = next;
+    }
+  }
+
   base->lastCheckPoint = currentTime;
-  // TODO releaseSpinlock(base)
+  __spinlock_release(&base->timerMapLock);
 }
 
-aioObjectRoot *initObjectRoot(int type, size_t size, aioObjectDestructor destructor)
+void initObjectRoot(aioObjectRoot *object, asyncBase *base, IoObjectTy type, aioObjectDestructor destructor)
 {
-  aioObjectRoot *object = (aioObjectRoot*)calloc(size, 1);
+  object->tag = 0;
+  object->readQueue.head = object->readQueue.tail = 0;
+  object->writeQueue.head = object->writeQueue.tail = 0;
+  object->announcementQueue.head = object->announcementQueue.tail = 0;
+  object->announcementQueue.lock = 0;
+  object->base = base;
   object->type = type;
-  object->links = 1;
+  object->refs = 1;
   object->destructor = destructor;
-  return object;
-}
-
-void checkForDeleteObject(aioObjectRoot *object)
-{
-  if (!object->readQueue.head && !object->writeQueue.head && object->links == 0)
-    object->destructor(object);
 }
 
 void cancelIo(aioObjectRoot *object, asyncBase *base)
 {
-  asyncOpRoot *op;
-  
-  for (;;) {
-    acquireSpinlock(object);
-    op = object->readQueue.head;
-    if (!op) {
-      releaseSpinlock(object);
-      break;
-    }
-    
-    if (op->base == base) {
-      object->readQueue.head = op->executeQueue.next;
-      if (object->readQueue.head == 0)
-        object->readQueue.tail = 0;
-      releaseSpinlock(object);
-    } else {
-      releaseSpinlock(object);
-      // TODO: send message to another base
-      return;
-    }
-    
-    if (op->flags & afRealtime) {
-      base->methodImpl.stopTimer(op);
-    } else if (op->endTime) {
-      removeFromTimeoutQueue(base, op);
-    }
-    
-    op->finishMethod(op, aosCanceled);
-    objectRelease(&base->pool, op, op->poolId);     
+  if (__tag_atomic_fetch_and_add(&object->tag, TAG_CANCELIO) == 0)
+    object->base->methodImpl.combiner(object, TAG_CANCELIO, 0, aaNone);
+}
+
+void objectAddRef(aioObjectRoot *object)
+{
+  __tag_atomic_fetch_and_add(&object->refs, 1);
+}
+
+void objectDeleteRef(aioObjectRoot *object, tag_t count)
+{
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable:4146)
+#endif
+  if (__tag_atomic_fetch_and_add(&object->refs, -count) == count) {
+    // try delete 
+    if (__tag_atomic_fetch_and_add(&object->tag, TAG_DELETE) == 0)
+      object->base->methodImpl.combiner(object, TAG_DELETE, 0, aaNone);
   }
-  
-  for (;;) {
-    acquireSpinlock(object);
-    op = object->writeQueue.head;
-    if (!op) {
-      releaseSpinlock(object);
-      break;
-    }
-    
-    if (op->base == base) {
-      object->writeQueue.head = op->executeQueue.next;
-      if (object->writeQueue.head == 0)
-        object->writeQueue.tail = 0;      
-      releaseSpinlock(object);
-    } else {
-      releaseSpinlock(object);
-      // TODO send message to another base
-      return;
-    }
-    
-    if (op->flags & afRealtime) {
-      base->methodImpl.stopTimer(op);
-    } else if (op->endTime) {
-      removeFromTimeoutQueue(base, op);
-    }
-    
-    op->finishMethod(op, aosCanceled);
-    objectRelease(&base->pool, op, op->poolId);     
-  }
-  
-  
-  checkForDeleteObject(object);
-}
-
-
-tag_t object_try_lock(aioObjectRoot *object)
-{
-#ifdef OS_WINDOWS
-
-#else
-  return __sync_fetch_and_add(&object->tag, ((tag_t)1));
+#ifdef _MSC_VER
+#pragma warning(pop)
 #endif
 }
 
-tag_t object_try_delete(aioObjectRoot *object)
+tag_t opGetGeneration(asyncOpRoot *op)
 {
-#ifdef OS_WINDOWS
-
-#else
-  return __sync_fetch_and_add(&object->tag, ((tag_t)1) << (sizeof(tag_t)/2));
-#endif
+  return op->tag >> TAG_STATUS_SIZE;
 }
 
-int asyncop_try_lock(asyncOpRoot *op, tag_t tag)
+AsyncOpStatus opGetStatus(asyncOpRoot *op)
 {
-#ifdef OS_WINDOWS
+  return op->tag & TAG_STATUS_MASK;
+}
 
-#else
-  return __sync_fetch_and_add(&op->tag, 1) == tag;
-#endif
+int opSetStatus(asyncOpRoot *op, tag_t generation, AsyncOpStatus status)
+{
+  return __tag_atomic_compare_and_swap(&op->tag,
+                                      (generation<<TAG_STATUS_SIZE) | aosPending,
+                                      (generation<<TAG_STATUS_SIZE) | status);
+}
+
+void opForceStatus(asyncOpRoot *op, AsyncOpStatus status)
+{
+  op->tag = (op->tag & TAG_GENERATION_MASK) | status;
+}
+
+tag_t opEncodeTag(asyncOpRoot *op, tag_t tag)
+{
+  return ((op->tag >> TAG_STATUS_SIZE) & ~((tag_t)TAGGED_POINTER_DATA_MASK)) | (tag & (tag_t)TAGGED_POINTER_DATA_MASK);
 }
 
 asyncOpRoot *initAsyncOpRoot(asyncBase *base,
                              const char *nonTimerPool,
                              const char *timerPool,
                              newAsyncOpTy *newOpProc,
-                             aioStartProc *startMethod,
+                             aioExecuteProc *startMethod,
                              aioFinishProc *finishMethod,
                              aioObjectRoot *object,
                              void *callback,
@@ -261,161 +307,187 @@ asyncOpRoot *initAsyncOpRoot(asyncBase *base,
 {
   int realtime = (opCode == actUserEvent) || (flags & afRealtime);
   const char *pool = realtime ? timerPool : nonTimerPool;  
-  asyncOpRoot *op = (asyncOpRoot*)objectGet(&base->pool, pool);  
+  asyncOpRoot *op = (asyncOpRoot*)objectGet(pool);
   if (!op) {
     op = newOpProc(base);
     op->base = base;    
     op->poolId = pool;
-    op->startMethod = startMethod;
-    op->finishMethod = finishMethod;
     if (realtime)
-      op->base->methodImpl.initializeTimer(op);
+      op->base->methodImpl.initializeTimer(base, op);
+    op->tag = 0;
   }
-  
+
+  op->tag = ((opGetGeneration(op)+1) << TAG_STATUS_SIZE) | aosPending;
+  op->executeMethod = startMethod;
+  op->finishMethod = finishMethod;
   op->executeQueue.prev = 0;
   op->executeQueue.next = 0;  
-  op->timeoutQueue.prev = 0;
-  op->timeoutQueue.next = 0;  
+  op->next = 0;
   op->object = object;
   op->flags = flags;
   op->opCode = opCode;
   op->callback = callback;
   op->arg = arg;
-  
-  if (timeout) {
-    if (realtime) {
-      // start timer for this operation
-      op->base->methodImpl.startTimer(op, timeout);
-    } else {
-      // add operation to timeout grid
-      op->endTime = ((uint64_t)time(0))*1000000ULL + timeout;
-      addToTimeoutQueue(op->base, op);
-    }
-  }
-  
+  op->timeout = timeout;
+  op->timerId = realtime ? op->timerId : 0;
   return op;
 }
 
-void addToLocalFinishQueue(asyncOpRoot *op)
+void processOperationList(aioObjectRoot *object, List *finished, tag_t *needStart, processOperationCb *processCb, tag_t *enqueued)
 {
-  op->executeQueue.prev = lfTail;
-  op->executeQueue.next = 0;
-  if (lfTail)
-    lfTail->executeQueue.next = op;
-  lfTail = op;
-  if (op->executeQueue.prev == 0)
-    lfHead = op;
+  asyncOpAction *action;
+  __spinlock_acquire(&object->announcementQueue.lock);
+  action = object->announcementQueue.head;
+  object->announcementQueue.head = 0;
+  object->announcementQueue.tail = 0;
+  __spinlock_release(&object->announcementQueue.lock);
+
+  while (action) {
+    processCb(action->op, action->actionType, finished, needStart);
+    objectRelease(action, asyncOpActionPool);
+    action = action->next;
+    (*enqueued)++;
+  }
 }
 
-void executeLocalFinishQueue()
+void opRelease(asyncOpRoot *op, AsyncOpStatus status, List *executeList, List *finished)
 {
-  asyncOpRoot *op = lfHead;
-  lfHead = 0;
-  lfTail = 0;
+  if (op->timerId && status != aosTimeout) {
+    if (op->flags & afRealtime)
+      op->object->base->methodImpl.stopTimer(op);
+    else
+      removeFromTimeoutQueue(op->object->base, op);
+  }
+
+  if (executeList)
+    eqRemove(executeList, op);
+  fnPushBack(finished, op);
+}
+
+void executeOperationList(List *list, List *finished)
+{
+  asyncOpRoot *op = list->head;
+  while (op) {
+    asyncOpRoot *next = op->executeQueue.next;
+    AsyncOpStatus status = op->executeMethod(op);
+    if (status == aosPending)
+      break;
+
+    if (opSetStatus(op, opGetGeneration(op), status))
+      opRelease(op, status, 0, finished);
+    else
+      op->executeQueue.prev = op->executeQueue.next = 0;
+    op = next;
+  }
+
+  list->head = op;
+  if (!op)
+    list->tail = 0;
+}
+
+void cancelOperationList(List *list, List *finished, AsyncOpStatus status)
+{
+  asyncOpRoot *op = list->head;
+  while (op) {
+    asyncOpRoot *next = op->executeQueue.next;
+    if (opSetStatus(op, opGetGeneration(op), status))
+      opRelease(op, status, 0, finished);
+    else
+      op->executeQueue.prev = op->executeQueue.next = 0;
+    op = next;
+  }
+
+  list->head = 0;
+  list->tail = 0;
+}
+
+void combinerCall(asyncOpRoot *op, AsyncOpActionTy actionType)
+{
+  aioObjectRoot *object = op->object;
+  tag_t tag = __tag_atomic_fetch_and_add(&object->tag, 1);
+  if (!tag) {
+    object->base->methodImpl.combiner(object, 1, op, actionType);
+  } else {
+    asyncOpAction *act = objectGet(asyncOpActionPool);
+    if (!act)
+      act = malloc(sizeof(asyncOpAction));
+    act->op = op;
+    act->actionType = actionType;
+    act->next = 0;
+
+    __spinlock_acquire(&object->announcementQueue.lock);
+    if (object->announcementQueue.tail == 0) {
+      object->announcementQueue.head = act;
+      object->announcementQueue.tail = act;
+    }
+    else {
+      object->announcementQueue.tail->next = act;
+      object->announcementQueue.tail = act;
+    }
+    __spinlock_release(&object->announcementQueue.lock);
+  }
+}
+
+void opStart(asyncOpRoot *op)
+{
+  combinerCall(op, aaStart);
+}
+
+void opCancel(asyncOpRoot *op, tag_t generation, AsyncOpStatus status)
+{
+  op->object->base->methodImpl.finishOp(op, generation, status);
+}
+
+
+void addToThreadLocalQueue(asyncOpRoot *op)
+{
+  fnPushBack(&threadLocalQueue, op);
+}
+
+void executeThreadLocalQueue()
+{
+  if (lastOp) {
+    opStart(lastOp);
+    lastOp = 0;
+  }
+
+  asyncOpRoot *op = threadLocalQueue.head;
+  threadLocalQueue.head = 0;
+  threadLocalQueue.tail = 0;
   while (op) {
     currentFinishedSync = 0;
-    asyncOpRoot *nextOp = op->executeQueue.next;
-    objectRelease(&op->base->pool, op, op->poolId);
-    op->finishMethod(op, aosSuccess);
+    asyncOpRoot *nextOp = op->next;
+    aioObjectRoot *object = op->object;
+    objectRelease(op, op->poolId);
+    op->finishMethod(op);
+    objectDeleteRef(object, 1);
     op = nextOp;
+  }
+}
+
+void ioCoroutineCall(coroutineTy *coroutine)
+{
+  coroutineCall(coroutine);
+  if (lastOp) {
+    opStart(lastOp);
+    lastOp = 0;
   }
 }
 
 int addToExecuteQueue(aioObjectRoot *object, asyncOpRoot *op, int isWriteQueue)
 {
-  // TODO: make thread safe
-  // TODO acquireSpinlock(object);
-  List *list = isWriteQueue ? &object->writeQueue : &object->readQueue;
-  op->executeQueue.prev = list->tail;
-  op->executeQueue.next = 0;
-  if (list->tail)
-    list->tail->executeQueue.next = op;
-  list->tail = op;
-  if (op->executeQueue.prev == 0) {
-    list->head = op;
-    // TODO releaseSpinlock(object);
-    return 1;
-  }
-  
   return 0;
 }
 
 asyncOpRoot *removeFromExecuteQueue(asyncOpRoot *op)
 {
-  // TODO: make thread safe
-  // TODO acquireSpinlock(object)
-  aioObjectRoot *object = op->object;  
-  if (op->executeQueue.next) {
-    op->executeQueue.next->executeQueue.prev = op->executeQueue.prev;
-  } else {
-    if (object->readQueue.tail == op)
-      object->readQueue.tail = op->executeQueue.prev;
-    else if (object->writeQueue.tail == op)
-      object->writeQueue.tail = op->executeQueue.prev;
-  }  
-
-  if (op->executeQueue.prev) {
-    op->executeQueue.prev->executeQueue.next = op->executeQueue.next;
-  } else {
-    if (object->readQueue.head == op) {
-      object->readQueue.head = op->executeQueue.next;
-      // Start next 'read' operation
-      if (object->readQueue.head)
-        // TODO releaseSpinlock(object);
-        return object->readQueue.head;
-    } else if (object->writeQueue.head == op) {
-      object->writeQueue.head = op->executeQueue.next;
-      // Start next 'write' operation
-      if (object->writeQueue.head)
-        // TODO releaseSpinlock(object);
-        return object->writeQueue.head;
-    }
-  }
-   
-  // TODO releaseSpinlock(object);
   return 0;
 }
 
 static inline void startOperation(asyncOpRoot *op, asyncBase *previousOpBase)
 {
-  // TODO: use pipe for send operation to another async base
-  uint64_t timePt = ((uint64_t)time(0))*1000000;
-  if (!op->endTime || op->endTime >= timePt)
-    op->startMethod(op);
 }
 
 void finishOperation(asyncOpRoot *op, int status, int needRemoveFromTimeGrid)
 {
-  asyncBase *base = op->base;  
-  aioObjectRoot *object = op->object;
-  object->links++; // TODO: atomic
-  
-  if (op->flags & afRealtime) {
-    base->methodImpl.stopTimer(op);
-  } else if (op->endTime && needRemoveFromTimeGrid) {
-    removeFromTimeoutQueue(base, op);
-  }
-  
-  asyncOpRoot *nextOp;
-  
-  // Remove operation from execute queue
-  // Release operation
-  // Do callback if need
-  if (status == aosTimeout) {
-    op->finishMethod(op, status);
-    nextOp = removeFromExecuteQueue(op);
-    objectRelease(&base->pool, op, op->poolId);    
-  } else {
-    nextOp = removeFromExecuteQueue(op);
-    objectRelease(&base->pool, op, op->poolId);
-    op->finishMethod(op, status);
-  }
-
-  object->links--; // TODO: atomic
-  
-  // Start next operation
-  if (nextOp)
-    startOperation(nextOp, base);
-  else
-    checkForDeleteObject(object);
 }

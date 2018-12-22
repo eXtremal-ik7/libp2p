@@ -1,11 +1,9 @@
 #include "asyncio/coroutine.h"
+#include "asyncio/asyncioTypes.h"
 #include <windows.h>
 
-#ifdef _MSC_VER
-__declspec(thread) coroutineTy *currentCoroutine = 0;
-#else
-__thread coroutineTy *currentCoroutine = 0;
-#endif
+__tls coroutineTy *currentCoroutine;
+__tls coroutineTy *mainCoroutine;
 
 typedef struct coroutineTy {
   struct coroutineTy *prev;
@@ -22,6 +20,11 @@ static VOID __stdcall fiberEntryPoint(LPVOID lpParameter)
   coro->finished = 1;
   currentCoroutine = coro->prev;
   SwitchToFiber(currentCoroutine->fiber);
+}
+
+int coroutineIsMain()
+{
+  return currentCoroutine == mainCoroutine;
 }
 
 coroutineTy *coroutineCurrent()
@@ -52,19 +55,20 @@ void coroutineDelete(coroutineTy *coroutine)
 int coroutineCall(coroutineTy *coroutine)
 {
   if (!currentCoroutine) {
-    currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
+    mainCoroutine = currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
     currentCoroutine->fiber = ConvertThreadToFiber(0);    
   }
   
   coroutine->prev = currentCoroutine;
   currentCoroutine = coroutine;
   SwitchToFiber(coroutine->fiber);
-  if (coroutine->finished) {
+  int finished = coroutine->finished;
+  if (finished) {
     DeleteFiber(coroutine->fiber);
     free(coroutine);
   }
   
-  return coroutine->finished;
+  return finished;
 }
 
 void coroutineYield()

@@ -9,6 +9,9 @@ inline bool is_bigendian() {
 }
 #endif  //__cplusplus
 
+#cmakedefine OS_32
+#cmakedefine OS_64
+
 #cmakedefine OS_WINDOWS
 #cmakedefine OS_LINUX
 #cmakedefine OS_DARWIN

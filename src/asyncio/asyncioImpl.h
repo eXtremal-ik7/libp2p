@@ -6,34 +6,28 @@ extern "C" {
 #include "asyncio/objectPool.h"
 
 typedef enum IoActionTy {
-  actNoAction = -1,
-  actConnect = 0,
-  actAccept,
+  actAccept = OPCODE_READ,
   actRead,
-  actWrite,
   actReadMsg,
+  actConnect = OPCODE_WRITE,
+  actWrite,
   actWriteMsg,
-  actUserEvent
+  actUserEvent = OPCODE_OTHER
 } IoActionTy;
 
-
+typedef void combinerTy(aioObjectRoot*, tag_t, asyncOpRoot*, AsyncOpActionTy);
 typedef void postEmptyOperationTy(asyncBase*);
 typedef void nextFinishedOperationTy(asyncBase*);
 typedef aioObject *newAioObjectTy(asyncBase*, IoObjectTy, void*);
 typedef void deleteObjectTy(aioObject*);
-typedef void finishOpTy(asyncOp*);
-typedef void initializeTimerTy(asyncOpRoot*);
-typedef void startTimerTy(asyncOpRoot*, uint64_t);
+typedef void finishOpTy(asyncOpRoot*, tag_t, AsyncOpStatus);
+typedef void initializeTimerTy(asyncBase*, asyncOpRoot*);
+typedef void startTimerTy(asyncOpRoot*, uint64_t, int);
 typedef void stopTimerTy(asyncOpRoot*);
 typedef void activateTy(asyncOpRoot*);
-typedef void asyncConnectTy(asyncOp*, const HostAddress*);
-typedef void asyncAcceptTy(asyncOp*);
-typedef void asyncReadTy(asyncOp*);
-typedef void asyncWriteTy(asyncOp*);
-typedef void asyncReadMsgTy(asyncOp*);
-typedef void asyncWriteMsgTy(asyncOp*, const HostAddress*);
 
 struct asyncImpl {
+  combinerTy *combiner;
   postEmptyOperationTy *postEmptyOperation;
   nextFinishedOperationTy *nextFinishedOperation;
   newAioObjectTy *newAioObject;
@@ -44,22 +38,22 @@ struct asyncImpl {
   startTimerTy *startTimer;
   stopTimerTy *stopTimer;
   activateTy *activate;
-  asyncConnectTy *connect;
-  asyncAcceptTy *accept;
-  asyncReadTy *read;
-  asyncWriteTy *write;
-  asyncReadMsgTy *readMsg;
-  asyncWriteMsgTy *writeMsg;
+  aioExecuteProc *connect;
+  aioExecuteProc *accept;
+  aioExecuteProc *read;
+  aioExecuteProc *write;
+  aioExecuteProc *readMsg;
+  aioExecuteProc *writeMsg;
 };
 
 
 struct asyncBase {
   enum AsyncMethod method;
   struct asyncImpl methodImpl;
-  struct ObjectPool pool;
   struct pageMap timerMap;
-  time_t lastCheckPoint;  
-  volatile int messageLoopThreadCounter;
+  time_t lastCheckPoint;
+  volatile unsigned messageLoopThreadCounter;
+  volatile unsigned timerMapLock;
 #ifndef NDEBUG
   int opsCount;
 #endif
@@ -72,10 +66,16 @@ struct aioObject {
     iodevTy hDevice;
     socketTy hSocket;
   };
+  union {
+    void *ptr;
+    int32_t i32;
+    uint32_t u32;
+  };
 };
 
 struct asyncOp {
   asyncOpRoot root;
+  int state;
   void *buffer;
   size_t transactionSize;
   size_t bytesTransferred;
@@ -88,16 +88,17 @@ struct asyncOp {
 
 struct aioUserEvent {
   asyncOpRoot root;
+  asyncBase *base;
   uint64_t timeout;
   int counter;
 };
 
 void pageMapInit(pageMap *map);
-asyncOpRoot *pageMapExtractAll(pageMap *map, time_t tm);
-void pageMapAdd(pageMap *map, asyncOpRoot *op);
-void pageMapRemove(pageMap *map, asyncOpRoot *op);
-
-void processTimeoutQueue(asyncBase *base);
+asyncOpListLink *pageMapExtractAll(pageMap *map, time_t tm);
+void pageMapAdd(pageMap *map, asyncOpListLink *op);
+int pageMapRemove(pageMap *map, asyncOpListLink *op);
+void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op);
+void processTimeoutQueue(asyncBase *base, time_t currentTime);
 
 #ifdef __cplusplus
 }

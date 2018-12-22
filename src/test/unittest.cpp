@@ -50,7 +50,8 @@ aioObject *startUDPServer(asyncBase *base, aioReadMsgCb callback, void *arg, voi
     return 0;
   
   aioObject *object = newSocketIo(base, acceptSocket);
-  aioReadMsg(base, object, buffer, size, afNone, 1000000, callback, arg);
+  if (callback)
+    aioReadMsg(base, object, buffer, size, afNone, 1000000, callback, arg);
   return object;
 }
 
@@ -112,10 +113,9 @@ void test_connect_accept_acceptcb(AsyncOpStatus status, asyncBase *base, aioObje
 void test_connect_accept_connectcb(AsyncOpStatus status, asyncBase *base, aioObject *object, void *arg)
 {
   TestContext *ctx = (TestContext*)arg;
-  if (status == aosSuccess) {
+  if (status == aosSuccess)
     ctx->state = 1;
-    deleteAioObject(object);
-  }
+  deleteAioObject(object);
 }
 
 TEST(basic, test_connect_accept)
@@ -123,8 +123,8 @@ TEST(basic, test_connect_accept)
   TestContext context;
   context.serverSocket = startTCPServer(gBase, test_connect_accept_acceptcb, &context, gPort);
   context.clientSocket = initializeTCPClient(gBase, test_connect_accept_connectcb, &context, gPort);
-  ASSERT_NE(context.serverSocket, (void*)0);
-  ASSERT_NE(context.clientSocket, (void*)0);
+  ASSERT_NE(context.serverSocket, nullptr);
+  ASSERT_NE(context.clientSocket, nullptr);
   
   asyncLoop(gBase);
   deleteAioObject(context.serverSocket);
@@ -184,8 +184,8 @@ TEST(basic, test_tcp_rw)
   TestContext context;
   context.serverSocket = startTCPServer(gBase, test_tcp_rw_acceptcb, &context, gPort);
   context.clientSocket = initializeTCPClient(gBase, test_tcp_rw_connectcb, &context, gPort);
-  ASSERT_NE(context.serverSocket, (void*)0);
-  ASSERT_NE(context.clientSocket, (void*)0);
+  ASSERT_NE(context.serverSocket, nullptr);
+  ASSERT_NE(context.clientSocket, nullptr);
   
   asyncLoop(gBase);
   deleteAioObject(context.serverSocket);
@@ -248,12 +248,12 @@ void test_timeout_readcb(AsyncOpStatus status, asyncBase *base, aioObject *socke
 TEST(basic, test_timeout)
 {
   TestContext context;
-  context.serverSocket = startUDPServer(gBase, test_udp_rw_server_readcb, &context, context.serverBuffer, sizeof(context.serverBuffer), gPort);
+  context.serverSocket = startUDPServer(gBase, 0, &context, context.serverBuffer, sizeof(context.serverBuffer), gPort);
   ASSERT_NE(context.serverSocket, (void*)0);
   aioReadMsg(gBase, context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afRealtime, 1000, test_timeout_readcb, &context);
-  aioReadMsg(gBase, context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afRealtime, 5000, test_timeout_readcb, &context);  
-  aioReadMsg(gBase, context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afRealtime, 10000, test_timeout_readcb, &context);    
-  aioReadMsg(gBase, context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afNone, 100000, test_timeout_readcb, &context);  
+  aioReadMsg(gBase, context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afRealtime, 5000, test_timeout_readcb, &context);
+  aioReadMsg(gBase, context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afRealtime, 10000, test_timeout_readcb, &context);
+  aioReadMsg(gBase, context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afNone, 100000, test_timeout_readcb, &context);
   asyncLoop(gBase);
   deleteAioObject(context.serverSocket);
   ASSERT_TRUE(context.success);
@@ -261,7 +261,6 @@ TEST(basic, test_timeout)
 
 void test_delete_object_eventcb(asyncBase *base, aioUserEvent *event, void *arg)
 {
-  printf("test_delete_object_eventcb\n");
   TestContext *ctx = (TestContext*)arg;
   deleteAioObject(ctx->serverSocket);
 }
@@ -281,8 +280,8 @@ void test_delete_object_readcb(AsyncOpStatus status, asyncBase *base, aioObject 
 TEST(basic, test_delete_object)
 {
   TestContext context;
-  context.serverSocket = startUDPServer(gBase, test_udp_rw_server_readcb, &context, context.serverBuffer, sizeof(context.serverBuffer), gPort);
-  ASSERT_NE(context.serverSocket, (void*)0);
+  context.serverSocket = startUDPServer(gBase, 0, &context, context.serverBuffer, sizeof(context.serverBuffer), gPort);
+  ASSERT_NE(context.serverSocket, nullptr);
   
   for (int i = 0; i < 1000; i++)
     aioReadMsg(gBase, context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afNone, 10*1000000, test_delete_object_readcb, &context); 

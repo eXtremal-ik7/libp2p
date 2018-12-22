@@ -11,24 +11,29 @@
 #ifndef OS_WINDOWS
 #include <unistd.h>
 #endif
- 
-static unsigned gPortBase = 63300;
+
+static unsigned gDebug = 0;
+static uint16_t gPortBase = 63300;
 #ifdef OS_WINDOWS
 // Windows have low performance loopback interface
 static uint64_t gTotalPacketNum = 640000ULL;
 #else
 static uint64_t gTotalPacketNum = 4000000ULL;
 #endif
+
 static unsigned gGroupSize = 1000;
 static unsigned gMessageSize = 16;
 static unsigned gBatchSend = 0;
+
+// For debugging
+static __tls uint64_t threadPacketsNum = 0;
 
 struct Context {
   uint64_t totalPacketNum;
   unsigned groupSize;
   unsigned messageSize;
-  int port;
-  Context(int portArg) : totalPacketNum(gTotalPacketNum), groupSize(gGroupSize), messageSize(gMessageSize), port(portArg) {}    
+  uint16_t port;
+  Context(uint16_t portArg) : totalPacketNum(gTotalPacketNum), groupSize(gGroupSize), messageSize(gMessageSize), port(portArg) {}
 };
 
 enum AIOSenderTy {
@@ -241,6 +246,7 @@ void test_readcb(AsyncOpStatus status,
                  size_t transferred,
                  void *arg)
 {
+  threadPacketsNum++;
   ReceiverCtx *ctx = (ReceiverCtx*)arg;
   ctx->started = true;
   if (ctx->packetsNum == 0)
@@ -259,6 +265,7 @@ void test_readcb_timer(AsyncOpStatus status,
                        size_t transferred,
                        void *arg)
 {
+  threadPacketsNum++;
   ReceiverCtx *ctx = (ReceiverCtx*)arg;
   
   if (status == aosSuccess) {
@@ -287,7 +294,10 @@ void test_readcb_timer_rt(AsyncOpStatus status,
                           size_t transferred,
                           void *arg)
 {
-  ReceiverCtx *ctx = (ReceiverCtx*)arg;
+  __UNUSED(address)
+  __UNUSED(transferred)
+  threadPacketsNum++;
+  ReceiverCtx *ctx = static_cast<ReceiverCtx*>(arg);
   
   if (status == aosSuccess) {
     ctx->started = true;
@@ -310,8 +320,9 @@ void test_readcb_timer_rt(AsyncOpStatus status,
 // Asynchronous receiver thread
 void *test_aio_receiver(void *arg)
 {
-  ReceiverCtx *ctx = (ReceiverCtx*)arg;
+  ReceiverCtx *ctx = static_cast<ReceiverCtx*>(arg);
   
+  threadPacketsNum = 0;
   switch (ctx->type) {
     case aioReceiverAsync :
       aioReadMsg(ctx->base, ctx->server, &ctx->buffer, sizeof(ctx->buffer), afNone, 0, test_readcb, ctx);
@@ -328,20 +339,22 @@ void *test_aio_receiver(void *arg)
   }
   
   asyncLoop(ctx->base);
-  return 0;
+  if (gDebug)
+    printf("Thread packets num: %" PRIu64 "\n", threadPacketsNum);
+  return nullptr;
 }
 
 // Asynchronous receiver coroutine
 void test_coroutine_receiver_coro(void *arg)
 {
   char msg[65536];
-  ReceiverCtx *receiverCtx = (ReceiverCtx*)arg;  
+  ReceiverCtx *receiverCtx = static_cast<ReceiverCtx*>(arg);
   
   for (;;) {
     for (unsigned i = 0; i < receiverCtx->config->groupSize; i++) {
       ssize_t result = ioReadMsg(receiverCtx->base, receiverCtx->server, msg, sizeof(msg), afNone, 1000000);
       if (result == -1)
-        return;      
+        return;
 
       if (!receiverCtx->started) {
         receiverCtx->started = true;
@@ -357,11 +370,11 @@ void test_coroutine_receiver_coro(void *arg)
 // Asynchronous coroutine receiver thread
 void *test_coroutine_receiver(void *arg)
 {
-  ReceiverCtx *receiverCtx = (ReceiverCtx*)arg;
-  coroutineTy *receiverCoro = coroutineNew(test_coroutine_receiver_coro, receiverCtx, 0x40000);
+  ReceiverCtx *receiverCtx = static_cast<ReceiverCtx*>(arg);
+  coroutineTy *receiverCoro = coroutineNew(test_coroutine_receiver_coro, receiverCtx, 0x20000);
   coroutineCall(receiverCoro);
   asyncLoop(receiverCtx->base);
-  return 0;
+  return nullptr;
 }
 
 
@@ -371,7 +384,7 @@ void *test_coroutine_receiver(void *arg)
 // =                                                                    =
 // ======================================================================
 
-void test_aio(unsigned senderThreads, unsigned receiverThreads, int port, AIOSenderTy senderTy, AIOReceiverTy receiverTy)
+void test_aio(unsigned senderThreads, unsigned receiverThreads, uint16_t port, AIOSenderTy senderTy, AIOReceiverTy receiverTy)
 {
   asyncBase *base = createAsyncBase(amOSDefault);
   
@@ -389,13 +402,14 @@ void test_aio(unsigned senderThreads, unsigned receiverThreads, int port, AIOSen
     return;
 
   timeMark pt = getTimeMark();
+  aioObject *object = receiverTy != aioReceiverBlocking ? newSocketIo(base, serverSocket) : nullptr;
   for (unsigned i = 0; i < receiverThreads; i++) {
     allReceivers[i].base = base;
     allReceivers[i].config = &ctx;
     allReceivers[i].type = receiverTy;
     allReceivers[i].serverSocket = serverSocket;
     if (receiverTy != aioReceiverBlocking)
-      allReceivers[i].server = newSocketIo(base, serverSocket);
+      allReceivers[i].server = object;
     allReceivers[i].beginPt = pt;
     allReceivers[i].endPt = pt;    
     
@@ -417,9 +431,6 @@ void test_aio(unsigned senderThreads, unsigned receiverThreads, int port, AIOSen
         thread.detach();        
         break;
       }
-      default :
-        fprintf(stderr, "Invalid receiver type, exiting...\n");
-        exit(1);
     }
   }  
   
@@ -450,17 +461,13 @@ void test_aio(unsigned senderThreads, unsigned receiverThreads, int port, AIOSen
         thread.detach();        
         break;
       }
-      
-      default :
-        fprintf(stderr, "Invalid sender type, exiting...\n");
-        exit(1);
     }
   }
   
   for (;;) {
     bool receivingActive = false;
     timeMark pt = getTimeMark();
-    for (unsigned i = 0; i < 1; i++) {
+    for (unsigned i = 0; i < receiverThreads; i++) {
       ReceiverCtx &ctx = allReceivers[i];
       uint64_t diff = usDiff(ctx.endPt, pt);
       if (diff < 1000000) {
@@ -480,36 +487,48 @@ void test_aio(unsigned senderThreads, unsigned receiverThreads, int port, AIOSen
   }  
   
   postQuitOperation(base);
+  if (gDebug) {
+#ifdef OS_WINDOWS
+    Sleep(1000);
+#else
+    sleep(1);
+#endif
+  }
   
   uint64_t packetsNum = allReceivers[0].packetsNum;
   timeMark beginPt = allReceivers[0].beginPt;
   timeMark endPt = allReceivers[0].endPt;
+  if (gDebug)
+    printf("Receiver 1: %" PRIu64 " packets\n", allReceivers[0].packetsNum);
   for (unsigned i = 1; i < receiverThreads; i++) {
     if (allReceivers[i].beginPt.mark < beginPt.mark)
       beginPt = allReceivers[i].beginPt;
     if (allReceivers[i].endPt.mark > endPt.mark)
       endPt = allReceivers[i].endPt;
     packetsNum += allReceivers[i].packetsNum;
+    if (gDebug)
+      printf("Receiver %u: %" PRIu64 " packets\n", i+1, allReceivers[i].packetsNum);
   }
   
   double totalSeconds = usDiff(beginPt, endPt) / 1000000.0;
-
   printf("Threads S/R %u/%u sender=%s, receiver=%s, total messages: %" PRIu64 ", packet lost: %.2lf%%, elapsed time: %.3lf, rate: %.3lf msg/s\n",
          senderThreads,
          receiverThreads,
          aioSenderName[senderTy],
          aioReceiverName[receiverTy],
          packetsNum,
-         (1.0 - (packetsNum / (double)(gTotalPacketNum*senderThreads))) * 100.0,
+         (1.0 - (packetsNum / static_cast<double>(gTotalPacketNum*senderThreads))) * 100.0,
          totalSeconds,
          packetsNum/totalSeconds);  
 }
 
 int main(int argc, char **argv)
 {
+  __UNUSED(argc)
+  __UNUSED(argv)
+
   initializeSocketSubsystem();
-  
-  unsigned port = gPortBase;
+  uint16_t port = gPortBase;
   
   // Blocking tests
   test_aio(1, 1, port++, aioSenderBlocking, aioReceiverBlocking);
@@ -550,6 +569,5 @@ int main(int argc, char **argv)
   test_aio(1, 2, port++, aioSenderBlocking, aioReceiverCoroutine);
   test_aio(1, 4, port++, aioSenderBlocking, aioReceiverCoroutine);
   test_aio(4, 4, port++, aioSenderBlocking, aioReceiverCoroutine);
-  
   return 0;
 }

@@ -54,11 +54,11 @@ static asyncOpRoot *alloc(asyncBase *base)
   return (asyncOpRoot*)malloc(sizeof(p2pOp));
 }
 
-static void start(asyncOpRoot *root)
+static AsyncOpStatus start(asyncOpRoot *root)
 {
   p2pOp *op = (p2pOp*)root;   
   aioObject *object = ((p2pConnection*)root->object)->socket;
-  root->object->links++;
+  root->object->refs++;
   switch (root->opCode) {
     case p2pOpRecv :
       aioRead(root->base, object, &op->header, sizeof(p2pHeader), afWaitAll, 0, p2pRecvProc, op);
@@ -72,13 +72,16 @@ static void start(asyncOpRoot *root)
       // TODO: return error
       break;
   }
+
+  return aosPending;
 }
 
-static void finish(asyncOpRoot *root, int status)
+static void finish(asyncOpRoot *root)
 {
   p2pOp *op = (p2pOp*)root;  
   p2pConnection *connection = (p2pConnection*)root->object;  
-  connection->root.links--;
+  connection->root.refs--;
+  AsyncOpStatus status = opGetStatus(root);
   
   // cleanup child operation after timeout
   if (status == aosTimeout || status == aosCanceled) {
@@ -154,10 +157,10 @@ static void destructor(aioObjectRoot *root)
   free(connection);
 }
 
-p2pConnection *p2pConnectionNew(aioObject *socket)
+p2pConnection *p2pConnectionNew(asyncBase *base, aioObject *socket)
 {
-  p2pConnection *connection =
-    (p2pConnection*)initObjectRoot(ioObjectUserDefined, sizeof(p2pConnection), destructor);
+  p2pConnection *connection = (p2pConnection*)malloc(sizeof(p2pConnection));
+  initObjectRoot(&connection->root, base, ioObjectUserDefined, destructor);
   new(&connection->stream) xmstream;
   connection->socket = socket;
   return connection;
@@ -165,9 +168,9 @@ p2pConnection *p2pConnectionNew(aioObject *socket)
 
 void p2pConnectionDelete(p2pConnection *connection)
 {
-  deleteAioObject(connection->socket);
-  connection->root.links--;   // TODO: atomic  
-  checkForDeleteObject(&connection->root);
+//  deleteAioObject(connection->socket);
+//  connection->root.refs--;   // TODO: atomic
+//  checkForDeleteObject(&connection->root);
 }
 
 
@@ -202,7 +205,7 @@ void aiop2pAccept(asyncBase *base, p2pConnection *connection, uint64_t timeout, 
   p2pOp *op = allocp2pOp(base, connection, 0, 0, 0, (void*)callback, arg, p2pOpAccept, timeout);
   
   // don't add to execute queue
-  connection->root.links++;
+  connection->root.refs++;
   op->state = stWaitConnectMsg;
   aiop2pRecv(base, connection, 0, &connection->stream, 1024, acceptProc, op);
 }
@@ -232,7 +235,7 @@ void aiop2pConnect(asyncBase *base, p2pConnection *connection, uint64_t timeout,
   // don't add to execute queue
   p2pOp *op = allocp2pOp(base, connection, 0, 0, 0, (void*)callback, arg, p2pOpConnect, timeout);
   op->state = stWaitConnectResponse;  
-  connection->root.links++;  
+  connection->root.refs++;  
   connection->stream.reset();
   connection->stream.writeConnectMessage(*data);
   aiop2pSend(base, connection, 0, connection->stream.data(), p2pHeader(p2pMsgConnect, connection->stream.sizeOf()), 0, 0);
@@ -309,7 +312,7 @@ void aiop2pSend(asyncBase *base, p2pConnection *connection, uint64_t timeout, vo
   p2pOp *op = allocp2pOp(base, connection, 0, 0, 0, (void*)callback, arg, p2pOpSend, timeout);  
   
   // TODO: acquireSpinlock(connection)
-  connection->root.links++;
+  connection->root.refs++;
   aioWrite(base, connection->socket, &header, sizeof(p2pHeader), afWaitAll, 0, 0, 0);
   aioWrite(base, connection->socket, data, header.size, afWaitAll, 0, sendProc, op);
   // TODO: releaseSpinlock(connection)

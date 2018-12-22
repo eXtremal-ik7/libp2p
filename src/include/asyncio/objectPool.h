@@ -19,9 +19,9 @@ typedef struct ObjectPool {
   size_t elementsNum;
 } ObjectPool;
 
-void initObjectPool(ObjectPool *pool);
-void *objectGet(ObjectPool *pool, const void *type);
-void objectRelease(ObjectPool *pool, void *ptr, const void *type);
+//void initObjectPool(ObjectPool *pool);
+void *objectGet(const void *type);
+void objectRelease(void *ptr, const void *type);
 
 #endif //__ASYNCIO_FMALLOC_H_
 

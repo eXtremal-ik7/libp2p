@@ -61,17 +61,17 @@ static struct asyncImpl selectImpl = {
   selectNewAioObject,
   selectNewAsyncOp,
   selectDeleteObject,
-  (finishOpTy*)selectFinishOp,
+  selectFinishOp,
   selectInitializeTimer,
-  (startTimerTy*)selectStartTimer,
-  (stopTimerTy*)selectStopTimer,
-  (activateTy*)selectActivate,
-  (asyncConnectTy*)selectAsyncConnect,
-  (asyncAcceptTy*)selectAsyncAccept,
-  (asyncReadTy*)selectAsyncRead,
-  (asyncWriteTy*)selectAsyncWrite,
-  (asyncReadMsgTy*)selectAsyncReadMsg,
-  (asyncWriteMsgTy*)selectAsyncWriteMsg
+  selectStartTimer,
+  selectStopTimer,
+  selectActivate,
+  selectAsyncConnect,
+  selectAsyncAccept,
+  selectAsyncRead,
+  selectAsyncWrite,
+  selectAsyncReadMsg,
+  selectAsyncWriteMsg
 };
 
 
@@ -109,11 +109,11 @@ static fdStruct *getFdOperations(selectBase *base, int fd)
 }
 
 
-static void asyncOpLink(fdStruct *list, selectOp *op)
-{
-  list->mask |= isWriteOperation(op->info.root.opCode) ? mtWrite : mtRead;
-  list->object = getObject(op);
-}
+//static void asyncOpLink(fdStruct *list, selectOp *op)
+//{
+//  list->mask |= isWriteOperation(op->info.root.opCode) ? mtWrite : mtRead;
+//  list->object = getObject(op);
+//}
 
 
 static void asyncOpUnlink(selectOp *op)
@@ -167,12 +167,12 @@ static void startOperation(selectOp *op,
                            IoActionTy action,
                            uint64_t usTimeout)
 {
-  selectBase *localBase = (selectBase*)op->info.root.base;
-/*
-  OpLinksMap &links = isWriteOperation(action) ?
-    localBase->writeOps : localBase->readOps;*/
+//  selectBase *localBase = (selectBase*)op->info.root.base;
+///*
+//  OpLinksMap &links = isWriteOperation(action) ?
+//    localBase->writeOps : localBase->readOps;*/
   
-  asyncOpLink(getFdOperations(localBase, getFd(op)), op);    
+//  asyncOpLink(getFdOperations(localBase, getFd(op)), op);
 }
 
 
@@ -375,7 +375,7 @@ void selectNextFinishedOperation(asyncBase *base)
       tv.tv_usec = 500*1000;      
       result = select(nfds, &readFds, &writeFds, NULL, &tv);
       if (result == 0)
-        processTimeoutQueue(base);
+        processTimeoutQueue(base, time(0));
     } while (result <= 0 && errno == EINTR);
 
     if (FD_ISSET(localBase->pipeFd[0], &readFds)) {
@@ -392,7 +392,7 @@ void selectNextFinishedOperation(asyncBase *base)
             aioUserEvent *event = (aioUserEvent*)op;
             if (event->counter == 0)
               stopTimer(op);
-            event->root.finishMethod(&event->root, aosSuccess);
+            event->root.finishMethod(&event->root);
           } else {
             if (op->object->type != ioObjectUserDefined)
               asyncOpUnlink((selectOp*)op);
@@ -410,8 +410,8 @@ void selectNextFinishedOperation(asyncBase *base)
 
 aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
-  aioObject *object =
-    (aioObject*)initObjectRoot(type, sizeof(aioObject), (aioObjectDestructor*)selectDeleteObject);
+  aioObject *object = (aioObject*)calloc(1, sizeof(aioObject));
+  initObjectRoot(&object->root, base, type, (aioObjectDestructor*)selectDeleteObject);
   switch (type) {
     case ioObjectDevice :
       object->hDevice = *(iodevTy*)data;

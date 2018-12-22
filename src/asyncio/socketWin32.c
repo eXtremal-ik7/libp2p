@@ -12,7 +12,13 @@ void initializeSocketSubsystem()
 socketTy socketCreate(int af, int type, int protocol, int isAsync)
 {
 #ifdef OS_WINDOWS
-  return WSASocket(af, type, protocol, NULL, 0, isAsync ? WSA_FLAG_OVERLAPPED : 0);
+  SOCKET hSocket = WSASocket(af, type, protocol, NULL, 0, isAsync ? WSA_FLAG_OVERLAPPED : 0);
+  if (isAsync) {
+    u_long arg = 1;
+    ioctlsocket(hSocket, FIONBIO, &arg);
+  }
+
+  return hSocket;
 #else
   return socket(af, type, protocol);
 #endif

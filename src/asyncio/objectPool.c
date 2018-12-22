@@ -1,20 +1,29 @@
 #include "asyncio/objectPool.h"
+#include "asyncio/asyncioTypes.h"
 #include <stdlib.h>
 #include <string.h>
 
 #define INITIAL_BLOCKS_NUM 8
 
-static ObjectList *getOrCreateElement(ObjectPool *pool, const void *type);
+//#ifndef OS_WINDOWS
+//static __thread ObjectPool pool = {0, 0};
+//#else
+//static __declspec(thread) ObjectPool pool = {0, 0};
+//#endif
 
-void initObjectPool(ObjectPool *pool)
-{
-  pool->elementsNum = 0;
-  pool->elements = 0;
-}
+static __tls ObjectPool pool;
 
-void *objectGet(ObjectPool *pool, const void *type)
+ObjectList *getOrCreateElement(ObjectPool *pool, const void *type);
+
+//void initObjectPool(ObjectPool *pool)
+//{
+//  pool->elementsNum = 0;
+//  pool->elements = 0;
+//}
+
+void *objectGet(const void *type)
 {
-  ObjectList *element = getOrCreateElement(pool, type);
+  ObjectList *element = getOrCreateElement(&pool, type);
   if (element->blocksNum) {
     element->blocksNum -= 1;
     return element->blocks[element->blocksNum];
@@ -23,9 +32,9 @@ void *objectGet(ObjectPool *pool, const void *type)
   }
 }
 
-void objectRelease(ObjectPool *pool, void *ptr, const void *type)
+void objectRelease(void *ptr, const void *type)
 {
-  ObjectList *element = getOrCreateElement(pool, type);
+  ObjectList *element = getOrCreateElement(&pool, type);
   if (element->blocksNum < element->blocksNumMax) {
     element->blocks[element->blocksNum] = ptr;
     element->blocksNum++;
@@ -48,9 +57,9 @@ void initElement(ObjectList *element, const void *type)
 
 size_t searchElement(ObjectPool *pool, const void *type)
 {
-   int lo = 0, hi = pool->elementsNum;
+   size_t lo = 0, hi = pool->elementsNum;
    while (lo < hi) {
-      int mid = lo + (hi - lo)/2;
+      size_t mid = lo + (hi - lo)/2;
       if (pool->elements[mid].type < type)
          lo = mid + 1;
       else

@@ -1,3 +1,6 @@
+project(asyncio C ASM)
+set_source_files_properties(coroutinePosix.s PROPERTIES COMPILE_FLAGS "-x assembler-with-cpp")
+
 set(Sources
   asyncio.c
   asyncioImpl.c
@@ -18,13 +21,13 @@ endif()
 if (WIN32)
   set(Sources ${Sources} iocp.c coroutineWin32.c deviceWin32.c socketWin32.c)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  set(Sources ${Sources} select.c epoll.c devicePosix.c socketPosix.c coroutinePosix.c)
+  set(Sources ${Sources} select.c epoll.c devicePosix.c socketPosix.c coroutinePosix.c coroutinePosix.s)
 elseif (APPLE)
-  set(Sources ${Sources} kqueue.cpp devicePosix.c socketPosix.c coroutinePosix.c)
+  set(Sources ${Sources} kqueue.cpp devicePosix.c socketPosix.c coroutinePosix.c coroutinePosix.s)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
-  set(Sources ${Sources} select.c kqueue.cpp devicePosix.c socketPosix.c coroutinePosix.c)
+  set(Sources ${Sources} select.c kqueue.cpp devicePosix.c socketPosix.c coroutinePosix.c coroutinePosix.s)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "QNX")
-  set(Sources ${Sources} select.c devicePosix.c socketPosix.c coroutinePosix.c)
+  set(Sources ${Sources} select.c devicePosix.c socketPosix.c coroutinePosix.c coroutinePosix.s)
 endif()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")

@@ -25,7 +25,7 @@ static asyncOpRoot *alloc(asyncBase *base)
   return (asyncOpRoot*)malloc(sizeof(HTTPOp));
 }
 
-static void start(asyncOpRoot *op)
+static AsyncOpStatus start(asyncOpRoot *op)
 {
   HTTPClient *client = (HTTPClient*)op->object;
   switch (op->opCode) {
@@ -37,12 +37,15 @@ static void start(asyncOpRoot *op)
        httpInit(&client->state);
        httpParseStart((HTTPOp*)op);   
   }
+
+  return aosPending;
 }
 
-static void finish(asyncOpRoot *root, int status)
+static void finish(asyncOpRoot *root)
 {
   HTTPOp *op = (HTTPOp*)root;
   HTTPClient *client = (HTTPClient*)root->object; 
+  AsyncOpStatus status = opGetStatus(root);
   
     // cleanup child operation after timeout
   if (status == aosTimeout || status == aosCanceled)
@@ -222,7 +225,8 @@ static void httpClientDestructor(aioObjectRoot *root)
 
 HTTPClient *httpClientNew(asyncBase *base, aioObject *socket)
 {
-  HTTPClient *client = (HTTPClient*)initObjectRoot(ioObjectUserDefined, sizeof(HTTPClient), httpClientDestructor); 
+  HTTPClient *client = (HTTPClient*)malloc(sizeof(HTTPClient));
+  initObjectRoot(&client->root, base, ioObjectUserDefined, httpClientDestructor);
   client->isHttps = 0;
   client->inBuffer = (uint8_t*)malloc(65536);
   client->inBufferSize = 65536;
@@ -235,7 +239,8 @@ HTTPClient *httpClientNew(asyncBase *base, aioObject *socket)
 
 HTTPClient *httpsClientNew(asyncBase *base, SSLSocket *socket)
 {
-  HTTPClient *client = (HTTPClient*)initObjectRoot(ioObjectUserDefined, sizeof(HTTPClient), httpClientDestructor);  
+  HTTPClient *client = (HTTPClient*)malloc(sizeof(HTTPClient));
+  initObjectRoot(&client->root, base, ioObjectUserDefined, httpClientDestructor);
   client->isHttps = 1;
   client->inBuffer = (uint8_t*)malloc(65536);
   client->inBufferSize = 65536;
@@ -248,12 +253,12 @@ HTTPClient *httpsClientNew(asyncBase *base, SSLSocket *socket)
 
 void httpClientDelete(HTTPClient *client)
 {
-  client->root.links--; // TODO: atomic
-  if (client->isHttps)
-    sslSocketDelete(client->sslSocket);
-  else
-    deleteAioObject(client->plainSocket);
-  checkForDeleteObject(&client->root);
+  //client->root.refs--; // TODO: atomic
+  //if (client->isHttps)
+  //  sslSocketDelete(client->sslSocket);
+  //else
+  //  deleteAioObject(client->plainSocket);
+  //checkForDeleteObject(&client->root);
 }
 
 void aioHttpConnect(asyncBase *base,
