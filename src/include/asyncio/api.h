@@ -38,8 +38,8 @@ typedef enum IoObjectTy {
 
 
 typedef enum AsyncOpStatus {
-  aosPending = 0,
-  aosSuccess,
+  aosSuccess = 0,
+  aosPending,
   aosTimeout,
   aosDisconnected,
   aosCanceled,
@@ -95,8 +95,6 @@ typedef void aioFinishProc(asyncOpRoot*);
 typedef void aioObjectDestructor(aioObjectRoot*);
 
 extern __tls List threadLocalQueue;
-extern __tls asyncOpRoot *lastOp;
-extern __tls tag_t lastTag;
 extern __tls unsigned currentFinishedSync;
 extern __tls unsigned messageLoopThreadId;
 
@@ -259,7 +257,7 @@ struct asyncOpRoot {
   void *callback;
   void *arg;
   int opCode;
-  int flags;
+  AsyncFlags flags;
   void *timerId;
   union {
     uint64_t timeout;
@@ -286,7 +284,9 @@ void processOperationList(aioObjectRoot *object, List *finished, tag_t *needStar
 void executeOperationList(List *list, List *finished);
 void cancelOperationList(List *list, List *finished, AsyncOpStatus status);
 
-void combinerCall(asyncOpRoot *op, AsyncOpActionTy action);
+void combinerAddAction(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy actionType);
+void combinerCall(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType);
+void combinerCallDelayed(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType, int needLock);
 void opStart(asyncOpRoot *op);
 void opCancel(asyncOpRoot *op, tag_t generation, AsyncOpStatus status);
 

@@ -65,3 +65,43 @@ uint32_t addrfromAscii(const char *cp)
   uint32_t res = inet_addr(cp);
   return (res != INADDR_NONE) ? res : 0;
 }
+
+int socketSyncRead(socketTy hSocket, void *buffer, size_t size, int waitAll, size_t *bytesTransferred)
+{
+  if (!waitAll) {
+    ssize_t result = read(hSocket, buffer, size);
+    if (result > 0) {
+      *bytesTransferred = (size_t)result;
+      return 1;
+    } else {
+      return 0;
+    }
+  } else {
+    size_t transferred = 0;
+    ssize_t result;
+    while (transferred != size && (result = read(hSocket, (uint8_t*)buffer + transferred, size - transferred)) > 0)
+      transferred += (size_t)result;
+    *bytesTransferred = transferred;
+    return transferred == size;
+  }
+}
+
+int socketSyncWrite(socketTy hSocket, void *buffer, size_t size, int waitAll, size_t *bytesTransferred)
+{
+  if (!waitAll) {
+    ssize_t result = write(hSocket, buffer, size);
+    if (result > 0) {
+      *bytesTransferred = (size_t)result;
+      return 1;
+    } else {
+      return 0;
+    }
+  } else {
+    size_t transferred = 0;
+    ssize_t result;
+    while (transferred != size && (result = write(hSocket, (uint8_t*)buffer + transferred, size - transferred)) > 0)
+      transferred += (size_t)result;
+    *bytesTransferred = transferred;
+    return transferred == size;
+  }
+}

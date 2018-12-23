@@ -402,7 +402,7 @@ void iocpNextFinishedOperation(asyncBase *base)
             }
           } else if (op->info.root.opCode == actRead || op->info.root.opCode == actWrite) {
             if ((op->info.root.flags & afWaitAll) && op->info.bytesTransferred < op->info.transactionSize) {
-              combinerCall(&op->info.root, aaIOCPRestart);
+              combinerCall(op->info.root.object, 1, &op->info.root, aaIOCPRestart);
               continue;
             }
           } else if (op->info.root.opCode == actReadMsg) {
@@ -414,7 +414,7 @@ void iocpNextFinishedOperation(asyncBase *base)
         }
 
         opSetStatus(&op->info.root, opGetGeneration(&op->info.root), result);
-        combinerCall(&op->info.root, aaFinish);
+        combinerCall(op->info.root.object, 1, &op->info.root, aaFinish);
       } else {
         while (threadLocalQueue.head)
           executeThreadLocalQueue();
@@ -480,9 +480,9 @@ void iocpFinishOp(asyncOpRoot *opptr, tag_t generation, AsyncOpStatus status)
   aioObjectRoot *object = opptr->object;
   if (opSetStatus(opptr, generation, status)) {
     if (object->type == ioObjectUserDefined)
-      combinerCall(opptr, aaFinish);
+      combinerCall(object, 1, opptr, aaFinish);
     else
-      combinerCall(opptr, aaIOCPCancel);
+      combinerCall(object, 1, opptr, aaIOCPCancel);
   }
 }
 
@@ -558,7 +558,10 @@ AsyncOpStatus iocpAsyncAccept(asyncOpRoot *opptr)
     op->info.internalBufferSize = acceptResultSize;
   }
 
+  u_long arg = 1;
   op->info.acceptSocket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+  ioctlsocket(op->info.acceptSocket, FIONBIO, &arg);
+
   int result = AcceptEx(object->hSocket,
                         op->info.acceptSocket,
                         op->info.internalBuffer,

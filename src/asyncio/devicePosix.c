@@ -143,3 +143,43 @@ void serialPortFlush(iodevTy port)
 {
   tcflush(port, TCIOFLUSH);
 }
+
+int deviceSyncRead(iodevTy hDevice, void *buffer, size_t size, int waitAll, size_t *bytesTransferred)
+{
+  if (!waitAll) {
+    ssize_t result = read(hDevice, buffer, size);
+    if (result > 0) {
+      *bytesTransferred = (size_t)result;
+      return 1;
+    } else {
+      return 0;
+    }
+  } else {
+    size_t transferred = 0;
+    ssize_t result;
+    while (transferred != size && (result = read(hDevice, (uint8_t*)buffer + transferred, size - transferred)) > 0)
+      transferred += (size_t)result;
+    *bytesTransferred = transferred;
+    return transferred == size;
+  }
+}
+
+int deviceSyncWrite(iodevTy hDevice, void *buffer, size_t size, int waitAll, size_t *bytesTransferred)
+{
+  if (!waitAll) {
+    ssize_t result = write(hDevice, buffer, size);
+    if (result > 0) {
+      *bytesTransferred = (size_t)result;
+      return 1;
+    } else {
+      return 0;
+    }
+  } else {
+    size_t transferred = 0;
+    ssize_t result;
+    while (transferred != size && (result = write(hDevice, (uint8_t*)buffer + transferred, size - transferred)) > 0)
+      transferred += (size_t)result;
+    *bytesTransferred = transferred;
+    return transferred == size;
+  }
+}

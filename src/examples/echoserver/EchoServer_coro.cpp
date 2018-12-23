@@ -29,7 +29,7 @@ void readerProc(void *arg)
   uint8_t echoBuffer[1024];
   while (true) {
     ssize_t bytesRead = ioRead(reader->socket, echoBuffer, sizeof(echoBuffer), afNone, 0);
-    if (bytesRead != -1) {
+    if (bytesRead > 0) {
       ioWrite(reader->socket, echoBuffer, bytesRead, afNone, 0);
     } else {
       fprintf(stderr, " * asyncRead error, exiting..\n");

@@ -2,6 +2,7 @@
 #include "asyncio/coroutine.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <malloc.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -191,13 +192,12 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
   epollBase *base = (epollBase*)object->base;
   tag_t currentTag = tag;
   asyncOpRoot *newOp = op;
-  List finished = {0, 0};
   int hasFd = object->type == ioObjectDevice || object->type == ioObjectSocket;
 
   while (currentTag) {
     if (currentTag & TAG_CANCELIO) {
-      cancelOperationList(&object->readQueue, &finished, aosCanceled);
-      cancelOperationList(&object->writeQueue, &finished, aosCanceled);
+      cancelOperationList(&object->readQueue, &threadLocalQueue, aosCanceled);
+      cancelOperationList(&object->writeQueue, &threadLocalQueue, aosCanceled);
     }
 
     if (currentTag & TAG_ERROR) {
@@ -256,17 +256,6 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
     tag_t processed = __tag_make_processed(currentTag, enqueuedOperationsNum);
     currentTag = __tag_atomic_fetch_and_add(&object->tag, -processed);
     currentTag -= processed;
-  }
-
-  {
-    asyncOpRoot *op = finished.head;
-    while (op) {
-      asyncOpRoot *next = op->next;
-      objectRelease(op, op->poolId);
-      op->finishMethod(op);
-      objectDeleteRef(op->object, 1);
-      op = next;
-    }
   }
 }
 
@@ -398,7 +387,7 @@ void epollDeleteObject(aioObject *object)
 void epollFinishOp(asyncOpRoot *op, tag_t generation, AsyncOpStatus status)
 {
   if (opSetStatus(op, generation, status))
-    combinerCall(op, aaFinish);
+    combinerCall(op->object, 1, op, aaFinish);
 }
 
 void epollInitializeTimer(asyncBase *base, asyncOpRoot *op)
@@ -486,6 +475,8 @@ AsyncOpStatus epollAsyncAccept(asyncOpRoot *opptr)
     accept(fd, (struct sockaddr *)&clientAddr, &clientAddrSize);
 
   if (op->acceptSocket != -1) {
+    int current = fcntl(op->acceptSocket, F_GETFL);
+    fcntl(op->acceptSocket, F_SETFL, O_NONBLOCK | current);
     op->host.family = 0;
     op->host.ipv4 = clientAddr.sin_addr.s_addr;
     op->host.port = clientAddr.sin_port;

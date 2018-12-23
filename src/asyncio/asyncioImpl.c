@@ -19,14 +19,18 @@
 #define TAG_STATUS_MASK ((((tag_t)1) << TAG_STATUS_SIZE)-1)
 #define TAG_GENERATION_MASK (~TAG_STATUS_MASK)
 
+static __tls aioObjectRoot* dccObject;
+static __tls tag_t dccTag;
+static __tls asyncOpRoot *dccOp;
+static __tls AsyncOpActionTy dccActionType;
+static __tls int dccNeedLock;
+
 __tls List threadLocalQueue;
-__tls asyncOpRoot *lastOp;
-__tls tag_t lastTag;
 __tls unsigned currentFinishedSync;
 __tls unsigned messageLoopThreadId;
 
-const char *asyncOpLinkListPool = "asyncOpLinkListPool";
-const char *asyncOpActionPool = "asyncOpActionPool";
+static const char *asyncOpLinkListPool = "asyncOpLinkListPool";
+static const char *asyncOpActionPool = "asyncOpActionPool";
 
 void eqRemove(List *list, asyncOpRoot *op)
 {
@@ -399,36 +403,46 @@ void cancelOperationList(List *list, List *finished, AsyncOpStatus status)
   list->tail = 0;
 }
 
-void combinerCall(asyncOpRoot *op, AsyncOpActionTy actionType)
+void combinerAddAction(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy actionType)
 {
-  aioObjectRoot *object = op->object;
-  tag_t tag = __tag_atomic_fetch_and_add(&object->tag, 1);
-  if (!tag) {
-    object->base->methodImpl.combiner(object, 1, op, actionType);
-  } else {
-    asyncOpAction *act = objectGet(asyncOpActionPool);
-    if (!act)
-      act = malloc(sizeof(asyncOpAction));
-    act->op = op;
-    act->actionType = actionType;
-    act->next = 0;
+  asyncOpAction *action = objectGet(asyncOpActionPool);
+  if (!action)
+    action = malloc(sizeof(asyncOpAction));
+  action->op = op;
+  action->actionType = actionType;
+  action->next = 0;
 
-    __spinlock_acquire(&object->announcementQueue.lock);
-    if (object->announcementQueue.tail == 0) {
-      object->announcementQueue.head = act;
-      object->announcementQueue.tail = act;
-    }
-    else {
-      object->announcementQueue.tail->next = act;
-      object->announcementQueue.tail = act;
-    }
-    __spinlock_release(&object->announcementQueue.lock);
+  __spinlock_acquire(&object->announcementQueue.lock);
+  if (object->announcementQueue.tail == 0) {
+    object->announcementQueue.head = action;
+    object->announcementQueue.tail = action;
+  } else {
+    object->announcementQueue.tail->next = action;
+    object->announcementQueue.tail = action;
   }
+  __spinlock_release(&object->announcementQueue.lock);
+}
+
+void combinerCall(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
+{
+  if (__tag_atomic_fetch_and_add(&object->tag, tag) == 0)
+    object->base->methodImpl.combiner(object, tag, op, actionType);
+  else
+    combinerAddAction(object, op, actionType);
+}
+
+void combinerCallDelayed(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType, int needLock)
+{
+  dccObject = object;
+  dccTag = tag;
+  dccOp = op;
+  dccActionType = actionType;
+  dccNeedLock = needLock;
 }
 
 void opStart(asyncOpRoot *op)
 {
-  combinerCall(op, aaStart);
+  combinerCall(op->object, 1, op, aaStart);
 }
 
 void opCancel(asyncOpRoot *op, tag_t generation, AsyncOpStatus status)
@@ -444,9 +458,12 @@ void addToThreadLocalQueue(asyncOpRoot *op)
 
 void executeThreadLocalQueue()
 {
-  if (lastOp) {
-    opStart(lastOp);
-    lastOp = 0;
+  if (dccObject) {
+    if (dccNeedLock)
+      combinerCall(dccObject, dccTag, dccOp, dccActionType);
+    else
+      dccObject->base->methodImpl.combiner(dccObject, dccTag, dccOp, dccActionType);
+    dccObject = 0;
   }
 
   asyncOpRoot *op = threadLocalQueue.head;
@@ -466,9 +483,12 @@ void executeThreadLocalQueue()
 void ioCoroutineCall(coroutineTy *coroutine)
 {
   coroutineCall(coroutine);
-  if (lastOp) {
-    opStart(lastOp);
-    lastOp = 0;
+  if (dccObject) {
+    if (dccNeedLock)
+      combinerCall(dccObject, dccTag, dccOp, dccActionType);
+    else
+      dccObject->base->methodImpl.combiner(dccObject, dccTag, dccOp, dccActionType);
+    dccObject = 0;
   }
 }
 

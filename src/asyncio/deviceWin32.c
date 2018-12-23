@@ -97,3 +97,45 @@ void serialPortFlush(iodevTy port)
   PurgeComm(port, PURGE_RXCLEAR | PURGE_TXCLEAR |
                   PURGE_RXABORT | PURGE_TXABORT);
 }
+
+int deviceSyncRead(iodevTy hDevice, void *buffer, size_t size, int waitAll, size_t *bytesTransferred)
+{
+  DWORD bytesNum = 0;
+  if (!waitAll) {
+    // TODO: correct processing >4Gb data blocks
+    if (ReadFile(hDevice, buffer, (DWORD)size, &bytesNum, 0) && bytesNum > 0) {
+      *bytesTransferred = bytesNum;
+      return 1;
+    } else {
+      return 0;
+    }
+  } else {
+    size_t transferred = 0;
+    // TODO: correct processing >4Gb data blocks
+    while (transferred != size && ReadFile(hDevice, (uint8_t*)buffer + transferred, (DWORD)(size - transferred), &bytesNum, 0))
+      transferred += (size_t)bytesNum;
+    *bytesTransferred = transferred;
+    return transferred == size;
+  }
+}
+
+int deviceSyncWrite(iodevTy hDevice, void *buffer, size_t size, int waitAll, size_t *bytesTransferred)
+{
+  DWORD bytesNum = 0;
+  if (!waitAll) {
+    // TODO: correct processing >4Gb data blocks
+    if (WriteFile(hDevice, buffer, (DWORD)size, &bytesNum, 0) && bytesNum > 0) {
+      *bytesTransferred = bytesNum;
+      return 1;
+    } else {
+      return 0;
+    }
+  } else {
+    size_t transferred = 0;
+    // TODO: correct processing >4Gb data blocks
+    while (transferred != size && WriteFile(hDevice, (uint8_t*)buffer + transferred, (DWORD)(size - transferred), &bytesNum, 0))
+      transferred += (size_t)bytesNum;
+    *bytesTransferred = transferred;
+    return transferred == size;
+  }
+}

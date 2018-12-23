@@ -38,38 +38,38 @@ void aioAccept(aioObject *object,
                aioAcceptCb callback,
                void *arg);
 
-void aioRead(aioObject *object,
-             void *buffer,
-             size_t size,
-             AsyncFlags flags,
-             uint64_t usTimeout,
-             aioCb callback,
-             void *arg);
-
-void aioReadMsg(aioObject *object,
+ssize_t aioRead(aioObject *object,
                 void *buffer,
                 size_t size,
                 AsyncFlags flags,
                 uint64_t usTimeout,
-                aioReadMsgCb callback,
+                aioCb callback,
                 void *arg);
 
-void aioWrite(aioObject *object,
-              void *buffer,
-              size_t size,
-              AsyncFlags flags,
-              uint64_t usTimeout,
-              aioCb callback,
-              void *arg);
+ssize_t aioReadMsg(aioObject *object,
+                   void *buffer,
+                   size_t size,
+                   AsyncFlags flags,
+                   uint64_t usTimeout,
+                   aioReadMsgCb callback,
+                   void *arg);
 
-void aioWriteMsg(aioObject *object,
-                 const HostAddress *address,
+ssize_t aioWrite(aioObject *object,
                  void *buffer,
                  size_t size,
                  AsyncFlags flags,
                  uint64_t usTimeout,
                  aioCb callback,
                  void *arg);
+
+ssize_t aioWriteMsg(aioObject *object,
+                    const HostAddress *address,
+                    void *buffer,
+                    size_t size,
+                    AsyncFlags flags,
+                    uint64_t usTimeout,
+                    aioCb callback,
+                    void *arg);
 
 
 int ioConnect(aioObject *object, const HostAddress *address, uint64_t usTimeout);

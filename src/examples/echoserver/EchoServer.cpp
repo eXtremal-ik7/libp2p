@@ -30,7 +30,7 @@ void acceptCb(AsyncOpStatus status, aioObject *listener, HostAddress client, soc
   if (status == aosSuccess) {
     fprintf(stderr, " * new client\n");
     uint8_t *echoBuffer = new uint8_t[echoBufferSize];
-    aioObject *newSocketOp = newSocketIo(0, acceptSocket);
+    aioObject *newSocketOp = newSocketIo(aioGetBase(listener), acceptSocket);
     aioRead(newSocketOp, echoBuffer, echoBufferSize, afNone, 0, readCb, echoBuffer);
   }
   aioAccept(listener, 0, acceptCb, 0);

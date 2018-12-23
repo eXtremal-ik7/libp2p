@@ -120,26 +120,9 @@ void *test_sync_sender(void *arg)
 
 void test_aio_writecb(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 { 
-  SenderCtx *senderCtx = (SenderCtx*)arg;  
-  if (senderCtx->counter >= senderCtx->config->totalPacketNum) {
-    postQuitOperation(aioGetBase(object));
-    return;
-  }
-  
-  HostAddress address;
-  address.family = AF_INET;
-  address.ipv4 = inet_addr("127.0.0.1");
-  address.port = htons(senderCtx->config->port);
-  
-  senderCtx->counter += senderCtx->config->groupSize;  
-  for (unsigned i = 0; i < senderCtx->config->groupSize-1; i++)
-    aioWriteMsg(object, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, 0, 0);
-  aioWriteMsg(object, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb, senderCtx);
-}
-
-void test_aio_writecb_nobatch(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
-{
   SenderCtx *senderCtx = (SenderCtx*)arg;
+  if (status == aosSuccess)
+    senderCtx->counter++;
   if (senderCtx->counter >= senderCtx->config->totalPacketNum) {
     postQuitOperation(aioGetBase(object));
     return;
@@ -149,9 +132,8 @@ void test_aio_writecb_nobatch(AsyncOpStatus status, aioObject *object, size_t tr
   address.family = AF_INET;
   address.ipv4 = inet_addr("127.0.0.1");
   address.port = htons(senderCtx->config->port);
-
-  senderCtx->counter++;
-  aioWriteMsg(object, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb_nobatch, senderCtx);
+  while (aioWriteMsg(object, &address, &senderCtx->buffer, senderCtx->config->messageSize, afActiveOnce, 0, test_aio_writecb, senderCtx) > 0)
+    senderCtx->counter++;
 }
 
 void *test_aio_sender(void *arg)
@@ -168,17 +150,7 @@ void *test_aio_sender(void *arg)
   address.family = AF_INET;
   address.ipv4 = inet_addr("127.0.0.1");
   address.port = htons(senderCtx->config->port);
-
-  if (gBatchSend) {
-    senderCtx->counter += senderCtx->config->groupSize;
-    for (unsigned i = 0; i < senderCtx->config->groupSize-1; i++)
-      aioWriteMsg(senderCtx->client, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, 0, 0);
-    aioWriteMsg(senderCtx->client, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb, senderCtx);
-  } else {
-    senderCtx->counter++;
-    aioWriteMsg(senderCtx->client, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb_nobatch, senderCtx);
-  }
-  
+  aioWriteMsg(senderCtx->client, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb, senderCtx);
   asyncLoop(localBase);
   return 0;
 }
