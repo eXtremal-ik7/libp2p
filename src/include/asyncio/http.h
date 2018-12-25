@@ -42,6 +42,7 @@ typedef struct HTTPClient {
 
 typedef struct HTTPOp {
   asyncOpRoot root;
+  HostAddress address;
   int resultCode;
   Raw contentType;
   Raw body;
@@ -55,15 +56,13 @@ HTTPClient *httpClientNew(asyncBase *base, aioObject *socket);
 HTTPClient *httpsClientNew(asyncBase *base, SSLSocket *socket);
 void httpClientDelete(HTTPClient *client);
 
-void aioHttpConnect(asyncBase *base,
-                    HTTPClient *client,
+void aioHttpConnect(HTTPClient *client,
                     const HostAddress *address,
                     uint64_t usTimeout,
                     httpConnectCb callback,
                     void *arg);
 
-void aioHttpRequest(asyncBase *base,
-                    HTTPClient *client,
+void aioHttpRequest(HTTPClient *client,
                     const char *request,
                     size_t requestSize,
                     uint64_t usTimeout,
@@ -71,8 +70,8 @@ void aioHttpRequest(asyncBase *base,
                     httpRequestCb callback,
                     void *arg);
 
-int ioHttpConnect(asyncBase *base, HTTPClient *client, const HostAddress *address, uint64_t usTimeout);
-int ioHttpRequest(asyncBase *base, HTTPClient *client, const char *request, size_t requestSize, uint64_t usTimeout, httpParseCb parseCallback);
+int ioHttpConnect(HTTPClient *client, const HostAddress *address, uint64_t usTimeout);
+int ioHttpRequest(HTTPClient *client, const char *request, size_t requestSize, uint64_t usTimeout, httpParseCb parseCallback);
                 
 
 #ifdef __cplusplus

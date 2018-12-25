@@ -1,6 +1,8 @@
 #include "asyncio/coroutine.h"
 #include "asyncio/asyncioTypes.h"
+#include "atomic.h"
 #include <windows.h>
+#include <assert.h>
 
 __tls coroutineTy *currentCoroutine;
 __tls coroutineTy *mainCoroutine;
@@ -11,6 +13,9 @@ typedef struct coroutineTy {
   coroutineProcTy *entryPoint;
   void *arg;
   int finished;
+  unsigned counter;
+  coroutineCbTy *cbProc;
+  void *cbArg;
 } coroutineTy;
 
 static VOID __stdcall fiberEntryPoint(LPVOID lpParameter)
@@ -54,6 +59,9 @@ void coroutineDelete(coroutineTy *coroutine)
 
 int coroutineCall(coroutineTy *coroutine)
 {
+  assert(__uint_atomic_fetch_and_add(&coroutine->counter, 1) == 0 &&
+         "Call coroutine from multiple threads detected!");
+
   if (!currentCoroutine) {
     mainCoroutine = currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
     currentCoroutine->fiber = ConvertThreadToFiber(0);    
@@ -62,6 +70,12 @@ int coroutineCall(coroutineTy *coroutine)
   coroutine->prev = currentCoroutine;
   currentCoroutine = coroutine;
   SwitchToFiber(coroutine->fiber);
+
+  if (coroutine->cbProc) {
+    coroutine->cbProc(coroutine->cbArg);
+    coroutine->cbProc = 0;
+  }
+
   int finished = coroutine->finished;
   if (finished) {
     DeleteFiber(coroutine->fiber);
@@ -74,7 +88,19 @@ int coroutineCall(coroutineTy *coroutine)
 void coroutineYield()
 {
   if (currentCoroutine->prev) {
+    coroutineTy *old = currentCoroutine;
     currentCoroutine = currentCoroutine->prev;
+    assert(__uint_atomic_fetch_and_add(&old->counter, -1) == 1 &&
+           "Multiple yield from one coroutine detected!");
     SwitchToFiber(currentCoroutine->fiber);
   }
+}
+
+void coroutineSetYieldCallback(coroutineCbTy proc, void *arg)
+{
+  // Create main fiber if it not exists
+  if (currentCoroutine == 0)
+    mainCoroutine = currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
+  currentCoroutine->cbProc = proc;
+  currentCoroutine->cbArg = arg;
 }

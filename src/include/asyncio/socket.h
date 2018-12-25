@@ -17,7 +17,7 @@ int socketListen(socketTy hSocket);
 void socketReuseAddr(socketTy hSocket);
 
 int socketSyncRead(socketTy hSocket, void *buffer, size_t size, int waitAll, size_t *bytesTransferred);
-int socketSyncWrite(socketTy hSocket, void *buffer, size_t size, int waitAll, size_t *bytesTransferred);
+int socketSyncWrite(socketTy hSocket, const void *buffer, size_t size, int waitAll, size_t *bytesTransferred);
 
 #ifdef __cplusplus
 }

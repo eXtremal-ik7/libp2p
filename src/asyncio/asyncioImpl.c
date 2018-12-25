@@ -1,5 +1,6 @@
 #include "asyncioImpl.h"
 #include "asyncio/coroutine.h"
+#include "atomic.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,16 +20,17 @@
 #define TAG_STATUS_MASK ((((tag_t)1) << TAG_STATUS_SIZE)-1)
 #define TAG_GENERATION_MASK (~TAG_STATUS_MASK)
 
-static __tls aioObjectRoot* dccObject;
-static __tls tag_t dccTag;
-static __tls asyncOpRoot *dccOp;
-static __tls AsyncOpActionTy dccActionType;
-static __tls int dccNeedLock;
+//static __tls aioObjectRoot* dccObject;
+//static __tls tag_t dccTag;
+//static __tls asyncOpRoot *dccOp;
+//static __tls AsyncOpActionTy dccActionType;
+//static __tls int dccNeedLock;
 
 __tls List threadLocalQueue;
 __tls unsigned currentFinishedSync;
 __tls unsigned messageLoopThreadId;
 
+static const char *asyncOpLinkPool = "asyncOpLinkPool";
 static const char *asyncOpLinkListPool = "asyncOpLinkListPool";
 static const char *asyncOpActionPool = "asyncOpActionPool";
 
@@ -363,7 +365,15 @@ void opRelease(asyncOpRoot *op, AsyncOpStatus status, List *executeList, List *f
 
   if (executeList)
     eqRemove(executeList, op);
-  fnPushBack(finished, op);
+  if (!(op->flags & afSerialized)) {
+    fnPushBack(finished, op);
+  } else {
+    aioObjectRoot *object = op->object;
+    objectRelease(op, op->poolId);
+    op->finishMethod(op);
+    objectDeleteRef(object, 1);
+  }
+
 }
 
 void executeOperationList(List *list, List *finished)
@@ -431,13 +441,41 @@ void combinerCall(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActi
     combinerAddAction(object, op, actionType);
 }
 
-void combinerCallDelayed(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType, int needLock)
+static void combinerCallDelayedCb(void *arg)
 {
-  dccObject = object;
-  dccTag = tag;
-  dccOp = op;
-  dccActionType = actionType;
-  dccNeedLock = needLock;
+  combinerCallArgs *ccArgs = (combinerCallArgs*)arg;
+  if (ccArgs->needLock)
+    combinerCall(ccArgs->object, ccArgs->tag, ccArgs->op, ccArgs->actionType);
+  else
+    ccArgs->object->base->methodImpl.combiner(ccArgs->object, ccArgs->tag, ccArgs->op, ccArgs->actionType);
+}
+
+void combinerCallDelayed(combinerCallArgs *args, aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType, int needLock)
+{
+  args->object = object;
+  args->tag = tag;
+  args->op = op;
+  args->actionType = actionType;
+  args->needLock = needLock;
+  coroutineSetYieldCallback(combinerCallDelayedCb, args);
+}
+
+asyncOpLink *opAllocateLink(asyncOpRoot *op)
+{
+  asyncOpLink *link = objectGet(asyncOpLinkPool);
+  if (!link)
+    link = malloc(sizeof(asyncOpLink));
+  link->op = op;
+  link->tag = opGetGeneration(op);
+  return link;
+}
+
+void opReleaseLink(asyncOpLink *link, AsyncOpStatus status)
+{
+  asyncOpRoot *op = link->op;
+  tag_t tag = link->tag;
+  objectRelease(link, asyncOpLinkPool);
+  opCancel(op, tag, status);
 }
 
 void opStart(asyncOpRoot *op)
@@ -447,7 +485,8 @@ void opStart(asyncOpRoot *op)
 
 void opCancel(asyncOpRoot *op, tag_t generation, AsyncOpStatus status)
 {
-  op->object->base->methodImpl.finishOp(op, generation, status);
+  if (opSetStatus(op, generation, status))
+    combinerCall(op->object, 1, op, aaFinish);
 }
 
 
@@ -458,14 +497,6 @@ void addToThreadLocalQueue(asyncOpRoot *op)
 
 void executeThreadLocalQueue()
 {
-  if (dccObject) {
-    if (dccNeedLock)
-      combinerCall(dccObject, dccTag, dccOp, dccActionType);
-    else
-      dccObject->base->methodImpl.combiner(dccObject, dccTag, dccOp, dccActionType);
-    dccObject = 0;
-  }
-
   asyncOpRoot *op = threadLocalQueue.head;
   threadLocalQueue.head = 0;
   threadLocalQueue.tail = 0;
@@ -477,18 +508,6 @@ void executeThreadLocalQueue()
     op->finishMethod(op);
     objectDeleteRef(object, 1);
     op = nextOp;
-  }
-}
-
-void ioCoroutineCall(coroutineTy *coroutine)
-{
-  coroutineCall(coroutine);
-  if (dccObject) {
-    if (dccNeedLock)
-      combinerCall(dccObject, dccTag, dccOp, dccActionType);
-    else
-      dccObject->base->methodImpl.combiner(dccObject, dccTag, dccOp, dccActionType);
-    dccObject = 0;
   }
 }
 

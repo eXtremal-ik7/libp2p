@@ -86,7 +86,7 @@ int socketSyncRead(socketTy hSocket, void *buffer, size_t size, int waitAll, siz
   }
 }
 
-int socketSyncWrite(socketTy hSocket, void *buffer, size_t size, int waitAll, size_t *bytesTransferred)
+int socketSyncWrite(socketTy hSocket, const void *buffer, size_t size, int waitAll, size_t *bytesTransferred)
 {
   if (!waitAll) {
     ssize_t result = write(hSocket, buffer, size);

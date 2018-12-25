@@ -4,6 +4,7 @@
 #include "asyncio/device.h"
 #include "asyncio/socket.h"
 #include "asyncioImpl.h"
+#include "atomic.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,13 +49,13 @@ static void finishMethod(asyncOpRoot *root)
       break;
     case actRead :
       ((aioCb*)root->callback)(status, object, op->bytesTransferred, root->arg);
-      break;      
+      break;
     case actWrite :
       ((aioCb*)root->callback)(status, object, op->bytesTransferred, root->arg);
-      break;      
+      break;
     case actReadMsg :
       ((aioReadMsgCb*)root->callback)(status, object, op->host, op->bytesTransferred, root->arg);
-      break;      
+      break;
     case actWriteMsg :
       ((aioCb*)root->callback)(status, object, op->bytesTransferred, root->arg);
       break;
@@ -81,12 +82,12 @@ static asyncOp *initAsyncOp(aioObject *object,
                                           startProc, finishMethod,
                                           &object->root, callback, arg,
                                           flags, opCode, timeout);
-  
+
   op->state = 0;
   op->buffer = buffer;
   op->transactionSize = transactionSize;
-  op->bytesTransferred = 0;  
-  
+  op->bytesTransferred = 0;
+
   if ((opCode == actWrite || opCode == actWriteMsg) && !(flags & afNoCopy)) {
     if (op->internalBuffer == 0) {
       op->internalBuffer = malloc(transactionSize);
@@ -95,11 +96,11 @@ static asyncOp *initAsyncOp(aioObject *object,
       op->internalBufferSize = transactionSize;
       op->internalBuffer = realloc(op->internalBuffer, transactionSize);
     }
-    
+
     memcpy(op->internalBuffer, buffer, transactionSize);
     op->buffer = op->internalBuffer;
   }
-  
+
   return op;
 }
 
@@ -108,7 +109,7 @@ static void coroutineEventCb(aioObject *event, void *arg)
   __UNUSED(event)
   coroReturnStruct *r = (coroReturnStruct*)arg;
   assert(coroutineIsMain() && "no main coroutine!\n");
-  ioCoroutineCall(r->coroutine);
+  coroutineCall(r->coroutine);
 }
 
 static void coroutineConnectCb(AsyncOpStatus status, aioObject *object, void *arg)
@@ -117,7 +118,7 @@ static void coroutineConnectCb(AsyncOpStatus status, aioObject *object, void *ar
   coroReturnStruct *r = (coroReturnStruct*)arg;
   r->status = status;
   assert(coroutineIsMain() && "no main coroutine!\n");
-  ioCoroutineCall(r->coroutine);
+  coroutineCall(r->coroutine);
 }
 
 static void coroutineAcceptCb(AsyncOpStatus status, aioObject *listener, HostAddress address, socketTy socket, void *arg)
@@ -128,17 +129,17 @@ static void coroutineAcceptCb(AsyncOpStatus status, aioObject *listener, HostAdd
   r->status = status;
   r->acceptSocket = socket;
   assert(coroutineIsMain() && "no main coroutine!\n");
-  ioCoroutineCall(r->coroutine);
+  coroutineCall(r->coroutine);
 }
 
 static void coroutineCb(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 {
   __UNUSED(object)
   coroReturnStruct *r = (coroReturnStruct*)arg;
-  r->status = status;  
+  r->status = status;
   r->bytesTransferred = transferred;
   assert(coroutineIsMain() && "no main coroutine!\n");
-  ioCoroutineCall(r->coroutine);
+  coroutineCall(r->coroutine);
 }
 
 static void coroutineReadMsgCb(AsyncOpStatus status, aioObject *object, HostAddress address, size_t transferred, void *arg)
@@ -146,15 +147,15 @@ static void coroutineReadMsgCb(AsyncOpStatus status, aioObject *object, HostAddr
   __UNUSED(object)
   __UNUSED(address)
   coroReturnStruct *r = (coroReturnStruct*)arg;
-  r->status = status;  
+  r->status = status;
   r->bytesTransferred = transferred;
   assert(coroutineIsMain() && "no main coroutine!\n");
-  ioCoroutineCall(r->coroutine);
+  coroutineCall(r->coroutine);
 }
 
 socketTy aioObjectSocket(aioObject *object)
 {
-  return object->hSocket;  
+  return object->hSocket;
 }
 
 iodevTy aioObjectDevice(aioObject *object)
@@ -173,7 +174,7 @@ asyncBase *createAsyncBase(AsyncMethod method)
 #elif defined(OS_LINUX)
     case amSelect :
       base = selectNewAsyncBase();
-      break;      
+      break;
     case amEPoll :
       base = epollNewAsyncBase();
       break;
@@ -244,7 +245,7 @@ aioObject *newSocketIo(asyncBase *base, socketTy hSocket)
 
 aioObject *newDeviceIo(asyncBase *base, iodevTy hDevice)
 {
-  return base->methodImpl.newAioObject(base, ioObjectDevice, &hDevice);  
+  return base->methodImpl.newAioObject(base, ioObjectDevice, &hDevice);
 }
 
 void deleteAioObject(aioObject *object)
@@ -267,14 +268,14 @@ void userEventStartTimer(aioUserEvent *event, uint64_t usTimeout, int counter)
 
 
 void userEventStopTimer(aioUserEvent *event)
-{   
-  event->counter = 0;  
+{
+  event->counter = 0;
   event->base->methodImpl.stopTimer(&event->root);
 }
 
 
 void userEventActivate(aioUserEvent *event)
-{  
+{
   event->base->methodImpl.activate(event);
 }
 
@@ -323,17 +324,24 @@ ssize_t aioRead(aioObject *object,
       socketSyncRead(object->hSocket, buffer, size, flags & afWaitAll, &bytesTransferred) :
       deviceSyncRead(object->hDevice, buffer, size, flags & afWaitAll, &bytesTransferred);
     if (result) {
-      tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1);
-      if (tag != 1)
-        object->root.base->methodImpl.combiner(&object->root, tag, 0, aaNone);
-      if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
+      if (flags & afSerialized) {
+        callback(aosSuccess, object, bytesTransferred, arg);
         objectDeleteRef(&object->root, 1);
-        return (ssize_t)bytesTransferred;
-      } else {
-        asyncOp *op = initAsyncOp(object, (void*)callback, arg, buffer, size, 0, 0, actRead, object->root.base->methodImpl.read);
-        op->bytesTransferred = bytesTransferred;
-        opForceStatus(&op->root, aosSuccess);
-        addToThreadLocalQueue(&op->root);
+      }
+
+      tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
+      if (tag)
+        object->root.base->methodImpl.combiner(&object->root, tag, 0, aaNone);
+      if (!(flags & afSerialized)) {
+        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
+          objectDeleteRef(&object->root, 1);
+          return (ssize_t)bytesTransferred;
+        } else {
+          asyncOp *op = initAsyncOp(object, (void*)callback, arg, buffer, size, 0, 0, actRead, object->root.base->methodImpl.read);
+          op->bytesTransferred = bytesTransferred;
+          opForceStatus(&op->root, aosSuccess);
+          addToThreadLocalQueue(&op->root);
+        }
       }
     } else {
       asyncOp *op = initAsyncOp(object, (void*)callback, arg, buffer, size, flags, usTimeout, actRead, object->root.base->methodImpl.read);
@@ -351,7 +359,7 @@ ssize_t aioRead(aioObject *object,
 
 
 ssize_t aioWrite(aioObject *object,
-                 void *buffer,
+                 const void *buffer,
                  size_t size,
                  AsyncFlags flags,
                  uint64_t usTimeout,
@@ -365,25 +373,33 @@ ssize_t aioWrite(aioObject *object,
       socketSyncWrite(object->hSocket, buffer, size, flags & afWaitAll, &bytesTransferred) :
       deviceSyncWrite(object->hDevice, buffer, size, flags & afWaitAll, &bytesTransferred);
     if (result) {
-      tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1);
-      if (tag != 1)
-        object->root.base->methodImpl.combiner(&object->root, tag, 0, aaNone);
-      if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
+      if (flags & afSerialized) {
+        callback(aosSuccess, object, bytesTransferred, arg);
         objectDeleteRef(&object->root, 1);
-        return (ssize_t)bytesTransferred;
-      } else {
-        asyncOp *op = initAsyncOp(object, (void*)callback, arg, buffer, size, 0, 0, actWrite, object->root.base->methodImpl.write);
-        op->bytesTransferred = bytesTransferred;
-        opForceStatus(&op->root, aosSuccess);
-        addToThreadLocalQueue(&op->root);
+      }
+
+      tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
+      if (tag)
+        object->root.base->methodImpl.combiner(&object->root, tag, 0, aaNone);
+
+      if (!(flags & afSerialized)) {
+        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
+          objectDeleteRef(&object->root, 1);
+          return (ssize_t)bytesTransferred;
+        } else {
+          asyncOp *op = initAsyncOp(object, (void*)callback, arg, (void*)buffer, size, 0, 0, actWrite, object->root.base->methodImpl.write);
+          op->bytesTransferred = bytesTransferred;
+          opForceStatus(&op->root, aosSuccess);
+          addToThreadLocalQueue(&op->root);
+        }
       }
     } else {
-      asyncOp *op = initAsyncOp(object, (void*)callback, arg, buffer, size, flags, usTimeout, actWrite, object->root.base->methodImpl.write);
+      asyncOp *op = initAsyncOp(object, (void*)callback, arg, (void*)buffer, size, flags, usTimeout, actWrite, object->root.base->methodImpl.write);
       op->bytesTransferred = bytesTransferred;
       object->root.base->methodImpl.combiner(&object->root, 1, &op->root, aaStart);
     }
   } else {
-    asyncOp *op = initAsyncOp(object, (void*)callback, arg, buffer, size, flags, usTimeout, actWrite, object->root.base->methodImpl.write);
+    asyncOp *op = initAsyncOp(object, (void*)callback, arg, (void*)buffer, size, flags, usTimeout, actWrite, object->root.base->methodImpl.write);
     combinerAddAction(&object->root, &op->root, aaStart);
   }
 
@@ -435,7 +451,7 @@ ssize_t aioReadMsg(aioObject *object,
 
 ssize_t aioWriteMsg(aioObject *object,
                     const HostAddress *address,
-                    void *buffer,
+                    const void *buffer,
                     size_t size,
                     AsyncFlags flags,
                     uint64_t usTimeout,
@@ -451,7 +467,7 @@ ssize_t aioWriteMsg(aioObject *object,
   remoteAddress.sin_port = address->port;
 #ifdef OS_WINDOWS
   ssize_t result = sendto(object->hSocket, buffer, (int)size, 0, (struct sockaddr *)&remoteAddress, sizeof(remoteAddress));
-#else 
+#else
   ssize_t result = sendto(object->hSocket, buffer, size, 0, (struct sockaddr *)&remoteAddress, sizeof(remoteAddress));
 #endif
   if (result >= 0) {
@@ -460,13 +476,13 @@ ssize_t aioWriteMsg(aioObject *object,
       objectDeleteRef(&object->root, 1);
       return result;
     } else {
-      asyncOp *op = initAsyncOp(object, (void*)callback, arg, buffer, size, 0, 0, actWriteMsg, object->root.base->methodImpl.writeMsg);
+      asyncOp *op = initAsyncOp(object, (void*)callback, arg, (void*)buffer, size, 0, 0, actWriteMsg, object->root.base->methodImpl.writeMsg);
       op->bytesTransferred = (size_t)result;
       opForceStatus(&op->root, aosSuccess);
       addToThreadLocalQueue(&op->root);
     }
   } else {
-    asyncOp *op = initAsyncOp(object, (void*)callback, arg, buffer, size, flags, usTimeout, actWriteMsg, object->root.base->methodImpl.writeMsg);
+    asyncOp *op = initAsyncOp(object, (void*)callback, arg, (void*)buffer, size, flags, usTimeout, actWriteMsg, object->root.base->methodImpl.writeMsg);
     op->host = *address;
     opStart(&op->root);
   }
@@ -490,41 +506,43 @@ socketTy ioAccept(aioObject *op, uint64_t usTimeout)
   coroReturnStruct r;
   r.coroutine = coroutineCurrent();
   aioAccept(op, usTimeout, coroutineAcceptCb, &r);
-  coroutineYield();  
+  coroutineYield();
   return r.status == aosSuccess ? r.acceptSocket : -(int)r.status;
 }
 
 
 ssize_t ioRead(aioObject *object, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-  coroReturnStruct r;
-  r.coroutine = coroutineCurrent();
   objectAddRef(&object->root);
+  coroReturnStruct r = {coroutineCurrent(), aosPending, INVALID_SOCKET, 0};
+  combinerCallArgs ccArgs;
+  asyncOp *op;
   if (__tag_atomic_fetch_and_add(&object->root.tag, 1) == 0) {
     size_t bytesTransferred = 0;
     int result = object->root.type == ioObjectSocket ?
       socketSyncRead(object->hSocket, buffer, size, flags & afWaitAll, &bytesTransferred) :
       deviceSyncRead(object->hDevice, buffer, size, flags & afWaitAll, &bytesTransferred);
     if (result) {
-      tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1);
-      if (tag != 1)
-        combinerCallDelayed(&object->root, tag, 0, aaNone, 0);
+      tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
+      if (tag)
+        combinerCallDelayed(&ccArgs, &object->root, tag, 0, aaNone, 0);
+
       if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION) {
         objectDeleteRef(&object->root, 1);
         return (ssize_t)bytesTransferred;
       } else {
-        asyncOp *op = initAsyncOp(object, (void*)coroutineCb, &r, buffer, size, 0, 0, actRead, object->root.base->methodImpl.read);
+        op = initAsyncOp(object, (void*)coroutineCb, &r, buffer, size, 0, 0, actRead, object->root.base->methodImpl.read);
         op->bytesTransferred = bytesTransferred;
         opForceStatus(&op->root, aosSuccess);
         addToThreadLocalQueue(&op->root);
       }
     } else {
-      asyncOp *op = initAsyncOp(object, (void*)coroutineCb, &r, buffer, size, flags, usTimeout, actRead, object->root.base->methodImpl.read);
+      op = initAsyncOp(object, (void*)coroutineCb, &r, buffer, size, flags, usTimeout, actRead, object->root.base->methodImpl.read);
       op->bytesTransferred = bytesTransferred;
-      combinerCallDelayed(&object->root, 1, &op->root, aaStart, 0);
+      combinerCallDelayed(&ccArgs, &object->root, 1, &op->root, aaStart, 0);
     }
   } else {
-    asyncOp *op = initAsyncOp(object, (void*)coroutineCb, &r, buffer, size, flags, usTimeout, actRead, object->root.base->methodImpl.read);
+    op = initAsyncOp(object, (void*)coroutineCb, &r, buffer, size, flags, usTimeout, actRead, object->root.base->methodImpl.read);
     combinerAddAction(&object->root, &op->root, aaStart);
   }
 
@@ -533,36 +551,39 @@ ssize_t ioRead(aioObject *object, void *buffer, size_t size, AsyncFlags flags, u
 }
 
 
-ssize_t ioWrite(aioObject *object, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
+ssize_t ioWrite(aioObject *object, const void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-  coroReturnStruct r;
-  r.coroutine = coroutineCurrent();
   objectAddRef(&object->root);
+  coroReturnStruct r = {coroutineCurrent(), aosPending, INVALID_SOCKET, 0};
+  combinerCallArgs ccArgs;
+  asyncOp *op;
+
   if (__tag_atomic_fetch_and_add(&object->root.tag, 1) == 0) {
     size_t bytesTransferred = 0;
     int result = object->root.type == ioObjectSocket ?
       socketSyncWrite(object->hSocket, buffer, size, flags & afWaitAll, &bytesTransferred) :
       deviceSyncWrite(object->hDevice, buffer, size, flags & afWaitAll, &bytesTransferred);
     if (result) {
-      tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1);
-      if (tag != 1)
-        combinerCallDelayed(&object->root, tag, 0, aaNone, 0);
+      tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
+      if (tag)
+        combinerCallDelayed(&ccArgs, &object->root, tag, 0, aaNone, 0);
+
       if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION) {
         objectDeleteRef(&object->root, 1);
         return (ssize_t)bytesTransferred;
       } else {
-        asyncOp *op = initAsyncOp(object, (void*)coroutineCb, &r, buffer, size, 0, 0, actWrite, object->root.base->methodImpl.write);
+        op = initAsyncOp(object, (void*)coroutineCb, &r, (void*)buffer, size, 0, 0, actWrite, object->root.base->methodImpl.write);
         op->bytesTransferred = bytesTransferred;
         opForceStatus(&op->root, aosSuccess);
         addToThreadLocalQueue(&op->root);
       }
     } else {
-      asyncOp *op = initAsyncOp(object, (void*)coroutineCb, &r, buffer, size, flags, usTimeout, actWrite, object->root.base->methodImpl.write);
+      op = initAsyncOp(object, (void*)coroutineCb, &r, (void*)buffer, size, flags, usTimeout, actWrite, object->root.base->methodImpl.write);
       op->bytesTransferred = bytesTransferred;
-      combinerCallDelayed(&object->root, 1, &op->root, aaStart, 0);
+      combinerCallDelayed(&ccArgs, &object->root, 1, &op->root, aaStart, 0);
     }
   } else {
-    asyncOp *op = initAsyncOp(object, (void*)coroutineCb, &r, buffer, size, flags, usTimeout, actWrite, object->root.base->methodImpl.write);
+    op = initAsyncOp(object, (void*)coroutineCb, &r, (void*)buffer, size, flags, usTimeout, actWrite, object->root.base->methodImpl.write);
     combinerAddAction(&object->root, &op->root, aaStart);
   }
 
@@ -573,7 +594,6 @@ ssize_t ioWrite(aioObject *object, void *buffer, size_t size, AsyncFlags flags, 
 ssize_t ioReadMsg(aioObject *object, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
   objectAddRef(&object->root);
-
   // Datagram socket can be accessed by multiple threads without lock
   struct sockaddr_in source;
   socketLenTy addrlen = sizeof(source);
@@ -585,8 +605,7 @@ ssize_t ioReadMsg(aioObject *object, void *buffer, size_t size, AsyncFlags flags
   if (result >= 0) {
     // Data received synchronously
     if (++currentFinishedSync >= MAX_SYNCHRONOUS_FINISHED_OPERATION) {
-      coroReturnStruct r;
-      r.coroutine = coroutineCurrent();
+      coroReturnStruct r = { coroutineCurrent(), aosPending, INVALID_SOCKET, 0 };
       asyncOp *op = initAsyncOp(object, (void*)coroutineReadMsgCb, &r, buffer, size, 0, 0, actReadMsg, object->root.base->methodImpl.readMsg);
       op->bytesTransferred = (size_t)result;
       opForceStatus(&op->root, aosSuccess);
@@ -599,18 +618,17 @@ ssize_t ioReadMsg(aioObject *object, void *buffer, size_t size, AsyncFlags flags
     }
   }
 
-  coroReturnStruct r;
-  r.coroutine = coroutineCurrent();
+  coroReturnStruct r = {coroutineCurrent(), aosPending, INVALID_SOCKET, 0};
+  combinerCallArgs ccArgs;
   asyncOp *op = initAsyncOp(object, (void*)coroutineReadMsgCb, &r, buffer, size, flags, usTimeout, actReadMsg, object->root.base->methodImpl.readMsg);
-  combinerCallDelayed(&object->root, 1, &op->root, aaStart, 1);
+  combinerCallDelayed(&ccArgs, &object->root, 1, &op->root, aaStart, 1);
   coroutineYield();
   return r.status == aosSuccess ? (ssize_t)r.bytesTransferred : -(int)r.status;
 }
 
-ssize_t ioWriteMsg(aioObject *object, const HostAddress *address, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
+ssize_t ioWriteMsg(aioObject *object, const HostAddress *address, const void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
   objectAddRef(&object->root);
-
   // Datagram socket can be accessed by multiple threads without lock
   struct sockaddr_in remoteAddress;
   remoteAddress.sin_family = address->family;
@@ -618,7 +636,7 @@ ssize_t ioWriteMsg(aioObject *object, const HostAddress *address, void *buffer, 
   remoteAddress.sin_port = address->port;
 #ifdef OS_WINDOWS
   ssize_t result = sendto(object->hSocket, buffer, (int)size, 0, (struct sockaddr *)&remoteAddress, sizeof(remoteAddress));
-#else 
+#else
   ssize_t result = sendto(object->hSocket, buffer, size, 0, (struct sockaddr *)&remoteAddress, sizeof(remoteAddress));
 #endif
   if (result != -1) {
@@ -626,7 +644,7 @@ ssize_t ioWriteMsg(aioObject *object, const HostAddress *address, void *buffer, 
     if (++currentFinishedSync >= MAX_SYNCHRONOUS_FINISHED_OPERATION) {
       coroReturnStruct r;
       r.coroutine = coroutineCurrent();
-      asyncOp *newOp = initAsyncOp(object, (void*)coroutineCb, &r, buffer, size, 0, 0, actWriteMsg, object->root.base->methodImpl.writeMsg);
+      asyncOp *newOp = initAsyncOp(object, (void*)coroutineCb, &r, (void*)buffer, size, 0, 0, actWriteMsg, object->root.base->methodImpl.writeMsg);
       newOp->host = *address;
       addToThreadLocalQueue(&newOp->root);
       coroutineYield();
@@ -637,11 +655,11 @@ ssize_t ioWriteMsg(aioObject *object, const HostAddress *address, void *buffer, 
     }
   }
 
-  coroReturnStruct r;
-  r.coroutine = coroutineCurrent();
-  asyncOp *op = initAsyncOp(object, (void*)coroutineCb, &r, buffer, size, flags, usTimeout, actWriteMsg, object->root.base->methodImpl.writeMsg);
+  coroReturnStruct r = {coroutineCurrent(), aosPending, INVALID_SOCKET, 0};
+  combinerCallArgs ccArgs;
+  asyncOp *op = initAsyncOp(object, (void*)coroutineCb, &r, (void*)buffer, size, flags, usTimeout, actWriteMsg, object->root.base->methodImpl.writeMsg);
   op->host = *address;
-  combinerCallDelayed(&object->root, 1, &op->root, aaStart, 1);
+  combinerCallDelayed(&ccArgs, &object->root, 1, &op->root, aaStart, 1);
   coroutineYield();
   return r.status == aosSuccess ? (ssize_t)r.bytesTransferred : -(int)r.status;
 }
@@ -649,8 +667,7 @@ ssize_t ioWriteMsg(aioObject *object, const HostAddress *address, void *buffer, 
 
 void ioSleep(aioUserEvent *event, uint64_t usTimeout)
 {
-  coroReturnStruct r;
-  r.coroutine = coroutineCurrent();
+  coroReturnStruct r = {coroutineCurrent(), aosPending, INVALID_SOCKET, 0};
   event->root.callback = (void*)coroutineEventCb;
   event->root.arg = &r;
   event->counter = 1;

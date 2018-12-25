@@ -17,7 +17,7 @@ int serialPortSetConfig(iodevTy port,
 void serialPortFlush(iodevTy port);
 
 int deviceSyncRead(iodevTy hDevice, void *buffer, size_t size, int waitAll, size_t *bytesTransferred);
-int deviceSyncWrite(iodevTy hDevice, void *buffer, size_t size, int waitAll, size_t *bytesTransferred);
+int deviceSyncWrite(iodevTy hDevice, const void *buffer, size_t size, int waitAll, size_t *bytesTransferred);
 
 #ifdef __cplusplus
 }

@@ -23,7 +23,6 @@ static uint64_t gTotalPacketNum = 4000000ULL;
 
 static unsigned gGroupSize = 1000;
 static unsigned gMessageSize = 16;
-static unsigned gBatchSend = 0;
 
 // For debugging
 static __tls uint64_t threadPacketsNum = 0;

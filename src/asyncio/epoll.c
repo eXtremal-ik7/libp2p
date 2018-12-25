@@ -1,5 +1,6 @@
 #include "asyncioImpl.h"
 #include "asyncio/coroutine.h"
+#include "atomic.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -24,7 +25,6 @@ enum pipeDescrs {
 
 typedef enum pipeCmd {
   Reset = 0,
-  Timeout,
   UserEvent
 } pipeCmd;
 
@@ -53,7 +53,6 @@ void epollNextFinishedOperation(asyncBase *base);
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data);
 asyncOpRoot *epollNewAsyncOp();
 void epollDeleteObject(aioObject *object);
-void epollFinishOp(asyncOpRoot *op, tag_t generation, AsyncOpStatus status);
 void epollInitializeTimer(asyncBase *base, asyncOpRoot *op);
 void epollStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic);
 void epollStopTimer(asyncOpRoot *op);
@@ -72,7 +71,6 @@ static struct asyncImpl epollImpl = {
   epollNewAioObject,
   epollNewAsyncOp,
   epollDeleteObject,
-  epollFinishOp,
   epollInitializeTimer,
   epollStartTimer,
   epollStopTimer,
@@ -220,7 +218,7 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
       if (newOp) {
         // Don't try synchonously execute operation second time
         tag_t X;
-        processAction(newOp, actionType, &threadLocalQueue, (hasFd && newOp->opCode == actConnect) ? &needStart : &X);
+        processAction(newOp, actionType, &threadLocalQueue, (!hasFd || (hasFd && newOp->opCode == actConnect)) ? &needStart : &X);
         enqueuedOperationsNum = 1;
         newOp = 0;
       } else {
@@ -292,7 +290,7 @@ void epollNextFinishedOperation(asyncBase *base)
               while (threadLocalQueue.head)
                 executeThreadLocalQueue();
               epollControl(localBase->epollFd, EPOLL_CTL_MOD, EPOLLIN | EPOLLONESHOT, fd, object);
-              __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, -1);
+              __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, 0u-1);
               return;
             case UserEvent :
               op->finishMethod(op);
@@ -321,7 +319,7 @@ void epollNextFinishedOperation(asyncBase *base)
 
             op->finishMethod(op);
           } else {
-            epollFinishOp(op, opEncodeTag(op, timerId), aosTimeout);
+            opCancel(op, opEncodeTag(op, timerId), aosTimeout);
           }
         }
       } else {
@@ -382,12 +380,6 @@ void epollDeleteObject(aioObject *object)
   epollControl(localBase->epollFd, EPOLL_CTL_DEL, 0, fd, 0);
   close(fd);
   free(object);
-}
-
-void epollFinishOp(asyncOpRoot *op, tag_t generation, AsyncOpStatus status)
-{
-  if (opSetStatus(op, generation, status))
-    combinerCall(op->object, 1, op, aaFinish);
 }
 
 void epollInitializeTimer(asyncBase *base, asyncOpRoot *op)
@@ -495,16 +487,16 @@ AsyncOpStatus epollAsyncRead(asyncOpRoot *opptr)
   ssize_t bytesRead = read(fd,
                            (uint8_t *)op->buffer + op->bytesTransferred,
                            op->transactionSize - op->bytesTransferred);
-  op->bytesTransferred += bytesRead;
 
-  if (bytesRead < 0 && errno != EAGAIN)
-    return aosUnknownError;
-  else if ((op->root.flags & afWaitAll) && op->bytesTransferred < op->transactionSize)
-    return aosPending;
-  else if (bytesRead == 0)
-    return aosPending;
-  else
-    return aosSuccess;
+  if (bytesRead >= 0) {
+    op->bytesTransferred += bytesRead;
+    if (op->root.flags & afWaitAll && op->bytesTransferred < op->transactionSize)
+      return aosPending;
+    else
+      return aosSuccess;
+  } else {
+    return errno == EAGAIN ? aosPending : aosUnknownError;
+  }
 }
 
 
@@ -516,16 +508,15 @@ AsyncOpStatus epollAsyncWrite(asyncOpRoot *opptr)
   ssize_t bytesWritten = write(fd,
                                (uint8_t *)op->buffer + op->bytesTransferred,
                                op->transactionSize - op->bytesTransferred);
-  op->bytesTransferred += bytesWritten;
-
-  if (bytesWritten < 0 && errno != EAGAIN)
-    return aosUnknownError;
-  else if ((op->root.flags & afWaitAll) && op->bytesTransferred < op->transactionSize)
-    return aosPending;
-  else if (bytesWritten == 0)
-    return aosPending;
-  else
-    return aosSuccess;
+  if (bytesWritten >= 0) {
+    op->bytesTransferred += bytesWritten;
+    if (op->root.flags & afWaitAll && op->bytesTransferred < op->transactionSize)
+      return aosPending;
+    else
+      return aosSuccess;
+  } else {
+    return errno == EAGAIN ? aosPending : aosUnknownError;
+  }
 }
 
 

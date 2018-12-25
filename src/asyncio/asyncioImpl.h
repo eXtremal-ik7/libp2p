@@ -20,7 +20,6 @@ typedef void postEmptyOperationTy(asyncBase*);
 typedef void nextFinishedOperationTy(asyncBase*);
 typedef aioObject *newAioObjectTy(asyncBase*, IoObjectTy, void*);
 typedef void deleteObjectTy(aioObject*);
-typedef void finishOpTy(asyncOpRoot*, tag_t, AsyncOpStatus);
 typedef void initializeTimerTy(asyncBase*, asyncOpRoot*);
 typedef void startTimerTy(asyncOpRoot*, uint64_t, int);
 typedef void stopTimerTy(asyncOpRoot*);
@@ -33,7 +32,6 @@ struct asyncImpl {
   newAioObjectTy *newAioObject;
   newAsyncOpTy *newAsyncOp;
   deleteObjectTy *deleteObject;
-  finishOpTy *finishOp;
   initializeTimerTy *initializeTimer;
   startTimerTy *startTimer;
   stopTimerTy *stopTimer;

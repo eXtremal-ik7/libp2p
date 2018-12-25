@@ -34,6 +34,14 @@ typedef socklen_t socketLenTy;
 #define __tls __thread
 #endif
 
+#if defined(OS_32)
+typedef uint32_t tag_t;
+#elif defined(OS_64)
+typedef uint64_t tag_t;
+#else
+#error Configution incomplete
+#endif
+
 typedef struct HostAddress {
   union {
     uint32_t ipv4;

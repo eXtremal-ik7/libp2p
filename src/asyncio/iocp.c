@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include "asyncioImpl.h"
+#include "atomic.h"
 #include <time.h>
 
 
@@ -43,7 +44,6 @@ void iocpNextFinishedOperation(asyncBase *base);
 aioObject *iocpNewAioObject(asyncBase *base, IoObjectTy type, void *data);
 asyncOpRoot *iocpNewAsyncOp();
 void iocpDeleteObject(aioObject *op);
-void iocpFinishOp(asyncOpRoot *opptr, tag_t generation, AsyncOpStatus status);
 void iocpInitializeTimer(asyncBase *base, asyncOpRoot *op);
 void iocpStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic);
 void iocpStopTimer(asyncOpRoot *op);
@@ -62,7 +62,6 @@ static struct asyncImpl iocpImpl = {
   iocpNewAioObject,
   iocpNewAsyncOp,
   iocpDeleteObject,
-  iocpFinishOp,
   iocpInitializeTimer,
   iocpStartTimer,
   iocpStopTimer,
@@ -153,7 +152,7 @@ static VOID CALLBACK ioFinishedTimerCb(LPVOID lpArgToCompletionRoutine, DWORD dw
   aioTimer *timer;
   tag_t timerTag;
   __tagged_pointer_decode(lpArgToCompletionRoutine, (void**)&timer, &timerTag);
-  iocpFinishOp(timer->op, opEncodeTag(timer->op, timerTag), aosTimeout);
+  opCancel(timer->op, opEncodeTag(timer->op, timerTag), aosTimeout);
 }
 
 static void opRun(asyncOpRoot *op, List *list)
@@ -178,6 +177,7 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
   tag_t tag = 0;
   int restart = 0;
   aioObjectRoot *object = opptr->object;
+  int isIocp = object->type == ioObjectDevice || object->type == ioObjectSocket;
   if (opptr->opCode & OPCODE_WRITE) {
     list = &object->writeQueue;
     tag = TAG_WRITE;
@@ -201,6 +201,21 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
     }
 
     case aaFinish : {
+      if (isIocp) {
+        iocpOp *op = (iocpOp*)opptr;
+        if (op->state == iocpStateRunning) {
+          CancelIoEx(getHandle((aioObject*)object), &op->overlapped);
+          op->state = iocpStatePacketWaiting;
+        } else {
+          opRelease(opptr, opGetStatus(opptr), list, finished);
+        }
+      } else {
+        opRelease(opptr, opGetStatus(opptr), list, finished);
+      }
+      break;
+    }
+
+    case aaIOCPPacket : {
       opRelease(opptr, opGetStatus(opptr), list, finished);
       break;
     }
@@ -212,17 +227,6 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
         op->state = iocpStatePending;
         restart = 1;
       } else if (op->state == iocpStatePacketWaiting) {
-        opRelease(opptr, opGetStatus(opptr), list, finished);
-      }
-      break;
-    }
-
-    case aaIOCPCancel : {
-      iocpOp *op = (iocpOp*)opptr;
-      if (op->state == iocpStateRunning) {
-        CancelIoEx(getHandle((aioObject*)object), &op->overlapped);
-        op->state = iocpStatePacketWaiting;
-      } else {
         opRelease(opptr, opGetStatus(opptr), list, finished);
       }
       break;
@@ -414,7 +418,7 @@ void iocpNextFinishedOperation(asyncBase *base)
         }
 
         opSetStatus(&op->info.root, opGetGeneration(&op->info.root), result);
-        combinerCall(op->info.root.object, 1, &op->info.root, aaFinish);
+        combinerCall(op->info.root.object, 1, &op->info.root, aaIOCPPacket);
       } else {
         while (threadLocalQueue.head)
           executeThreadLocalQueue();
@@ -458,7 +462,6 @@ asyncOpRoot *iocpNewAsyncOp()
   return (asyncOpRoot*)op;
 }
 
-
 void iocpDeleteObject(aioObject *object)
 {
   switch (object->root.type) {
@@ -473,17 +476,6 @@ void iocpDeleteObject(aioObject *object)
   }
 
   free(object);
-}
-
-void iocpFinishOp(asyncOpRoot *opptr, tag_t generation, AsyncOpStatus status)
-{
-  aioObjectRoot *object = opptr->object;
-  if (opSetStatus(opptr, generation, status)) {
-    if (object->type == ioObjectUserDefined)
-      combinerCall(object, 1, opptr, aaFinish);
-    else
-      combinerCall(object, 1, opptr, aaIOCPCancel);
-  }
 }
 
 void iocpInitializeTimer(asyncBase *base, asyncOpRoot *op)

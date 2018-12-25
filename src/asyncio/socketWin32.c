@@ -92,13 +92,13 @@ int socketSyncRead(socketTy hSocket, void *buffer, size_t size, int waitAll, siz
   }
 }
 
-int socketSyncWrite(socketTy hSocket, void *buffer, size_t size, int waitAll, size_t *bytesTransferred)
+int socketSyncWrite(socketTy hSocket, const void *buffer, size_t size, int waitAll, size_t *bytesTransferred)
 {
   DWORD bytesNum = 0;
   WSABUF wsabuf;
   if (!waitAll) {
     // TODO: correct processing >4Gb data blocks
-    wsabuf.buf = buffer;
+    wsabuf.buf = (char*)buffer;
     wsabuf.len = (ULONG)size;
     if (WSASend(hSocket, &wsabuf, 1, &bytesNum, 0, 0, 0) == 0 && bytesNum != 0) {
       *bytesTransferred = bytesNum;

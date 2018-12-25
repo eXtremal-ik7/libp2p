@@ -8,8 +8,8 @@
 
 #define DEFAULT_SSL_BUFFER_SIZE 65536
 
-const char *sslPoolId = "SSL";
-const char *sslPoolTimerId = "SSLTimer";
+static const char *sslPoolId = "SSL";
+static const char *sslPoolTimerId = "SSLTimer";
 
 typedef enum {
   sslStConnecting = 0,
@@ -30,9 +30,9 @@ typedef struct coroReturnStruct {
 } coroReturnStruct;
 
 static void socketConnectCb(AsyncOpStatus status, aioObject *object, void *arg);
-void connectProc(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg);
-void readProc(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg);
-void writeProc(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg);
+static void connectProc(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg);
+static void readProc(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg);
+static void writeProc(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg);
 
 
 static asyncOpRoot *alloc(asyncBase *base)
@@ -43,22 +43,6 @@ static asyncOpRoot *alloc(asyncBase *base)
   return (asyncOpRoot*)op;
 }
 
-static AsyncOpStatus start(asyncOpRoot *op)
-{
-  SSLSocket *S = (SSLSocket*)op->object;
-  switch (op->opCode) {
-    case sslOpConnect :
-    case sslOpWrite :
-      // TODO: return error
-      break;
-    case sslOpRead :
-      aioRead(S->object, S->sslReadBuffer, S->sslReadBufferSize, afNone, 0, readProc, op);
-      break;
-  }
-
-  return aosPending;
-}
-
 static void finish(asyncOpRoot *root)
 {
   SSLOp *op = (SSLOp*)root;
@@ -66,7 +50,7 @@ static void finish(asyncOpRoot *root)
   AsyncOpStatus status = opGetStatus(root);
   
     // cleanup child operation after timeout
-  if (status == aosTimeout || status == aosCanceled)
+  if (status != aosSuccess)
     cancelIo((aioObjectRoot*)S->object);
   
   if (root->callback && status != aosCanceled) {
@@ -83,6 +67,7 @@ static void finish(asyncOpRoot *root)
 }
 
 static SSLOp *allocSSLOp(SSLSocket *socket,
+                         aioExecuteProc executeProc,
                          void *callback,
                          void *arg,
                          void *buffer,
@@ -92,7 +77,7 @@ static SSLOp *allocSSLOp(SSLSocket *socket,
                          uint64_t timeout)
 {
   SSLOp *op = (SSLOp*)
-    initAsyncOpRoot(sslPoolId, sslPoolTimerId, alloc, start, finish, &socket->root, callback, arg, flags, opCode, timeout);
+    initAsyncOpRoot(sslPoolId, sslPoolTimerId, alloc, executeProc, finish, &socket->root, callback, arg, flags, opCode, timeout);
   op->buffer = buffer;
   op->transactionSize = size;
   op->bytesTransferred = 0;
@@ -128,33 +113,34 @@ size_t copyFromOut(SSLSocket *S, SSLOp *Op)
 }
 
 
-void connectProc(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
+static void connectProc(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 {
-  SSLOp *Op = (SSLOp*)arg;
-  SSLSocket *S = (SSLSocket*)Op->root.object;
+  asyncOpLink *link = (asyncOpLink*)arg;
+  SSLOp *op = (SSLOp*)link->op;
+  SSLSocket *socket = (SSLSocket*)op->root.object;
   if (status == aosSuccess) {
-    if (Op->state == sslStReadNewFrame) {
+    if (op->state == sslStReadNewFrame) {
       // TODO: correct processing >4Gb data blocks
-      BIO_write(S->bioIn, S->sslReadBuffer, (int)transferred);
-      Op->state = sslStConnecting;
+      BIO_write(socket->bioIn, socket->sslReadBuffer, (int)transferred);
+      op->state = sslStConnecting;
     }
 
-    int connectResult = SSL_connect(S->ssl);
-    int errCode = SSL_get_error(S->ssl, connectResult);
+    int connectResult = SSL_connect(socket->ssl);
+    int errCode = SSL_get_error(socket->ssl, connectResult);
     if (connectResult == 1) {
       // Successfully connected
-      finishOperation(&Op->root, aosSuccess, 1);
+      opReleaseLink(link, aosSuccess);
     } else if (errCode == SSL_ERROR_WANT_READ) {
       // Need data exchange
-      size_t connectSize = copyFromOut(S, Op);
-      Op->state = sslStReadNewFrame;
-      aioWrite(object, Op->sslBuffer, connectSize, afWaitAll, 0, 0, Op);
-      aioRead(object, S->sslReadBuffer, S->sslReadBufferSize, afNone, 0, connectProc, Op);
+      size_t connectSize = copyFromOut(socket, op);
+      op->state = sslStReadNewFrame;
+      aioWrite(object, op->sslBuffer, connectSize, afWaitAll, 0, 0, 0);
+      aioRead(object, socket->sslReadBuffer, socket->sslReadBufferSize, afNone, 0, connectProc, link);
     } else {
-      finishOperation(&Op->root, aosUnknownError, 1);        
+      opReleaseLink(link, aosUnknownError);
     }
   } else {
-    finishOperation(&Op->root, status, 1); 
+    opReleaseLink(link, status);
   }
 }
 
@@ -165,36 +151,37 @@ static void socketConnectCb(AsyncOpStatus status, aioObject *object, void *arg)
 
 void readProc(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 {
-  SSLOp *Op = (SSLOp*)arg;
-  SSLSocket *S = (SSLSocket*)Op->root.object;
+  asyncOpLink *link = (asyncOpLink*)arg;
+  SSLOp *op = (SSLOp*)link->op;
+  SSLSocket *socket = (SSLSocket*)op->root.object;
   if (status == aosSuccess) {
-    if (Op->state == sslStReadNewFrame) {
+    if (op->state == sslStReadNewFrame) {
       // TODO: correct processing >4Gb data blocks
-      BIO_write(S->bioIn, S->sslReadBuffer, (int)transferred);
-      Op->state = sslStReading;
+      BIO_write(socket->bioIn, socket->sslReadBuffer, (int)transferred);
+      op->state = sslStReading;
     }
     
-    uint8_t *ptr = ((uint8_t*)Op->buffer) + Op->bytesTransferred;
-    size_t size = Op->transactionSize-Op->bytesTransferred;
+    uint8_t *ptr = ((uint8_t*)op->buffer) + op->bytesTransferred;
+    size_t size = op->transactionSize-op->bytesTransferred;
     
     int readResult = 0;
     int R;
     // TODO: correct processing >4Gb data blocks
-    while ( (R = SSL_read(S->ssl, ptr, (int)size)) > 0) {
+    while ( (R = SSL_read(socket->ssl, ptr, (int)size)) > 0) {
       readResult += R;
       ptr += R;
       size -= R;
     }
     
-    Op->bytesTransferred += readResult;
-    if (Op->bytesTransferred == Op->transactionSize || (Op->bytesTransferred && !(Op->root.flags & afWaitAll))) {
-      finishOperation(&Op->root, aosSuccess, 1);
+    op->bytesTransferred += readResult;
+    if (op->bytesTransferred == op->transactionSize || (op->bytesTransferred && !(op->root.flags & afWaitAll))) {
+      opReleaseLink(link, aosSuccess);
     } else {
-      Op->state = sslStReadNewFrame;
-      aioRead(object, S->sslReadBuffer, S->sslReadBufferSize, afNone, 0, readProc, Op);
+      op->state = sslStReadNewFrame;
+      aioRead(object, socket->sslReadBuffer, socket->sslReadBufferSize, afNone, 0, readProc, link);
     }    
   } else {
-    finishOperation(&Op->root, status, 1);
+    opReleaseLink(link, status);
   }
 }
 
@@ -202,7 +189,7 @@ void readProc(AsyncOpStatus status, aioObject *object, size_t transferred, void 
 
 void writeProc(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 {
-  finishOperation((asyncOpRoot*)arg, status, 1);
+  opReleaseLink((asyncOpLink*)arg, status);
 }
 
 
@@ -212,6 +199,7 @@ void sslSocketDestructor(aioObjectRoot *root)
   free(socket->sslReadBuffer);  
   SSL_free(socket->ssl);
   SSL_CTX_free(socket->sslContext);
+  deleteAioObject(socket->object);
   free(socket);
 }
 
@@ -235,9 +223,8 @@ SSLSocket *sslSocketNew(asyncBase *base)
 
 void sslSocketDelete(SSLSocket *socket)
 {
-  //deleteAioObject(socket->object);
-  //socket->root.refs--;   // TODO: atomic
-  //checkForDeleteObject(&socket->root);
+  cancelIo(&socket->root);
+  objectDeleteRef(&socket->root, 1);
 }
 
 socketTy sslGetSocket(const SSLSocket *socket)
@@ -245,23 +232,38 @@ socketTy sslGetSocket(const SSLSocket *socket)
   return aioObjectSocket(socket->object);
 }
 
-void aioSslConnect(asyncBase *base,
-                   SSLSocket *socket,
+static AsyncOpStatus sslConnectStart(asyncOpRoot *opptr)
+{
+  SSLOp *op = (SSLOp*)opptr;
+  SSLSocket *socket = (SSLSocket*)opptr->object;
+  asyncOpLink *opLink = opAllocateLink(opptr);
+  aioConnect(socket->object, &op->address, 0, socketConnectCb, opLink);
+  return aosPending;
+}
+
+void aioSslConnect(SSLSocket *socket,
                    const HostAddress *address,
                    uint64_t usTimeout,
                    sslConnectCb callback,
                    void *arg)
 {
+  objectAddRef(&socket->root);
   SSL_set_connect_state(socket->ssl);
-  SSLOp *newOp = allocSSLOp(socket, callback, arg, 0, 0, afNone, sslOpConnect, usTimeout);
+  SSLOp *newOp = allocSSLOp(socket, sslConnectStart, callback, arg, 0, 0, afNone, sslOpConnect, usTimeout);
+  newOp->address = *address;
   newOp->state = sslStConnecting;
-  if (addToExecuteQueue(&socket->root, &newOp->root, 0))
-    aioConnect(socket->object, address, 0, socketConnectCb, newOp);
+  opStart(&newOp->root);
 }
 
+static AsyncOpStatus sslReadStart(asyncOpRoot *opptr)
+{
+  SSLSocket *socket = (SSLSocket*)opptr->object;
+  asyncOpLink *opLink = opAllocateLink(opptr);
+  aioRead(socket->object, socket->sslReadBuffer, socket->sslReadBufferSize, afNone, 0, readProc, opLink);
+  return aosPending;
+}
 
-void aioSslRead(asyncBase *base,
-                SSLSocket *socket,
+void aioSslRead(SSLSocket *socket,
                 void *buffer,
                 size_t size,
                 AsyncFlags flags,
@@ -269,53 +271,70 @@ void aioSslRead(asyncBase *base,
                 sslCb callback,
                 void *arg)
 {
-  SSLOp *newOp = allocSSLOp(socket, callback, arg, buffer, size, afNone, sslOpRead, usTimeout);
+  objectAddRef(&socket->root);
+  SSLOp *newOp = allocSSLOp(socket, sslReadStart, callback, arg, buffer, size, afNone, sslOpRead, usTimeout);
   newOp->state = sslStReadNewFrame;
-  if (addToExecuteQueue(&socket->root, &newOp->root, 0))
-    start(&newOp->root);
+  opStart(&newOp->root);
 }
 
+static AsyncOpStatus sslWriteStart(asyncOpRoot *opptr)
+{
+  SSLOp *op = (SSLOp*)opptr;
+  SSLSocket *socket = (SSLSocket*)opptr->object;
+  asyncOpLink *opLink = opAllocateLink(opptr);
 
-void aioSslWrite(asyncBase *base,
-                 SSLSocket *socket,
-                 void *buffer,
+  SSL_write(socket->ssl, op->buffer, (int)op->transactionSize);
+  size_t writeSize = copyFromOut(socket, op);
+  aioWrite(socket->object, op->sslBuffer, writeSize, afWaitAll, 0, writeProc, opLink);
+  return aosPending;
+}
+
+void aioSslWrite(SSLSocket *socket,
+                 const void *buffer,
                  size_t size,
                  AsyncFlags flags,
                  uint64_t usTimeout,
                  sslCb callback,
                  void *arg)
 {
-  // TODO: correct processing >4Gb data blocks
-  SSL_write(socket->ssl, buffer, (int)size);
-  
-  // Allocate operation only for buffer
-  SSLOp *newOp = allocSSLOp(socket, callback, arg, buffer, size, afNone, sslOpWrite, usTimeout);
-  size_t writeSize = copyFromOut(socket, newOp);  
-  aioWrite(socket->object, newOp->sslBuffer, writeSize, afWaitAll, usTimeout, writeProc, newOp);
-  // TODO: check for release
-  // releaseObject(base, newOp, newOp->root.poolId);
+  objectAddRef(&socket->root);
+  SSLOp *newOp = allocSSLOp(socket, sslWriteStart, callback, arg, (void*)buffer, size, afNone, sslOpWrite, usTimeout);
+  opStart(&newOp->root);
 }
 
-int ioSslConnect(asyncBase *base, SSLSocket *socket, const HostAddress *address, uint64_t usTimeout)
+int ioSslConnect(SSLSocket *socket, const HostAddress *address, uint64_t usTimeout)
 {
-  coroReturnStruct r = {coroutineCurrent()};
-  aioSslConnect(base, socket, address, usTimeout, coroutineConnectCb, &r);
+  objectAddRef(&socket->root);
+  combinerCallArgs ccArgs;
+  coroReturnStruct r = {coroutineCurrent(), aosPending, 0};
+  SSL_set_connect_state(socket->ssl);
+  SSLOp *op = allocSSLOp(socket, sslConnectStart, coroutineConnectCb, &r, 0, 0, afNone, sslOpConnect, usTimeout);
+  op->address = *address;
+  op->state = sslStConnecting;
+  combinerCallDelayed(&ccArgs, &socket->root, 1, &op->root, aaStart, 1);
   coroutineYield();
-  return r.status == aosSuccess ? 0 : -1;
+  return r.status == aosSuccess ? 0 : -(int)r.status;
 }
 
-ssize_t ioSslRead(asyncBase *base, SSLSocket *socket, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
+ssize_t ioSslRead(SSLSocket *socket, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-  coroReturnStruct r = {coroutineCurrent()};
-  aioSslRead(base, socket, buffer, size, flags, usTimeout, coroutineCb, &r);
+  objectAddRef(&socket->root);
+  combinerCallArgs ccArgs;
+  coroReturnStruct r = {coroutineCurrent(), aosPending, 0};
+  SSLOp *op = allocSSLOp(socket, sslReadStart, coroutineCb, &r, buffer, size, afNone, sslOpRead, usTimeout);
+  op->state = sslStReadNewFrame;
+  combinerCallDelayed(&ccArgs, &socket->root, 1, &op->root, aaStart, 1);
   coroutineYield();
-  return r.status == aosSuccess ? r.transferred : -1;
+  return r.status == aosSuccess ? r.transferred : -(int)r.status;
 }
 
-ssize_t ioSslWrite(asyncBase *base, SSLSocket *socket, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
+ssize_t ioSslWrite(SSLSocket *socket, const void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-  coroReturnStruct r = {coroutineCurrent()};
-  aioSslWrite(base, socket, buffer, size, flags, usTimeout, coroutineCb, &r);
+  objectAddRef(&socket->root);
+  combinerCallArgs ccArgs;
+  coroReturnStruct r = {coroutineCurrent(), aosPending, 0};
+  SSLOp *op = allocSSLOp(socket, sslWriteStart, coroutineCb, &r, (void*)buffer, size, afNone, sslOpWrite, usTimeout);
+  combinerCallDelayed(&ccArgs, &socket->root, 1, &op->root, aaStart, 1);
   coroutineYield();
-  return r.status == aosSuccess ? r.transferred : -1;
+  return r.status == aosSuccess ? r.transferred : -(int)r.status;
 }

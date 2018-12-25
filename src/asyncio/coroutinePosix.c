@@ -27,6 +27,8 @@ typedef struct coroutineTy {
   void *arg;
   int finished;
   int counter;
+  coroutineCbTy *cbProc;
+  void *cbArg;
 } coroutineTy;
 
 static __thread coroutineTy *mainCoroutine;
@@ -108,6 +110,8 @@ coroutineTy *coroutineNew(coroutineProcTy entry, void *arg, unsigned stackSize)
   coroutine->prev = currentCoroutine;
   coroutine->finished = 0;
   coroutine->counter = 0;
+  coroutine->cbProc = 0;
+  coroutine->cbArg = 0;
   sigprocmask(SIG_SETMASK, &old, 0);  
   return coroutine;
 }
@@ -117,6 +121,7 @@ void coroutineDelete(coroutineTy *coroutine)
   free(coroutine->stack);
   free(coroutine);
 }
+
 int coroutineCall(coroutineTy *coroutine)
 {
   assert(__sync_fetch_and_add(&coroutine->counter, 1) == 0 &&
@@ -129,6 +134,11 @@ int coroutineCall(coroutineTy *coroutine)
     currentCoroutine = coroutine;
 
     switchContext(&coroutine->prev->context, &coroutine->context);
+
+    if (coroutine->cbProc) {
+      coroutine->cbProc(coroutine->cbArg);
+      coroutine->cbProc = 0;
+    }
 
     int finished = coroutine->finished;
     if (finished) {
@@ -151,4 +161,13 @@ void coroutineYield()
            "Multiple yield from one coroutine detected!");
     switchContext(&old->context, &currentCoroutine->context);
   }
+}
+
+void coroutineSetYieldCallback(coroutineCbTy proc, void *arg)
+{
+  // Create main fiber if it not exists
+  if (currentCoroutine == 0)
+    mainCoroutine = currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
+  currentCoroutine->cbProc = proc;
+  currentCoroutine->cbArg = arg;
 }

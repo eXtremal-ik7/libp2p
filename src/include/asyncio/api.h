@@ -11,14 +11,6 @@ extern "C" {
 
 #define MAX_SYNCHRONOUS_FINISHED_OPERATION 32
 
-#if defined(OS_32)
-typedef uint32_t tag_t;
-#elif defined(OS_64)
-typedef uint64_t tag_t;
-#else
-#error Configution incomplete
-#endif
-
 typedef enum AsyncMethod {
   amOSDefault = 0,
   amSelect,
@@ -54,15 +46,16 @@ typedef enum AsyncFlags {
   afWaitAll = 1,
   afNoCopy = 2,
   afRealtime = 4,
-  afActiveOnce = 8
+  afActiveOnce = 8,
+  afSerialized = 16
 } AsyncFlags;
 
 typedef enum AsyncOpActionTy {
   aaNone = 0,
   aaStart,
   aaFinish,
-  aaIOCPRestart,
-  aaIOCPCancel
+  aaIOCPPacket,
+  aaIOCPRestart
 } AsyncOpActionTy;
 
 typedef struct asyncBase asyncBase;
@@ -111,58 +104,7 @@ extern __tls unsigned messageLoopThreadId;
 #define OPCODE_WRITE (1<<(sizeof(int)*8-2))
 #define OPCODE_OTHER (1<<(sizeof(int)*8-1))
 
-static inline tag_t __tag_atomic_fetch_and_add(tag_t volatile *tag, tag_t value)
-{
-#ifndef _MSC_VER // Not Microsoft compiler
-  return __sync_fetch_and_add(tag, value);
-#else
-#ifdef OS_32
-  return InterlockedExchangeAdd((volatile LONG*)tag, value);
-#else
-  return InterlockedExchangeAdd64((volatile LONG64*)tag, value);
-#endif
-#endif
-}
 
-static inline unsigned __uint_atomic_fetch_and_add(unsigned volatile *tag, unsigned value)
-{
-#ifndef _MSC_VER // Not Microsoft compiler
-  return __sync_fetch_and_add(tag, value);
-#else
-  return InterlockedExchangeAdd((volatile LONG*)tag, value);
-#endif
-}
-
-static inline int __uint_atomic_compare_and_swap(unsigned volatile *tag, unsigned v1, unsigned v2)
-{
-#ifndef _MSC_VER // Not Microsoft compiler
-  return __sync_bool_compare_and_swap(tag, v1, v2);
-#else
-  return InterlockedCompareExchange((volatile LONG*)tag, v2, v1) == v1;
-#endif
-}
-
-static inline int __tag_atomic_compare_and_swap(tag_t volatile *tag, tag_t v1, tag_t v2)
-{
-#ifndef _MSC_VER // Not Microsoft compiler
-  return __sync_bool_compare_and_swap(tag, v1, v2);
-#else
-#ifdef OS_32
-  return InterlockedCompareExchange((volatile LONG*)tag, v2, v1) == v1;
-#else
-  return InterlockedCompareExchange64((volatile LONG64*)tag, v2, v1) == v1;
-#endif
-#endif
-}
-
-static inline int __pointer_atomic_compare_and_swap(void *volatile *tag, void *v1, void *v2)
-{
-#ifndef _MSC_VER // Not Microsoft compiler
-  return __sync_bool_compare_and_swap(tag, v1, v2);
-#else
-  return InterlockedCompareExchangePointer(tag, v2, v1) == v1;
-#endif
-}
 
 void *__tagged_alloc(size_t size);
 void *__tagged_pointer_make(void *ptr, tag_t data);
@@ -180,31 +122,6 @@ static inline tag_t __tag_get_opcount(tag_t tag)
 static inline tag_t __tag_make_processed(tag_t currentTag, tag_t enqueued)
 {
   return (currentTag & (TAG_READ_MASK | TAG_WRITE_MASK | TAG_ERROR_MASK | TAG_DELETE | TAG_CANCELIO)) | enqueued;
-}
-
-static inline void __spinlock_acquire(unsigned *lock)
-{
-  for (;;) {
-    for (int i = 0; i < 7777; i++) {
-      if (__uint_atomic_compare_and_swap(lock, 0, 1))
-        return;
-    }
-#ifdef OS_WINDOWS
-    SwitchToThread();
-#else
-    sched_yield();
-#endif
-  }
-}
-
-static inline int __spinlock_try_acquire(volatile unsigned *lock)
-{
-  return __uint_atomic_compare_and_swap(lock, 0, 1) ? 1 : 0;
-}
-
-static inline void __spinlock_release(volatile unsigned *lock)
-{
-  *lock = 0;
 }
 
 typedef struct asyncOpLink {
@@ -286,7 +203,20 @@ void cancelOperationList(List *list, List *finished, AsyncOpStatus status);
 
 void combinerAddAction(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy actionType);
 void combinerCall(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType);
-void combinerCallDelayed(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType, int needLock);
+
+typedef struct combinerCallArgs {
+  aioObjectRoot *object;
+  tag_t tag;
+  asyncOpRoot *op;
+  AsyncOpActionTy actionType;
+  int needLock;
+} combinerCallArgs;
+
+void combinerCallDelayed(combinerCallArgs *args, aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType, int needLock);
+
+
+asyncOpLink *opAllocateLink(asyncOpRoot *op);
+void opReleaseLink(asyncOpLink *link, AsyncOpStatus status);
 void opStart(asyncOpRoot *op);
 void opCancel(asyncOpRoot *op, tag_t generation, AsyncOpStatus status);
 
@@ -304,8 +234,6 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
                              AsyncFlags flags,
                              int opCode,
                              uint64_t timeout);
-
-void ioCoroutineCall(coroutineTy *coroutine);
 
 // Must be thread-safe
 int addToExecuteQueue(aioObjectRoot *object, asyncOpRoot *op, int isWriteQueue);
