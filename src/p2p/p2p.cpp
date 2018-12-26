@@ -35,7 +35,7 @@ void p2pPeer::checkTimeout()
   }  
 }
 
-void p2pPeer::clientReceiver(int status, p2pConnection *connection, p2pHeader header, void *arg)
+void p2pPeer::clientReceiver(AsyncOpStatus status, p2pConnection *connection, p2pHeader header, void *arg)
 {
   p2pPeer *peer = (p2pPeer*)arg;
   
@@ -65,20 +65,20 @@ void p2pPeer::clientReceiver(int status, p2pConnection *connection, p2pHeader he
         break;
     }
     
-    aiop2pRecv(peer->_base, peer->connection, 0, &peer->connection->stream, 65536, clientReceiver, peer);
+    aiop2pRecv(peer->connection, 0, &peer->connection->stream, 65536, clientReceiver, peer);
   } else {
     // try reconnect
     peer->connect();
   }
 }
 
-void p2pPeer::clientP2PConnectCb(int status, p2pConnection *connection, void *arg)
+void p2pPeer::clientP2PConnectCb(AsyncOpStatus status, p2pConnection *connection, void *arg)
 {
   p2pPeer *peer = (p2pPeer*)arg;
   if (status == aosSuccess) {
     peer->_connected = true;
     peer->_node->connectionEstablished(peer);   
-    aiop2pRecv(peer->_base, peer->connection, 0, &peer->connection->stream, 65536, clientReceiver, peer);
+    aiop2pRecv(peer->connection, 0, &peer->connection->stream, 65536, clientReceiver, peer);
   } else {
     peer->connectAfter(P2P_CONNECT_TIMEOUT);
   }
@@ -98,7 +98,7 @@ void p2pPeer::clientNetworkConnectCb(AsyncOpStatus status, aioObject *object, vo
     data.login = "pool";
     data.password = "pool";
     data.application = "pool_rpc";    
-    aiop2pConnect(peer->_base, peer->connection, P2P_CONNECT_TIMEOUT, &data, clientP2PConnectCb, peer);
+    aiop2pConnect(peer->connection, P2P_CONNECT_TIMEOUT, &data, clientP2PConnectCb, peer);
   } else if (status == aosTimeout) {
     // Try reconnect immediately
     peer->connect();
@@ -108,7 +108,7 @@ void p2pPeer::clientNetworkConnectCb(AsyncOpStatus status, aioObject *object, vo
   }
 }
 
-p2pErrorTy p2pPeer::nodeAcceptCb(int status, p2pConnection *connection, p2pConnectData *data, void *arg)
+p2pErrorTy p2pPeer::nodeAcceptCb(AsyncOpStatus status, p2pConnection *connection, p2pConnectData *data, void *arg)
 {
   p2pPeer *peer = (p2pPeer*)arg;
   return p2pOk;
@@ -116,14 +116,14 @@ p2pErrorTy p2pPeer::nodeAcceptCb(int status, p2pConnection *connection, p2pConne
 
 void p2pPeer::nodeMsgHandler()
 {
-  if (iop2pAccept(_base, connection, 3000000, nodeAcceptCb, this) != aosSuccess) {
+  if (iop2pAccept(connection, 3000000, nodeAcceptCb, this) != aosSuccess) {
     return;
   }
   
   _node->addPeer(this);
   bool valid = true;
   p2pHeader header;
-  while (valid && iop2pRecv(_base, connection, 0, &connection->stream, 65536, &header) != -1) {
+  while (valid && iop2pRecv(connection, 0, &connection->stream, 65536, &header) != -1) {
     switch (header.type) {
       case p2pMsgRequest : {
         if (p2pRequestCb *handler = _node->getRequestHandler()) {
@@ -290,7 +290,7 @@ bool p2pNode::ioRequest(void *data, size_t size, uint64_t timeout, void *out, si
       continue;
     
     uint32_t id = _lastId++;
-    aiop2pSend(peer->_base, peer->connection, timeout, data, p2pHeader(id, p2pMsgRequest, size), 0, 0);
+    aiop2pSend(peer->connection, timeout, data, p2pHeader(id, p2pMsgRequest, size), 0, 0);
     peer->addHandler(id, coroutineCurrent(), timeout, out, outSize);
     coroutineYield();    
     if (_lastActivePeer)
@@ -340,5 +340,5 @@ void p2pNode::sendSignal(void *data, size_t size)
 {
   p2pHeader header(p2pMsgSignal, size);  
   for (auto c: _connections)
-    aiop2pSend(_base, c->connection, 3000000, data, header, 0, 0);  
+    aiop2pSend(c->connection, 3000000, data, header, 0, 0);
 }

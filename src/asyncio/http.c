@@ -274,8 +274,7 @@ HTTPClient *httpsClientNew(asyncBase *base, SSLSocket *socket)
 
 void httpClientDelete(HTTPClient *client)
 {
-  cancelIo(&client->root);
-  objectDeleteRef(&client->root, 1);
+  objectDelete(&client->root);
 }
 
 void aioHttpConnect(HTTPClient *client,
@@ -284,7 +283,6 @@ void aioHttpConnect(HTTPClient *client,
                     httpConnectCb callback,
                     void *arg)
 {
-  objectAddRef(&client->root);
   HTTPOp *op = allocHttpOp(client, httpOpConnect, httpConnectStart, 0, callback, arg, usTimeout);
   op->address = *address;
   opStart(&op->root);
@@ -316,7 +314,6 @@ void aioHttpRequest(HTTPClient *client,
                     httpRequestCb callback,
                     void *arg)
 {
-  objectAddRef(&client->root);
   HTTPOp *op = allocHttpOp(client, httpOpConnect, httpRequestStart, parseCallback, callback, arg, usTimeout);
   if (client->isHttps)
     aioSslWrite(client->sslSocket, (void*)request, requestSize, afSerialized, 0, sslWriteCb, op);
@@ -327,7 +324,6 @@ void aioHttpRequest(HTTPClient *client,
 
 int ioHttpConnect(HTTPClient *client, const HostAddress *address, uint64_t usTimeout)
 {
-  objectAddRef(&client->root);
   combinerCallArgs ccArgs;
   coroReturnStruct r = {coroutineCurrent(), aosPending, 0};
   HTTPOp *op = allocHttpOp(client, httpOpConnect, httpConnectStart, 0, coroutineConnectCb, &r, usTimeout);
@@ -352,7 +348,6 @@ int ioHttpRequest(HTTPClient *client,
                   uint64_t usTimeout,
                   httpParseCb parseCallback)
 {
-  objectAddRef(&client->root);
   ioHttpRequestArg hrArgs;
   coroReturnStruct r = {coroutineCurrent(), aosPending, 0};
   HTTPOp *op = allocHttpOp(client, httpOpRequest, httpRequestStart, parseCallback, coroutineRequestCb, &r, usTimeout);

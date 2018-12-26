@@ -20,12 +20,6 @@
 #define TAG_STATUS_MASK ((((tag_t)1) << TAG_STATUS_SIZE)-1)
 #define TAG_GENERATION_MASK (~TAG_STATUS_MASK)
 
-//static __tls aioObjectRoot* dccObject;
-//static __tls tag_t dccTag;
-//static __tls asyncOpRoot *dccOp;
-//static __tls AsyncOpActionTy dccActionType;
-//static __tls int dccNeedLock;
-
 __tls List threadLocalQueue;
 __tls unsigned currentFinishedSync;
 __tls unsigned messageLoopThreadId;
@@ -188,6 +182,20 @@ int pageMapRemove(pageMap *map, asyncOpListLink *link)
   return removed;
 }
 
+static void objectIncrementReference(aioObjectRoot *object)
+{
+  __tag_atomic_fetch_and_add(&object->refs, 1);
+}
+
+static void objectDecrementReference(aioObjectRoot *object, tag_t count)
+{
+  if (__tag_atomic_fetch_and_add(&object->refs, (tag_t)0-count) == count) {
+    // try delete
+    if (__tag_atomic_fetch_and_add(&object->tag, TAG_DELETE) == 0)
+      object->base->methodImpl.combiner(object, TAG_DELETE, 0, aaNone);
+  }
+}
+
 void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op)
 {
   asyncOpListLink *timerLink = objectGet(asyncOpLinkListPool);
@@ -250,25 +258,10 @@ void cancelIo(aioObjectRoot *object)
     object->base->methodImpl.combiner(object, TAG_CANCELIO, 0, aaNone);
 }
 
-void objectAddRef(aioObjectRoot *object)
+void objectDelete(aioObjectRoot *object)
 {
-  __tag_atomic_fetch_and_add(&object->refs, 1);
-}
-
-void objectDeleteRef(aioObjectRoot *object, tag_t count)
-{
-#ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable:4146)
-#endif
-  if (__tag_atomic_fetch_and_add(&object->refs, -count) == count) {
-    // try delete 
-    if (__tag_atomic_fetch_and_add(&object->tag, TAG_DELETE) == 0)
-      object->base->methodImpl.combiner(object, TAG_DELETE, 0, aaNone);
-  }
-#ifdef _MSC_VER
-#pragma warning(pop)
-#endif
+  objectDecrementReference(object, 1);
+  cancelIo(object);
 }
 
 tag_t opGetGeneration(asyncOpRoot *op)
@@ -334,6 +327,7 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
   op->arg = arg;
   op->timeout = timeout;
   op->timerId = realtime ? op->timerId : 0;
+  objectIncrementReference(object);
   return op;
 }
 
@@ -371,7 +365,7 @@ void opRelease(asyncOpRoot *op, AsyncOpStatus status, List *executeList, List *f
     aioObjectRoot *object = op->object;
     objectRelease(op, op->poolId);
     op->finishMethod(op);
-    objectDeleteRef(object, 1);
+    objectDecrementReference(object, 1);
   }
 
 }
@@ -506,25 +500,7 @@ void executeThreadLocalQueue()
     aioObjectRoot *object = op->object;
     objectRelease(op, op->poolId);
     op->finishMethod(op);
-    objectDeleteRef(object, 1);
+    objectDecrementReference(object, 1);
     op = nextOp;
   }
-}
-
-int addToExecuteQueue(aioObjectRoot *object, asyncOpRoot *op, int isWriteQueue)
-{
-  return 0;
-}
-
-asyncOpRoot *removeFromExecuteQueue(asyncOpRoot *op)
-{
-  return 0;
-}
-
-static inline void startOperation(asyncOpRoot *op, asyncBase *previousOpBase)
-{
-}
-
-void finishOperation(asyncOpRoot *op, int status, int needRemoveFromTimeGrid)
-{
 }

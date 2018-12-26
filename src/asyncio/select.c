@@ -218,8 +218,8 @@ void selectPostEmptyOperation(asyncBase *base)
 
 static void finish(selectOp *op, AsyncOpStatus status)
 {
-  asyncOpUnlink(op);
-  finishOperation(&op->info.root, status, 1);
+//  asyncOpUnlink(op);
+//  finishOperation(&op->info.root, status, 1);
 }
 
 
@@ -396,7 +396,7 @@ void selectNextFinishedOperation(asyncBase *base)
           } else {
             if (op->object->type != ioObjectUserDefined)
               asyncOpUnlink((selectOp*)op);
-            finishOperation(op, aosTimeout, 0);
+//            finishOperation(op, aosTimeout, 0);
           }
         }
       }

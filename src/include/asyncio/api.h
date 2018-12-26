@@ -187,8 +187,9 @@ void initObjectRoot(aioObjectRoot *object, asyncBase *base, IoObjectTy type, aio
 
 
 void cancelIo(aioObjectRoot *object);
-void objectAddRef(aioObjectRoot *object);
-void objectDeleteRef(aioObjectRoot *object, tag_t count);
+void objectDelete(aioObjectRoot *object);
+//void objectIncrementReference(aioObjectRoot *object);
+//void objectDecrementReference(aioObjectRoot *object, tag_t count);
 
 tag_t opGetGeneration(asyncOpRoot *op);
 AsyncOpStatus opGetStatus(asyncOpRoot *op);
@@ -214,7 +215,6 @@ typedef struct combinerCallArgs {
 
 void combinerCallDelayed(combinerCallArgs *args, aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType, int needLock);
 
-
 asyncOpLink *opAllocateLink(asyncOpRoot *op);
 void opReleaseLink(asyncOpLink *link, AsyncOpStatus status);
 void opStart(asyncOpRoot *op);
@@ -234,12 +234,6 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
                              AsyncFlags flags,
                              int opCode,
                              uint64_t timeout);
-
-// Must be thread-safe
-int addToExecuteQueue(aioObjectRoot *object, asyncOpRoot *op, int isWriteQueue);
-void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op);
-asyncOpRoot *removeFromExecuteQueue(asyncOpRoot *op);
-void finishOperation(asyncOpRoot *op, int status, int needRemoveFromTimeGrid);
 
 #ifdef __cplusplus
 }

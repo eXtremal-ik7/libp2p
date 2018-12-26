@@ -223,8 +223,7 @@ SSLSocket *sslSocketNew(asyncBase *base)
 
 void sslSocketDelete(SSLSocket *socket)
 {
-  cancelIo(&socket->root);
-  objectDeleteRef(&socket->root, 1);
+  objectDelete(&socket->root);
 }
 
 socketTy sslGetSocket(const SSLSocket *socket)
@@ -247,7 +246,6 @@ void aioSslConnect(SSLSocket *socket,
                    sslConnectCb callback,
                    void *arg)
 {
-  objectAddRef(&socket->root);
   SSL_set_connect_state(socket->ssl);
   SSLOp *newOp = allocSSLOp(socket, sslConnectStart, callback, arg, 0, 0, afNone, sslOpConnect, usTimeout);
   newOp->address = *address;
@@ -271,7 +269,6 @@ void aioSslRead(SSLSocket *socket,
                 sslCb callback,
                 void *arg)
 {
-  objectAddRef(&socket->root);
   SSLOp *newOp = allocSSLOp(socket, sslReadStart, callback, arg, buffer, size, afNone, sslOpRead, usTimeout);
   newOp->state = sslStReadNewFrame;
   opStart(&newOp->root);
@@ -297,14 +294,12 @@ void aioSslWrite(SSLSocket *socket,
                  sslCb callback,
                  void *arg)
 {
-  objectAddRef(&socket->root);
   SSLOp *newOp = allocSSLOp(socket, sslWriteStart, callback, arg, (void*)buffer, size, afNone, sslOpWrite, usTimeout);
   opStart(&newOp->root);
 }
 
 int ioSslConnect(SSLSocket *socket, const HostAddress *address, uint64_t usTimeout)
 {
-  objectAddRef(&socket->root);
   combinerCallArgs ccArgs;
   coroReturnStruct r = {coroutineCurrent(), aosPending, 0};
   SSL_set_connect_state(socket->ssl);
@@ -318,7 +313,6 @@ int ioSslConnect(SSLSocket *socket, const HostAddress *address, uint64_t usTimeo
 
 ssize_t ioSslRead(SSLSocket *socket, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-  objectAddRef(&socket->root);
   combinerCallArgs ccArgs;
   coroReturnStruct r = {coroutineCurrent(), aosPending, 0};
   SSLOp *op = allocSSLOp(socket, sslReadStart, coroutineCb, &r, buffer, size, afNone, sslOpRead, usTimeout);
@@ -330,7 +324,6 @@ ssize_t ioSslRead(SSLSocket *socket, void *buffer, size_t size, AsyncFlags flags
 
 ssize_t ioSslWrite(SSLSocket *socket, const void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-  objectAddRef(&socket->root);
   combinerCallArgs ccArgs;
   coroReturnStruct r = {coroutineCurrent(), aosPending, 0};
   SSLOp *op = allocSSLOp(socket, sslWriteStart, coroutineCb, &r, (void*)buffer, size, afNone, sslOpWrite, usTimeout);
