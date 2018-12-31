@@ -22,18 +22,22 @@ static inline AsyncOpStatus p2pMakeStatus(p2pStatusTy status) {
 
 typedef p2pErrorTy p2pAcceptCb(AsyncOpStatus, p2pConnection*, p2pConnectData*, void*);
 typedef void p2pConnectCb(AsyncOpStatus, p2pConnection*, void*);
-typedef void p2pCb(AsyncOpStatus, p2pConnection*, p2pHeader, void*);
+typedef void p2preadCb(AsyncOpStatus, p2pConnection*, p2pHeader, void*, void*);
+typedef void p2preadStreamCb(AsyncOpStatus, p2pConnection*, p2pHeader, p2pStream*, void*);
+typedef void p2pwriteCb(AsyncOpStatus, p2pConnection*, p2pHeader, void*);
 
 struct p2pOp {
   asyncOpRoot root;
   AsyncOpStatus lastError;
-  int state;  
+  int state;
+  int rwState;
   union {
     void *buffer;
     p2pStream *stream;
   };
   size_t bufferSize;
 
+  HostAddress address;
   p2pHeader header;  
   p2pConnectData connectMsg;
 };
@@ -53,34 +57,36 @@ void aiop2pAccept(p2pConnection *connection,
                   void *arg);
 
 void aiop2pConnect(p2pConnection *connection,
-                   uint64_t timeout,
+                   const HostAddress *address,
                    p2pConnectData *data,
+                   uint64_t timeout,
                    p2pConnectCb *callback,
                    void *arg);
   
-void aiop2pRecv(p2pConnection *connection,
-                uint64_t timeout,
-                p2pStream *stream,
-                size_t maxMsgSize,
-                p2pCb *callback,
-                void *arg);
+void aiop2pRecvStream(p2pConnection *connection,
+                      p2pStream &stream,
+                      size_t maxMsgSize,
+                      uint64_t timeout,
+                      p2preadStreamCb *callback,
+                      void *arg);
 
 void aiop2pRecv(p2pConnection *connection,
-                uint64_t timeout,
                 void *buffer,
                 size_t bufferSize,
-                p2pCb *callback,
+                uint64_t timeout,
+                p2preadCb *callback,
                 void *arg);
 
 void aiop2pSend(p2pConnection *connection,
-                uint64_t timeout,
-                void *data,
+                const void *data,
                 p2pHeader header,
-                p2pCb *callback,
+                uint64_t timeout,
+                p2pwriteCb *callback,
                 void *arg);
 
 int iop2pAccept(p2pConnection *connection, uint64_t timeout, p2pAcceptCb *callback, void *arg);
-int iop2pConnect(p2pConnection *connection, uint64_t timeout, p2pConnectData *data);
-bool iop2pSend(p2pConnection *connection, uint64_t timeout, void *data, uint32_t id, uint32_t type, size_t size);
-ssize_t iop2pRecv(p2pConnection *connection, uint64_t timeout, void *buffer, size_t bufferSize, p2pHeader *header);
-ssize_t iop2pRecv(p2pConnection *connection, uint64_t timeout, p2pStream *stream, size_t maxMsgSize, p2pHeader *header);
+int iop2pConnect(p2pConnection *connection, const HostAddress *address, uint64_t timeout, p2pConnectData *data);
+ssize_t iop2pSend(p2pConnection *connection, const void *data, uint32_t id, uint32_t type, size_t size, uint64_t timeout);
+ssize_t iop2pRecvStream(p2pConnection *connection, p2pStream &stream, size_t maxMsgSize, p2pHeader *header, uint64_t timeout);
+ssize_t iop2pRecv(p2pConnection *connection, void *buffer, size_t bufferSize, p2pHeader *header, uint64_t timeout);
+

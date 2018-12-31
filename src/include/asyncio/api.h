@@ -216,6 +216,7 @@ typedef struct combinerCallArgs {
 void combinerCallDelayed(combinerCallArgs *args, aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType, int needLock);
 
 asyncOpLink *opAllocateLink(asyncOpRoot *op);
+void opReleaseLinkOnly(asyncOpLink *link);
 void opReleaseLink(asyncOpLink *link, AsyncOpStatus status);
 void opStart(asyncOpRoot *op);
 void opCancel(asyncOpRoot *op, tag_t generation, AsyncOpStatus status);

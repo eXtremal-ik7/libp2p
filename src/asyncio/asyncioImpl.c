@@ -464,6 +464,11 @@ asyncOpLink *opAllocateLink(asyncOpRoot *op)
   return link;
 }
 
+void opReleaseLinkOnly(asyncOpLink *link)
+{
+  objectRelease(link, asyncOpLinkPool);
+}
+
 void opReleaseLink(asyncOpLink *link, AsyncOpStatus status)
 {
   asyncOpRoot *op = link->op;

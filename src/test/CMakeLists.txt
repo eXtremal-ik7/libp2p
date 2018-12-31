@@ -2,9 +2,9 @@ set(CMAKE_CXX_STANDARD 11)
 find_package(GTest REQUIRED)
 
 if (WIN32)
-  set(LIBRARIES asyncio-0.4 ws2_32 mswsock)
+  set(LIBRARIES asyncio-0.4 p2p ws2_32 mswsock)
 else()
-  set(LIBRARIES asyncio-0.4 pthread)
+  set(LIBRARIES asyncio-0.4 p2p pthread)
 endif()
 
 add_executable(unittest

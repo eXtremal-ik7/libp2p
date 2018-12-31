@@ -52,9 +52,8 @@ static void fiberInit(coroutineTy *coroutine, size_t stackSize)
   // EIP = fiberEntryPoint
   // ESP = stack + stackSize - 4
   // [ESP] = coroutine
-  void *stack;
-  posix_memalign(&stack, 16, stackSize);
-  uintptr_t *esp = ((uintptr_t*)stack) + (stackSize - 4)/sizeof(uintptr_t);
+  posix_memalign(&coroutine->stack, 16, stackSize);
+  uintptr_t *esp = ((uintptr_t*)coroutine->stack) + (stackSize - 4)/sizeof(uintptr_t);
   *esp = (uintptr_t)coroutine;
   coroutine->context.registers[CTX_EIP_INDEX] = (uintptr_t)fiberEntryPoint;
   coroutine->context.registers[CTX_ESP_INDEX] = (uintptr_t)esp;
@@ -64,9 +63,8 @@ static void fiberInit(coroutineTy *coroutine, size_t stackSize)
   // RIP = fiberEntryPoint
   // RSP = stack + stackSize - 128 - 16
   // RDI = coroutine
-  void *stack;
-  posix_memalign(&stack, 32, stackSize);
-  uintptr_t *rsp = ((uintptr_t*)stack) + (stackSize - 128 - 8)/sizeof(uintptr_t);
+  posix_memalign(&coroutine->stack, 32, stackSize);
+  uintptr_t *rsp = ((uintptr_t*)coroutine->stack) + (stackSize - 128 - 8)/sizeof(uintptr_t);
   coroutine->context.registers[CTX_RIP_INDEX] = (uintptr_t)fiberEntryPoint;
   coroutine->context.registers[CTX_RSP_INDEX] = (uintptr_t)rsp;
   x86InitFPU(&coroutine->context);

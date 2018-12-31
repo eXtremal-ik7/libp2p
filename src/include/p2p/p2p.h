@@ -26,7 +26,7 @@ private:
   static void clientNetworkWaitEnd(aioUserEvent *event, void *arg);
   static void clientNetworkConnectCb(AsyncOpStatus status, aioObject *object, void *arg);
   static void clientP2PConnectCb(AsyncOpStatus status, p2pConnection *connection, void *arg);
-  static void clientReceiver(AsyncOpStatus status, p2pConnection *connection, p2pHeader header, void *arg);
+  static void clientReceiver(AsyncOpStatus status, p2pConnection *connection, p2pHeader header, p2pStream *stream, void *arg);
   static void checkTimeout(aioUserEvent *event, void *arg) { ((p2pPeer*)arg)->checkTimeout(); }
   static p2pErrorTy nodeAcceptCb(AsyncOpStatus status, p2pConnection *connection, p2pConnectData *data, void *arg);
   static void nodeMsgHandlerEP(void *peer) { ((p2pPeer*)peer)->nodeMsgHandler(); }

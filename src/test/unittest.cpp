@@ -1,6 +1,7 @@
 #include "asyncio/asyncio.h"
 #include "asyncio/coroutine.h"
 #include "asyncio/socket.h"
+#include "p2p/p2pproto.h"
 #include <gtest/gtest.h>
 
 const unsigned gPort = 65333;
@@ -12,10 +13,12 @@ struct TestContext {
   aioObject *clientSocket;
   uint8_t clientBuffer[128];
   uint8_t serverBuffer[128];
+  p2pStream serverStream;
   asyncBase *base;
   int state;
+  int state2;
   bool success;
-  TestContext(asyncBase *baseArg) : base(baseArg), state(0), success(false) {}
+  TestContext(asyncBase *baseArg) : base(baseArg), state(0), state2(0), success(false) {}
 };
 
 aioObject *startTCPServer(asyncBase *base, aioAcceptCb callback, void *arg, unsigned port)
@@ -34,7 +37,8 @@ aioObject *startTCPServer(asyncBase *base, aioAcceptCb callback, void *arg, unsi
     return 0;
   
   aioObject *object = newSocketIo(base, acceptSocket);
-  aioAccept(object, 333000, callback, arg);
+  if (callback)
+    aioAccept(object, 333000, callback, arg);
   return object;
 }
 
@@ -70,7 +74,8 @@ aioObject *initializeTCPClient(asyncBase *base, aioConnectCb callback, void *arg
   address.ipv4 = inet_addr("127.0.0.1");
   address.port = htons(port);    
   aioObject *object = newSocketIo(base, connectSocket);
-  aioConnect(object, &address, 333000, callback, arg);
+  if (callback)
+    aioConnect(object, &address, 333000, callback, arg);
   return object;
 }
 
@@ -374,6 +379,317 @@ TEST(coroutine, nested)
   while (!coroutineCall(coro))
     continue;
   ASSERT_EQ(x, 3);
+}
+
+p2pErrorTy p2pproto_ca_check(AsyncOpStatus status, p2pConnection *connection, p2pConnectData *data, void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+  if (data) {
+    EXPECT_EQ(ctx->state, 0);
+    EXPECT_STREQ(data->login, "p2pproto_ca_login");
+    EXPECT_STREQ(data->password, "p2pproto_ca_password");
+    EXPECT_STREQ(data->application, "p2pproto_ca_application");
+    ctx->state = 1;
+  } else {
+    EXPECT_EQ(status, aosSuccess);
+    EXPECT_EQ(ctx->state, 1);
+    ctx->state = 2;
+    p2pConnectionDelete(connection);
+  }
+
+  return p2pOk;
+}
+
+void p2pproto_ca_accept(AsyncOpStatus status, aioObject *listener, HostAddress client, socketTy acceptSocket, void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+  if (status == aosSuccess) {
+    p2pConnection *connection = p2pConnectionNew(newSocketIo(ctx->base, acceptSocket));
+    aiop2pAccept(connection, 1000000, p2pproto_ca_check, ctx);
+  }
+}
+
+void p2pproto_ca_connect(AsyncOpStatus status, p2pConnection *connection, void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+  if (status == aosSuccess)
+    ctx->state2 = 1;
+  p2pConnectionDelete(connection);
+  postQuitOperation(ctx->base);
+}
+
+TEST(p2pproto, connect_accept)
+{
+  TestContext context(gBase);
+  context.serverSocket = startTCPServer(gBase, p2pproto_ca_accept, &context, gPort);
+  context.clientSocket = initializeTCPClient(gBase, nullptr, &context, gPort);
+  ASSERT_NE(context.serverSocket, nullptr);
+  ASSERT_NE(context.clientSocket, nullptr);
+
+  HostAddress address;
+  p2pConnectData data;
+  address.family = AF_INET;
+  address.ipv4 = inet_addr("127.0.0.1");
+  address.port = htons(gPort);
+  data.login = "p2pproto_ca_login";
+  data.password = "p2pproto_ca_password";
+  data.application = "p2pproto_ca_application";
+  p2pConnection *connection = p2pConnectionNew(context.clientSocket);
+  aiop2pConnect(connection, &address, &data, 1000000, p2pproto_ca_connect, &context);
+  asyncLoop(gBase);
+  deleteAioObject(context.serverSocket);
+  ASSERT_EQ(context.state, 2);
+  ASSERT_EQ(context.state2, 1);
+}
+
+void p2pproto_rw_read1(AsyncOpStatus status, p2pConnection *connection, p2pHeader header, void *data, void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+  if (status == aosSuccess) {
+    EXPECT_STREQ((const char*)data, "msg1");
+    ctx->state++;
+    if (ctx->state == 4) {
+      p2pConnectionDelete(connection);
+      postQuitOperation(ctx->base);
+    }
+  } else {
+    p2pConnectionDelete(connection);
+    postQuitOperation(ctx->base);
+  }
+}
+
+void p2pproto_rw_read2(AsyncOpStatus status, p2pConnection *connection, p2pHeader header, p2pStream *stream, void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+  if (status == aosSuccess) {
+    EXPECT_STREQ((const char*)stream->data(), "msg2");
+    ctx->state++;
+    if (ctx->state == 4) {
+      p2pConnectionDelete(connection);
+      postQuitOperation(ctx->base);
+    }
+  } else {
+    p2pConnectionDelete(connection);
+    postQuitOperation(ctx->base);
+  }
+}
+
+p2pErrorTy p2pproto_rw_check(AsyncOpStatus status, p2pConnection *connection, p2pConnectData *data, void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+  if (data) {
+    EXPECT_EQ(ctx->state, 0);
+    EXPECT_STREQ(data->login, "p2pproto_rw_login");
+    EXPECT_STREQ(data->password, "p2pproto_rw_password");
+    EXPECT_STREQ(data->application, "p2pproto_rw_application");
+    ctx->state = 1;
+  } else {
+    EXPECT_EQ(status, aosSuccess);
+    EXPECT_EQ(ctx->state, 1);
+    ctx->state = 2;
+    aiop2pRecv(connection, ctx->serverBuffer, 128, 1000000, p2pproto_rw_read1, ctx);
+    aiop2pRecvStream(connection, ctx->serverStream, 128, 1000000, p2pproto_rw_read2, ctx);
+  }
+
+  return p2pOk;
+}
+
+void p2pproto_rw_accept(AsyncOpStatus status, aioObject *listener, HostAddress client, socketTy acceptSocket, void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+  if (status == aosSuccess) {
+    p2pConnection *connection = p2pConnectionNew(newSocketIo(ctx->base, acceptSocket));
+    aiop2pAccept(connection, 1000000, p2pproto_rw_check, ctx);
+  }
+}
+
+void p2pproto_rw_connect(AsyncOpStatus status, p2pConnection *connection, void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+  if (status == aosSuccess) {
+    ctx->state2 = 1;
+    aiop2pSend(connection, "msg1", p2pHeader(1, 5), 1000000, nullptr, nullptr);
+    aiop2pSend(connection, "msg2", p2pHeader(1, 5), 1000000, [](AsyncOpStatus status, p2pConnection *connection, p2pHeader, void *arg) {
+      TestContext *ctx = (TestContext*)arg;
+      EXPECT_EQ(status, aosSuccess);
+      EXPECT_EQ(ctx->state2, 1);
+      ctx->state2 = 2;
+    }, ctx);
+  } else {
+    p2pConnectionDelete(connection);
+    postQuitOperation(ctx->base);
+  }
+}
+
+TEST(p2pproto, read_write)
+{
+  TestContext context(gBase);
+  context.serverSocket = startTCPServer(gBase, p2pproto_rw_accept, &context, gPort);
+  context.clientSocket = initializeTCPClient(gBase, nullptr, &context, gPort);
+  ASSERT_NE(context.serverSocket, nullptr);
+  ASSERT_NE(context.clientSocket, nullptr);
+
+  HostAddress address;
+  p2pConnectData data;
+  address.family = AF_INET;
+  address.ipv4 = inet_addr("127.0.0.1");
+  address.port = htons(gPort);
+  data.login = "p2pproto_rw_login";
+  data.password = "p2pproto_rw_password";
+  data.application = "p2pproto_rw_application";
+  p2pConnection *connection = p2pConnectionNew(context.clientSocket);
+  aiop2pConnect(connection, &address, &data, 1000000, p2pproto_rw_connect, &context);
+  asyncLoop(gBase);
+  p2pConnectionDelete(connection);
+  deleteAioObject(context.serverSocket);
+  ASSERT_EQ(context.state, 4);
+  ASSERT_EQ(context.state2, 2);
+}
+
+p2pErrorTy p2pproto_coro_ca_check(AsyncOpStatus status, p2pConnection *connection, p2pConnectData *data, void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+  if (data) {
+    EXPECT_EQ(ctx->state, 0);
+    EXPECT_STREQ(data->login, "p2pproto_coro_ca_login");
+    EXPECT_STREQ(data->password, "p2pproto_coro_ca_password");
+    EXPECT_STREQ(data->application, "p2pproto_coro_ca_application");
+    ctx->state = 1;
+  }
+
+  return p2pOk;
+}
+
+void p2pproto_coro_ca_listener(void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+
+  socketTy socket = ioAccept(ctx->serverSocket, 1000000);
+  if (socket >= 0) {
+    p2pConnection *connection = p2pConnectionNew(newSocketIo(ctx->base, socket));
+    if (iop2pAccept(connection, 1000000, p2pproto_coro_ca_check, ctx) == 0) {
+      EXPECT_EQ(ctx->state, 1);
+      ctx->state = 2;
+      p2pConnectionDelete(connection);
+    }
+  }
+}
+
+void p2pproto_coro_ca_client(void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+  HostAddress address;
+  p2pConnectData data;
+  address.family = AF_INET;
+  address.ipv4 = inet_addr("127.0.0.1");
+  address.port = htons(gPort);
+  data.login = "p2pproto_coro_ca_login";
+  data.password = "p2pproto_coro_ca_password";
+  data.application = "p2pproto_coro_ca_application";
+  p2pConnection *connection = p2pConnectionNew(ctx->clientSocket);
+  if (iop2pConnect(connection, &address, 1000000, &data) == 0)
+    ctx->state2 = 1;
+  p2pConnectionDelete(connection);
+  postQuitOperation(ctx->base);
+}
+
+TEST(p2pproto, coro_connect_accept)
+{
+  TestContext context(gBase);
+  context.serverSocket = startTCPServer(gBase, nullptr, &context, gPort);
+  context.clientSocket = initializeTCPClient(gBase, nullptr, &context, gPort);
+  ASSERT_NE(context.serverSocket, nullptr);
+  ASSERT_NE(context.clientSocket, nullptr);
+  coroutineTy *listenerCoro = coroutineNew(p2pproto_coro_ca_listener, &context, 0x10000);
+  coroutineTy *clientCoro = coroutineNew(p2pproto_coro_ca_client, &context, 0x10000);
+  coroutineCall(listenerCoro);
+  coroutineCall(clientCoro);
+  asyncLoop(gBase);
+  deleteAioObject(context.serverSocket);
+  ASSERT_EQ(context.state, 2);
+  ASSERT_EQ(context.state2, 1);
+}
+
+p2pErrorTy p2pproto_coro_rw_check(AsyncOpStatus status, p2pConnection *connection, p2pConnectData *data, void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+  if (data) {
+    EXPECT_EQ(ctx->state, 0);
+    EXPECT_STREQ(data->login, "p2pproto_coro_rw_login");
+    EXPECT_STREQ(data->password, "p2pproto_coro_rw_password");
+    EXPECT_STREQ(data->application, "p2pproto_coro_rw_application");
+    ctx->state = 1;
+  }
+
+  return p2pOk;
+}
+
+void p2pproto_coro_rw_listener(void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+
+  socketTy socket = ioAccept(ctx->serverSocket, 1000000);
+  if (socket >= 0) {
+    p2pConnection *connection = p2pConnectionNew(newSocketIo(ctx->base, socket));
+    if (iop2pAccept(connection, 1000000, p2pproto_coro_rw_check, ctx) == 0) {
+      EXPECT_EQ(ctx->state, 1);
+      ctx->state = 2;
+      p2pStream stream;
+      p2pHeader header;
+      if (iop2pRecvStream(connection, stream, 4096, &header, 1000000) > 0) {
+        EXPECT_EQ(header.id, 0);
+        EXPECT_STREQ((char*)stream.data(), "msg1");
+        ctx->state = 3;
+        if (iop2pRecv(connection, ctx->clientBuffer, 128, &header, 1000000) > 0) {
+          EXPECT_EQ(header.id, 1);
+          EXPECT_STREQ((char*)ctx->clientBuffer, "msg2");
+          ctx->state = 4;
+        }
+      }
+    }
+
+    p2pConnectionDelete(connection);
+  }
+}
+
+void p2pproto_coro_rw_client(void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+  HostAddress address;
+  p2pConnectData data;
+  address.family = AF_INET;
+  address.ipv4 = inet_addr("127.0.0.1");
+  address.port = htons(gPort);
+  data.login = "p2pproto_coro_rw_login";
+  data.password = "p2pproto_coro_rw_password";
+  data.application = "p2pproto_coro_rw_application";
+  p2pConnection *connection = p2pConnectionNew(ctx->clientSocket);
+  if (iop2pConnect(connection, &address, 1000000, &data) == 0) {
+    ctx->state2 = 1;
+    if (iop2pSend(connection, "msg1", 0, p2pMsgRequest, 5, 1000000) > 0 &&
+        iop2pSend(connection, "msg2", 1, p2pMsgRequest, 5, 1000000) > 0) {
+      ctx->state2 = 2;
+    }
+  }
+  p2pConnectionDelete(connection);
+  postQuitOperation(ctx->base);
+}
+
+TEST(p2pproto, coro_read_write)
+{
+  TestContext context(gBase);
+  context.serverSocket = startTCPServer(gBase, nullptr, &context, gPort);
+  context.clientSocket = initializeTCPClient(gBase, nullptr, &context, gPort);
+  ASSERT_NE(context.serverSocket, nullptr);
+  ASSERT_NE(context.clientSocket, nullptr);
+  coroutineTy *listenerCoro = coroutineNew(p2pproto_coro_rw_listener, &context, 0x10000);
+  coroutineTy *clientCoro = coroutineNew(p2pproto_coro_rw_client, &context, 0x10000);
+  coroutineCall(listenerCoro);
+  coroutineCall(clientCoro);
+  asyncLoop(gBase);
+  deleteAioObject(context.serverSocket);
+  ASSERT_EQ(context.state, 4);
+  ASSERT_EQ(context.state2, 2);
 }
 
 int main(int argc, char **argv)
