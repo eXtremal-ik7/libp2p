@@ -29,7 +29,6 @@ aioObject *startTCPServer(asyncBase *base, aioAcceptCb callback, void *arg, unsi
   address.ipv4 = INADDR_ANY;
   address.port = htons(port);  
   socketTy acceptSocket = socketCreate(AF_INET, SOCK_STREAM, IPPROTO_TCP, 1);
-  socketReuseAddr(acceptSocket);
   if (socketBind(acceptSocket, &address) != 0)
     return 0;
   
@@ -50,7 +49,6 @@ aioObject *startUDPServer(asyncBase *base, aioReadMsgCb callback, void *arg, voi
   address.ipv4 = INADDR_ANY;
   address.port = htons(port);  
   socketTy acceptSocket = socketCreate(AF_INET, SOCK_DGRAM, IPPROTO_UDP, 1);
-  socketReuseAddr(acceptSocket);
   if (socketBind(acceptSocket, &address) != 0)
     return 0;
   
@@ -201,22 +199,28 @@ TEST(basic, test_tcp_rw)
 void test_udp_rw_client_readcb(AsyncOpStatus status, aioObject *socket, HostAddress address, size_t transferred, void *arg)
 {
   TestContext *ctx = (TestContext*)arg;
-  if (status == aosSuccess && transferred == 6 && ctx->state == 0) {
-    ctx->success = memcmp(ctx->clientBuffer, "234567", 6) == 0;
+  if (status == aosSuccess && transferred == 6 && ctx->state == 1) {
+    if (memcmp(ctx->clientBuffer, "234567", 6) == 0)
+      ctx->state++;
   } 
 
-  deleteAioObject(socket);    
-  postQuitOperation(ctx->base);
+  deleteAioObject(socket);
+  deleteAioObject(ctx->serverSocket);
 }
 
 void test_udp_rw_server_readcb(AsyncOpStatus status, aioObject *socket, HostAddress address, size_t transferred, void *arg)
 {
   TestContext *ctx = (TestContext*)arg;
   if (status == aosSuccess) {
+    ctx->state++;
     for (size_t i = 0; i < transferred; i++)
       ctx->serverBuffer[i]++;
     aioWriteMsg(socket, &address, ctx->serverBuffer, transferred, afNone, 0, 0, 0);
     aioReadMsg(socket, ctx->serverBuffer, sizeof(ctx->serverBuffer), afNone, 1000000, test_udp_rw_server_readcb, ctx);
+  } else {
+    if (status == aosCanceled)
+      ctx->success = (ctx->state == 2);
+    postQuitOperation(ctx->base);
   }
 }
 
@@ -235,7 +239,6 @@ TEST(basic, test_udp_rw)
   aioWriteMsg(context.clientSocket, &address, (void*)"123456", 6, afNone, 0, 0, 0);
   aioReadMsg(context.clientSocket, context.clientBuffer, sizeof(context.clientBuffer), afNone, 1000000, test_udp_rw_client_readcb, &context);
   asyncLoop(gBase);
-  deleteAioObject(context.serverSocket);
   ASSERT_TRUE(context.success);
 }
 
@@ -274,12 +277,14 @@ void test_delete_object_eventcb(aioUserEvent *event, void *arg)
 void test_delete_object_readcb(AsyncOpStatus status, aioObject *socket, HostAddress address, size_t transferred, void *arg)
 {
   TestContext *ctx = (TestContext*)arg;
-  if (status != aosSuccess) {
+  if (status == aosCanceled) {
     ctx->state++;
     if (ctx->state == 1000) {
       ctx->success = true;
       postQuitOperation(ctx->base);
     }
+  } else {
+    postQuitOperation(ctx->base);
   }
 }
 
@@ -290,7 +295,7 @@ TEST(basic, test_delete_object)
   ASSERT_NE(context.serverSocket, nullptr);
   
   for (int i = 0; i < 1000; i++)
-    aioReadMsg(context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afNone, 10*1000000, test_delete_object_readcb, &context);
+    aioReadMsg(context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afNone, 3*1000000, test_delete_object_readcb, &context);
   
   aioUserEvent *event = newUserEvent(gBase, test_delete_object_eventcb, &context);
   userEventStartTimer(event, 5000, 1);
