@@ -14,9 +14,11 @@
 
 static unsigned gDebug = 0;
 static uint16_t gPortBase = 63300;
-#ifdef OS_WINDOWS
+#if defined(OS_WINDOWS)
 // Windows have low performance loopback interface
 static uint64_t gTotalPacketNum = 640000ULL;
+#elif defined(OS_DARWIN)
+static uint64_t gTotalPacketNum = 1600000ULL;
 #else
 static uint64_t gTotalPacketNum = 4000000ULL;
 #endif

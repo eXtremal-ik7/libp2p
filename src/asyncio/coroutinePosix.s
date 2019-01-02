@@ -5,12 +5,14 @@
 
 .text
 .globl switchContext
+.globl _switchContext
 #if defined(__APPLE__)
 #else
 .type  switchContext, @function
 #endif
 .intel_syntax noprefix
 switchContext:
+_switchContext:
 
 /*
   context+0x00 = EIP
@@ -105,12 +107,14 @@ switchContext:
 #endif
 
 .globl x86InitFPU
+.globl _x86InitFPU
 #if defined(__APPLE__)
 #else
 .type  x86InitFPU, @function
 #endif
 .intel_syntax noprefix
 x86InitFPU:
+_x86InitFPU:
 #ifdef __i386__
     mov     eax, DWORD PTR [esp+0x4]
     fnstcw  WORD  PTR [eax+0x18]
