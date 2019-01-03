@@ -184,10 +184,11 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
   asyncOpRoot *newOp = op;
   int hasFd = (object->type == ioObjectDevice) ||
               (object->type == ioObjectSocket);
-  int hasReadOp = object->readQueue.head != 0;
-  int hasWriteOp = object->writeQueue.head != 0;
 
   while (currentTag) {
+    int hasReadOp = object->readQueue.head != 0;
+    int hasWriteOp = object->writeQueue.head != 0;
+
     if (currentTag & TAG_CANCELIO) {
       cancelOperationList(&object->readQueue, &threadLocalQueue, aosCanceled);
       cancelOperationList(&object->writeQueue, &threadLocalQueue, aosCanceled);
@@ -518,6 +519,8 @@ AsyncOpStatus kqueueAsyncReadMsg(asyncOpRoot *opptr)
     op->bytesTransferred = result;
     return aosSuccess;
   } else {
+    if (errno == EAGAIN)
+      return aosPending;
     if (errno == ENOMEM)
       return aosBufferTooSmall;
     else
