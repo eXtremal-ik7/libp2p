@@ -386,6 +386,15 @@ TEST(coroutine, nested)
   ASSERT_EQ(x, 3);
 }
 
+void p2pproto_ca_read(AsyncOpStatus status, p2pConnection *connection, p2pHeader header, void *data, void *arg)
+{
+  TestContext *ctx = (TestContext*)arg;
+  if (status == aosDisconnected && ctx->state2 == 2)
+    ctx->state = 3;
+  p2pConnectionDelete(connection);
+  postQuitOperation(ctx->base);
+}
+
 p2pErrorTy p2pproto_ca_check(AsyncOpStatus status, p2pConnection *connection, p2pConnectData *data, void *arg)
 {
   TestContext *ctx = (TestContext*)arg;
@@ -399,7 +408,7 @@ p2pErrorTy p2pproto_ca_check(AsyncOpStatus status, p2pConnection *connection, p2
     EXPECT_EQ(status, aosSuccess);
     EXPECT_EQ(ctx->state, 1);
     ctx->state = 2;
-    p2pConnectionDelete(connection);
+    aiop2pRecv(connection, ctx->serverBuffer, 128, 1000000, p2pproto_ca_read, ctx);
   }
 
   return p2pOk;
@@ -420,7 +429,6 @@ void p2pproto_ca_connect(AsyncOpStatus status, p2pConnection *connection, void *
   if (status == aosSuccess)
     ctx->state2 = 1;
   p2pConnectionDelete(connection);
-  postQuitOperation(ctx->base);
 }
 
 TEST(p2pproto, connect_accept)
@@ -447,36 +455,40 @@ TEST(p2pproto, connect_accept)
   ASSERT_EQ(context.state2, 1);
 }
 
-void p2pproto_rw_read1(AsyncOpStatus status, p2pConnection *connection, p2pHeader header, void *data, void *arg)
+void p2pproto_rw_serverread(AsyncOpStatus status, p2pConnection *connection, p2pHeader header, p2pStream *stream, void *arg)
 {
   TestContext *ctx = (TestContext*)arg;
-  if (status == aosSuccess) {
-    EXPECT_STREQ((const char*)data, "msg1");
-    ctx->state++;
-    if (ctx->state == 4) {
-      p2pConnectionDelete(connection);
-      postQuitOperation(ctx->base);
-    }
+  ctx->state++;
+  if (ctx->state == 3 && status == aosSuccess) {
+    EXPECT_EQ(header.id, 222);
+    EXPECT_EQ(header.type, p2pMsgRequest);
+    EXPECT_EQ(header.size, 5);
+    EXPECT_STREQ((const char*)stream->data(), "msg1");
+    aiop2pSend(connection, "msg2", p2pHeader(222, p2pMsgResponse, 5), 1000000, 0, 0);
+    aiop2pRecvStream(connection, ctx->serverStream, 4096, 1000000, p2pproto_rw_serverread, ctx);
+    ctx->state = 4;
+  } else if (ctx->state == 4 && status == aosDisconnected) {
+    ctx->state = 5;
+    p2pConnectionDelete(connection);
+    postQuitOperation(ctx->base);
   } else {
     p2pConnectionDelete(connection);
     postQuitOperation(ctx->base);
   }
 }
 
-void p2pproto_rw_read2(AsyncOpStatus status, p2pConnection *connection, p2pHeader header, p2pStream *stream, void *arg)
+void p2pproto_rw_clientread(AsyncOpStatus status, p2pConnection *connection, p2pHeader header, void *data, void *arg)
 {
   TestContext *ctx = (TestContext*)arg;
-  if (status == aosSuccess) {
-    EXPECT_STREQ((const char*)stream->data(), "msg2");
-    ctx->state++;
-    if (ctx->state == 4) {
-      p2pConnectionDelete(connection);
-      postQuitOperation(ctx->base);
-    }
-  } else {
-    p2pConnectionDelete(connection);
-    postQuitOperation(ctx->base);
+  if (ctx->state2 == 1 && status == aosSuccess) {
+    EXPECT_EQ(header.id, 222);
+    EXPECT_EQ(header.type, p2pMsgResponse);
+    EXPECT_EQ(header.size, 5);
+    EXPECT_STREQ((const char*)data, "msg2");
+    ctx->state2 = 2;
   }
+
+  p2pConnectionDelete(connection);
 }
 
 p2pErrorTy p2pproto_rw_check(AsyncOpStatus status, p2pConnection *connection, p2pConnectData *data, void *arg)
@@ -492,8 +504,7 @@ p2pErrorTy p2pproto_rw_check(AsyncOpStatus status, p2pConnection *connection, p2
     EXPECT_EQ(status, aosSuccess);
     EXPECT_EQ(ctx->state, 1);
     ctx->state = 2;
-    aiop2pRecv(connection, ctx->serverBuffer, 128, 1000000, p2pproto_rw_read1, ctx);
-    aiop2pRecvStream(connection, ctx->serverStream, 128, 1000000, p2pproto_rw_read2, ctx);
+    aiop2pRecvStream(connection, ctx->serverStream, 128, 1000000, p2pproto_rw_serverread, ctx);
   }
 
   return p2pOk;
@@ -513,13 +524,8 @@ void p2pproto_rw_connect(AsyncOpStatus status, p2pConnection *connection, void *
   TestContext *ctx = (TestContext*)arg;
   if (status == aosSuccess) {
     ctx->state2 = 1;
-    aiop2pSend(connection, "msg1", p2pHeader(1, 5), 1000000, nullptr, nullptr);
-    aiop2pSend(connection, "msg2", p2pHeader(1, 5), 1000000, [](AsyncOpStatus status, p2pConnection *connection, p2pHeader, void *arg) {
-      TestContext *ctx = (TestContext*)arg;
-      EXPECT_EQ(status, aosSuccess);
-      EXPECT_EQ(ctx->state2, 1);
-      ctx->state2 = 2;
-    }, ctx);
+    aiop2pSend(connection, "msg1", p2pHeader(222, p2pMsgRequest, 5), 1000000, nullptr, nullptr);
+    aiop2pRecv(connection, ctx->clientBuffer, 128, 1000000, p2pproto_rw_clientread, ctx);
   } else {
     p2pConnectionDelete(connection);
     postQuitOperation(ctx->base);
@@ -545,9 +551,8 @@ TEST(p2pproto, read_write)
   p2pConnection *connection = p2pConnectionNew(context.clientSocket);
   aiop2pConnect(connection, &address, &data, 1000000, p2pproto_rw_connect, &context);
   asyncLoop(gBase);
-  p2pConnectionDelete(connection);
   deleteAioObject(context.serverSocket);
-  ASSERT_EQ(context.state, 4);
+  ASSERT_EQ(context.state, 5);
   ASSERT_EQ(context.state2, 2);
 }
 
@@ -573,9 +578,12 @@ void p2pproto_coro_ca_listener(void *arg)
   if (socket >= 0) {
     p2pConnection *connection = p2pConnectionNew(newSocketIo(ctx->base, socket));
     if (iop2pAccept(connection, 1000000, p2pproto_coro_ca_check, ctx) == 0) {
+      p2pHeader header;
       EXPECT_EQ(ctx->state, 1);
-      ctx->state = 2;
+      if (iop2pRecv(connection, ctx->serverBuffer, 128, &header, 3000000) == -aosDisconnected)
+        ctx->state = 2;
       p2pConnectionDelete(connection);
+      postQuitOperation(ctx->base);
     }
   }
 }
@@ -595,7 +603,6 @@ void p2pproto_coro_ca_client(void *arg)
   if (iop2pConnect(connection, &address, 1000000, &data) == 0)
     ctx->state2 = 1;
   p2pConnectionDelete(connection);
-  postQuitOperation(ctx->base);
 }
 
 TEST(p2pproto, coro_connect_accept)
@@ -642,19 +649,24 @@ void p2pproto_coro_rw_listener(void *arg)
       p2pStream stream;
       p2pHeader header;
       if (iop2pRecvStream(connection, stream, 4096, &header, 1000000) > 0) {
-        EXPECT_EQ(header.id, 0);
+        EXPECT_EQ(header.id, 333);
+        EXPECT_EQ(header.type, p2pMsgRequest);
+        EXPECT_EQ(header.size, 5);
         EXPECT_STREQ((char*)stream.data(), "msg1");
         ctx->state = 3;
-        if (iop2pRecv(connection, ctx->clientBuffer, 128, &header, 1000000) > 0) {
-          EXPECT_EQ(header.id, 1);
-          EXPECT_STREQ((char*)ctx->clientBuffer, "msg2");
+        if (iop2pSend(connection, "msg2", 333, p2pMsgResponse, 5, 1000000) == 5) {
           ctx->state = 4;
+          if (iop2pRecvStream(connection, stream, 4096, &header, 1000000) == -aosDisconnected) {
+            ctx->state = 5;
+          }
         }
       }
     }
 
     p2pConnectionDelete(connection);
   }
+
+  postQuitOperation(ctx->base);
 }
 
 void p2pproto_coro_rw_client(void *arg)
@@ -671,13 +683,20 @@ void p2pproto_coro_rw_client(void *arg)
   p2pConnection *connection = p2pConnectionNew(ctx->clientSocket);
   if (iop2pConnect(connection, &address, 1000000, &data) == 0) {
     ctx->state2 = 1;
-    if (iop2pSend(connection, "msg1", 0, p2pMsgRequest, 5, 1000000) > 0 &&
-        iop2pSend(connection, "msg2", 1, p2pMsgRequest, 5, 1000000) > 0) {
+    if (iop2pSend(connection, "msg1", 333, p2pMsgRequest, 5, 1000000) == 5) {
+      p2pHeader header;
       ctx->state2 = 2;
+      if (iop2pRecv(connection, ctx->clientBuffer, 128, &header, 1000000) > 0) {
+        EXPECT_EQ(header.id, 333);
+        EXPECT_EQ(header.type, p2pMsgResponse);
+        EXPECT_EQ(header.size, 5);
+        EXPECT_STREQ((char*)ctx->clientBuffer, "msg2");
+        ctx->state2 = 3;
+      }
     }
   }
+
   p2pConnectionDelete(connection);
-  postQuitOperation(ctx->base);
 }
 
 TEST(p2pproto, coro_read_write)
@@ -693,8 +712,8 @@ TEST(p2pproto, coro_read_write)
   coroutineCall(clientCoro);
   asyncLoop(gBase);
   deleteAioObject(context.serverSocket);
-  ASSERT_EQ(context.state, 4);
-  ASSERT_EQ(context.state2, 2);
+  ASSERT_EQ(context.state, 5);
+  ASSERT_EQ(context.state2, 3);
 }
 
 int main(int argc, char **argv)

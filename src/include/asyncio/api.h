@@ -30,6 +30,7 @@ typedef enum IoObjectTy {
 
 
 typedef enum AsyncOpStatus {
+  aosUnknown = -1,
   aosSuccess = 0,
   aosPending,
   aosTimeout,
