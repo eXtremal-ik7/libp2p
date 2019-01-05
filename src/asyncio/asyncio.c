@@ -652,6 +652,6 @@ void ioSleep(aioUserEvent *event, uint64_t usTimeout)
   event->root.callback = (void*)coroutineEventCb;
   event->root.arg = &r;
   event->counter = 1;
-  event->base->methodImpl.startTimer(&event->root, usTimeout, 0);
+  event->base->methodImpl.startTimer(&event->root, usTimeout, 1);
   coroutineYield();
 }
