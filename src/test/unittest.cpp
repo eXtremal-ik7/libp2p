@@ -1,8 +1,10 @@
 #include "asyncio/asyncio.h"
 #include "asyncio/coroutine.h"
 #include "asyncio/socket.h"
+#include "atomic.h"
 #include "p2p/p2pproto.h"
 #include <gtest/gtest.h>
+#include <thread>
 
 const unsigned gPort = 65333;
 
@@ -15,8 +17,8 @@ struct TestContext {
   uint8_t serverBuffer[128];
   p2pStream serverStream;
   asyncBase *base;
-  int state;
-  int state2;
+  unsigned state;
+  unsigned state2;
   bool success;
   TestContext(asyncBase *baseArg) : base(baseArg), state(0), state2(0), success(false) {}
 };
@@ -307,11 +309,11 @@ TEST(basic, test_delete_object)
 void test_userevent_cb(aioUserEvent *event, void *arg)
 {
   TestContext *ctx = (TestContext*)arg;
-  ctx->state++;
+  unsigned value = __uint_atomic_fetch_and_add(&ctx->state, 1);
 
-  if (ctx->state == 9) {
+  if (value == 256) {
     userEventActivate(event);
-  } else if (ctx->state == 10) {
+  } else if (value == 257) {
     ctx->success = true;
     postQuitOperation(ctx->base);
   }
@@ -321,9 +323,17 @@ TEST(basic, test_userevent)
 {
   TestContext context(gBase);
   aioUserEvent *event = newUserEvent(gBase, test_userevent_cb, &context);
-  userEventStartTimer(event, 5000, 8);
+  userEventStartTimer(event, 400, 256);
   userEventActivate(event);
-  asyncLoop(gBase);  
+  std::thread threads[4];
+  for (unsigned i = 0; i < 4; i++) {
+    threads[i] = std::thread([](){
+      asyncLoop(gBase);
+    });
+  }
+  std::for_each(threads, threads+4, [](std::thread &thread) {
+    thread.join();
+  });
   deleteUserEvent(event);
   ASSERT_TRUE(context.success);  
 }
