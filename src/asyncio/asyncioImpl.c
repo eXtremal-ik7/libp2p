@@ -260,8 +260,8 @@ void cancelIo(aioObjectRoot *object)
 
 void objectDelete(aioObjectRoot *object)
 {
-  objectDecrementReference(object, 1);
   cancelIo(object);
+  objectDecrementReference(object, 1);
 }
 
 tag_t opGetGeneration(asyncOpRoot *op)

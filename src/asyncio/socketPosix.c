@@ -69,7 +69,7 @@ uint32_t addrfromAscii(const char *cp)
 int socketSyncRead(socketTy hSocket, void *buffer, size_t size, int waitAll, size_t *bytesTransferred)
 {
   if (!waitAll) {
-    ssize_t result = read(hSocket, buffer, size);
+    ssize_t result = recv(hSocket, buffer, size, 0);
     if (result > 0) {
       *bytesTransferred = (size_t)result;
       return 1;
@@ -79,7 +79,7 @@ int socketSyncRead(socketTy hSocket, void *buffer, size_t size, int waitAll, siz
   } else {
     size_t transferred = 0;
     ssize_t result;
-    while (transferred != size && (result = read(hSocket, (uint8_t*)buffer + transferred, size - transferred)) > 0)
+    while (transferred != size && (result = recv(hSocket, (uint8_t*)buffer + transferred, size - transferred, 0)) > 0)
       transferred += (size_t)result;
     *bytesTransferred = transferred;
     return transferred == size;
@@ -89,7 +89,7 @@ int socketSyncRead(socketTy hSocket, void *buffer, size_t size, int waitAll, siz
 int socketSyncWrite(socketTy hSocket, const void *buffer, size_t size, int waitAll, size_t *bytesTransferred)
 {
   if (!waitAll) {
-    ssize_t result = write(hSocket, buffer, size);
+    ssize_t result = send(hSocket, buffer, size, MSG_NOSIGNAL);
     if (result > 0) {
       *bytesTransferred = (size_t)result;
       return 1;
@@ -99,7 +99,7 @@ int socketSyncWrite(socketTy hSocket, const void *buffer, size_t size, int waitA
   } else {
     size_t transferred = 0;
     ssize_t result;
-    while (transferred != size && (result = write(hSocket, (uint8_t*)buffer + transferred, size - transferred)) > 0)
+    while (transferred != size && (result = send(hSocket, (uint8_t*)buffer + transferred, size - transferred, MSG_NOSIGNAL)) > 0)
       transferred += (size_t)result;
     *bytesTransferred = transferred;
     return transferred == size;

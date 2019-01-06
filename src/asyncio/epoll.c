@@ -193,15 +193,22 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
   int hasFd = object->type == ioObjectDevice || object->type == ioObjectSocket;
 
   while (currentTag) {
-    if (currentTag & TAG_CANCELIO) {
-      cancelOperationList(&object->readQueue, &threadLocalQueue, aosCanceled);
-      cancelOperationList(&object->writeQueue, &threadLocalQueue, aosCanceled);
-    }
+    int hasReadOp = object->readQueue.head != 0;
+    int hasWriteOp = object->writeQueue.head != 0;
 
     if (currentTag & TAG_ERROR) {
       // EPOLLRDHUP mapped to TAG_ERROR, cancel all operations with aosDisconnected status
-      cancelOperationList(&object->readQueue, &threadLocalQueue, aosDisconnected);
+      int available;
+      int fd = getFd((aioObject*)object);
+      ioctl(fd, FIONREAD, &available);
+      if (available == 0)
+        cancelOperationList(&object->readQueue, &threadLocalQueue, aosDisconnected);
       cancelOperationList(&object->writeQueue, &threadLocalQueue, aosDisconnected);
+    }
+
+    if (currentTag & TAG_CANCELIO) {
+      cancelOperationList(&object->readQueue, &threadLocalQueue, aosCanceled);
+      cancelOperationList(&object->writeQueue, &threadLocalQueue, aosCanceled);
     }
 
     if (currentTag & TAG_DELETE) {
@@ -234,20 +241,32 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
 
     // I/O multiplexer configuration
     if (hasFd) {
-      aioObject *localObject = (aioObject*)object;
-      int fd = getFd(localObject);
-      uint32_t oldEvents = localObject->u32;
-      uint32_t newEvents = 0;
-      if (object->readQueue.head)
-        newEvents |= EPOLLIN;
-      if (object->writeQueue.head)
-        newEvents |= EPOLLOUT;
-      if ((currentTag & (TAG_READ_MASK | TAG_WRITE_MASK | TAG_ERROR_MASK)) || (newEvents && oldEvents != newEvents)) {
-        uint32_t event = newEvents ? newEvents | EPOLLONESHOT | EPOLLRDHUP : 0;
-        epollControl(base->epollFd, EPOLL_CTL_MOD, event, fd, object);
+      int fd = getFd((aioObject*)object);
+      int needUpdate = 0;
+      uint32_t events = 0;
+
+      if (object->readQueue.head) {
+        if (!hasReadOp || (currentTag & TAG_READ_MASK)) {
+          needUpdate = 1;
+          events |= EPOLLIN;
+        }
+      } else {
+        if (hasReadOp && !(currentTag & TAG_READ_MASK))
+          needUpdate = 1;
       }
 
-      localObject->u32 = newEvents;
+      if (object->writeQueue.head) {
+        if (!hasWriteOp || (currentTag & TAG_WRITE_MASK)) {
+          events = EPOLLOUT;
+          needUpdate = 1;
+        }
+      } else {
+        if (hasWriteOp && !(currentTag & TAG_WRITE_MASK))
+          needUpdate = 1;
+      }
+
+      if (needUpdate)
+        epollControl(base->epollFd, EPOLL_CTL_MOD, events ? events | EPOLLONESHOT | EPOLLRDHUP : 0, fd, object);
     }
     
     // Try exit combiner
@@ -488,12 +507,14 @@ AsyncOpStatus epollAsyncRead(asyncOpRoot *opptr)
                            (uint8_t *)op->buffer + op->bytesTransferred,
                            op->transactionSize - op->bytesTransferred);
 
-  if (bytesRead >= 0) {
+  if (bytesRead > 0) {
     op->bytesTransferred += bytesRead;
     if (op->root.flags & afWaitAll && op->bytesTransferred < op->transactionSize)
       return aosPending;
     else
       return aosSuccess;
+  } else if (bytesRead == 0) {
+    return op->transactionSize - op->bytesTransferred > 0 ? aosDisconnected : aosSuccess;
   } else {
     return errno == EAGAIN ? aosPending : aosUnknownError;
   }
@@ -508,12 +529,14 @@ AsyncOpStatus epollAsyncWrite(asyncOpRoot *opptr)
   ssize_t bytesWritten = write(fd,
                                (uint8_t *)op->buffer + op->bytesTransferred,
                                op->transactionSize - op->bytesTransferred);
-  if (bytesWritten >= 0) {
+  if (bytesWritten > 0) {
     op->bytesTransferred += bytesWritten;
     if (op->root.flags & afWaitAll && op->bytesTransferred < op->transactionSize)
       return aosPending;
     else
       return aosSuccess;
+  } else if (bytesWritten == 0) {
+    return op->transactionSize - op->bytesTransferred > 0 ? aosDisconnected : aosSuccess;
   } else {
     return errno == EAGAIN ? aosPending : aosUnknownError;
   }
@@ -524,23 +547,24 @@ AsyncOpStatus epollAsyncReadMsg(asyncOpRoot *opptr)
 {
   asyncOp *op = (asyncOp*)opptr;
   int fd = getFd((aioObject*)op->root.object);
-  int available;
-  ioctl(fd, FIONREAD, &available);
-  if (available <= op->transactionSize) {
-    struct sockaddr_in source;
-    socklen_t addrlen = sizeof(source);
-    if (recvfrom(fd, op->buffer, available, 0, (struct sockaddr*)&source, &addrlen) != -1) {
-      op->host.family = 0;
-      op->host.ipv4 = source.sin_addr.s_addr;
-      op->host.port = source.sin_port;
-      op->bytesTransferred = available;
-      return aosSuccess;
-    }
-  } else {
-    return aosBufferTooSmall;
-  }
 
-  return aosPending;
+  struct sockaddr_in source;
+  socklen_t addrlen = sizeof(source);
+  ssize_t result = recvfrom(fd, op->buffer, op->transactionSize, 0, (struct sockaddr*)&source, &addrlen);
+  if (result != -1) {
+    op->host.family = 0;
+    op->host.ipv4 = source.sin_addr.s_addr;
+    op->host.port = source.sin_port;
+    op->bytesTransferred = result;
+    return aosSuccess;
+  } else {
+    if (errno == EAGAIN)
+      return aosPending;
+    if (errno == ENOMEM)
+      return aosBufferTooSmall;
+    else
+      return aosUnknownError;
+  }
 }
 
 
