@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #define MAX_EVENTS 256
@@ -189,6 +190,16 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
     int hasReadOp = object->readQueue.head != 0;
     int hasWriteOp = object->writeQueue.head != 0;
 
+    if (currentTag & TAG_ERROR) {
+      // EV_EOF mapped to TAG_ERROR, cancel all operations with aosDisconnected status
+      int available;
+      int fd = getFd((aioObject*)object);
+      ioctl(fd, FIONREAD, &available);
+      if (available == 0)
+        cancelOperationList(&object->readQueue, &threadLocalQueue, aosDisconnected);
+      cancelOperationList(&object->writeQueue, &threadLocalQueue, aosDisconnected);
+    }
+
     if (currentTag & TAG_CANCELIO) {
       cancelOperationList(&object->readQueue, &threadLocalQueue, aosCanceled);
       cancelOperationList(&object->writeQueue, &threadLocalQueue, aosCanceled);
@@ -221,12 +232,6 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
       executeOperationList(&object->readQueue, &threadLocalQueue);
     if (needStart & TAG_WRITE_MASK)
       executeOperationList(&object->writeQueue, &threadLocalQueue);
-
-    if (currentTag & TAG_ERROR) {
-      // EV_EOF mapped to TAG_ERROR, cancel all operations with aosDisconnected status
-      cancelOperationList(&object->readQueue, &threadLocalQueue, aosDisconnected);
-      cancelOperationList(&object->writeQueue, &threadLocalQueue, aosDisconnected);
-    }
 
     if (hasFd) {
       int fd = getFd((aioObject*)object);
@@ -301,7 +306,6 @@ void kqueueNextFinishedOperation(asyncBase *base)
 
         kqueueControl(localBase->kqueueFd, EV_ADD | EV_ONESHOT, EVFILT_READ, fd, object);
       } else if (object->type == ioObjectTimer) {
-        uint64_t data;
         aioTimer *timer = (aioTimer*)object;
         asyncOpRoot *op = timer->op;
         if (op->opCode == actUserEvent) {
@@ -335,7 +339,6 @@ void kqueueNextFinishedOperation(asyncBase *base)
 
 aioObject *kqueueNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
-  kqueueBase *localBase = (kqueueBase*)base;
   aioObject *object = __tagged_alloc(sizeof(aioObject));
   initObjectRoot(&object->root, base, type, (aioObjectDestructor*)kqueueDeleteObject);
   switch (type) {
@@ -349,7 +352,6 @@ aioObject *kqueueNewAioObject(asyncBase *base, IoObjectTy type, void *data)
       break;
   }
 
-  object->u32 = 0;
   return object;
 }
 

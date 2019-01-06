@@ -189,8 +189,6 @@ void initObjectRoot(aioObjectRoot *object, asyncBase *base, IoObjectTy type, aio
 
 void cancelIo(aioObjectRoot *object);
 void objectDelete(aioObjectRoot *object);
-//void objectIncrementReference(aioObjectRoot *object);
-//void objectDecrementReference(aioObjectRoot *object, tag_t count);
 
 tag_t opGetGeneration(asyncOpRoot *op);
 AsyncOpStatus opGetStatus(asyncOpRoot *op);

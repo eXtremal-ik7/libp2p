@@ -91,10 +91,7 @@ struct aioUserEvent {
   int counter;
 };
 
-void pageMapInit(pageMap *map);
-asyncOpListLink *pageMapExtractAll(pageMap *map, time_t tm);
-void pageMapAdd(pageMap *map, asyncOpListLink *op);
-int pageMapRemove(pageMap *map, asyncOpListLink *op);
+void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op);
 void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op);
 void processTimeoutQueue(asyncBase *base, time_t currentTime);
 
