@@ -472,12 +472,14 @@ AsyncOpStatus kqueueAsyncRead(asyncOpRoot *opptr)
                            (uint8_t *)op->buffer + op->bytesTransferred,
                            op->transactionSize - op->bytesTransferred);
 
-  if (bytesRead >= 0) {
+  if (bytesRead > 0) {
     op->bytesTransferred += bytesRead;
     if (op->root.flags & afWaitAll && op->bytesTransferred < op->transactionSize)
       return aosPending;
     else
       return aosSuccess;
+  } else if (bytesRead == 0) {
+    return op->transactionSize - op->bytesTransferred > 0 ? aosDisconnected : aosSuccess;
   } else {
     return errno == EAGAIN ? aosPending : aosUnknownError;
   }
@@ -492,12 +494,14 @@ AsyncOpStatus kqueueAsyncWrite(asyncOpRoot *opptr)
   ssize_t bytesWritten = write(fd,
                                (uint8_t *)op->buffer + op->bytesTransferred,
                                op->transactionSize - op->bytesTransferred);
-  if (bytesWritten >= 0) {
+  if (bytesWritten > 0) {
     op->bytesTransferred += bytesWritten;
     if (op->root.flags & afWaitAll && op->bytesTransferred < op->transactionSize)
       return aosPending;
     else
       return aosSuccess;
+  } else if (bytesWritten == 0) {
+    return op->transactionSize - op->bytesTransferred > 0 ? aosDisconnected : aosSuccess;
   } else {
     return errno == EAGAIN ? aosPending : aosUnknownError;
   }
