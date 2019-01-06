@@ -194,12 +194,6 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
       cancelOperationList(&object->writeQueue, &threadLocalQueue, aosCanceled);
     }
 
-    if (currentTag & TAG_ERROR) {
-      // EV_EOF mapped to TAG_ERROR, cancel all operations with aosDisconnected status
-      cancelOperationList(&object->readQueue, &threadLocalQueue, aosDisconnected);
-      cancelOperationList(&object->writeQueue, &threadLocalQueue, aosDisconnected);
-    }
-
     if (currentTag & TAG_DELETE) {
       // Perform delete and exit combiner
       object->destructor(object);
@@ -227,6 +221,12 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
       executeOperationList(&object->readQueue, &threadLocalQueue);
     if (needStart & TAG_WRITE_MASK)
       executeOperationList(&object->writeQueue, &threadLocalQueue);
+
+    if (currentTag & TAG_ERROR) {
+      // EV_EOF mapped to TAG_ERROR, cancel all operations with aosDisconnected status
+      cancelOperationList(&object->readQueue, &threadLocalQueue, aosDisconnected);
+      cancelOperationList(&object->writeQueue, &threadLocalQueue, aosDisconnected);
+    }
 
     if (hasFd) {
       int fd = getFd((aioObject*)object);

@@ -357,5 +357,5 @@ int ioHttpRequest(HTTPClient *client,
   hrArgs.requestSize = requestSize;
   coroutineSetYieldCallback(ioHttpRequestStart, &hrArgs);
   coroutineYield();
-  return r.resultCode;
+  return r.status == aosSuccess ? r.resultCode : -r.status;
 }

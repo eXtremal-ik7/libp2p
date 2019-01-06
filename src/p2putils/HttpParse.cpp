@@ -186,13 +186,13 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
 {
   HttpParserResultTy result;
   HttpComponent component;
-    
+
   if (state->state == httpStStartLine) {
     if ( (result = httpParseStartLine(state, callback, arg)) != httpResultOk)
       return result;
     state->state = httpStHeader;
   }
-  
+
   if (state->state == httpStHeader) {
     if (canRead(state->ptr, state->end, 2)) {
       component.type = httpDtHeaderEntry;
@@ -207,31 +207,31 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
           HttpParserResultTy result = simpleTableParse(&p, state->end, httpHeaderFSM, &token);
           if (result == httpResultOk) {
             component.header.entryType = token;
-            skipSPCharacters(&p, state->end);           
-                
+            skipSPCharacters(&p, state->end);
+
             switch (token) {
               case hhContentLength : {
                 size_t contentSize;
                 if ( ( result = readDec(&p, state->end, &contentSize)) != httpResultOk )
-                  return result;  
+                  return result;
                 component.header.intValue = contentSize;
                 state->dataRemaining = contentSize;
                 callback(&component, arg);
                 break;
               }
-                  
+
               case hhTransferEncoding : {
                 component.header.stringValue.data = p;
                 if ( ( result = readUntilCRLF(&p, state->end)) != httpResultOk )
                   return result;
                 component.header.stringValue.size = p-component.header.stringValue.data-2;
                 callback(&component, arg);
-                    
+
                 state->chunked = (component.header.stringValue.size == 7) &&
                                  (memcmp(component.header.stringValue.data, "chunked", 7) == 0);
                 break;
               }
-                    
+
               case hhContentType :
               case hhConnection :
               case hhDate :
@@ -240,11 +240,11 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
                 if ( ( result = readUntilCRLF(&p, state->end)) != httpResultOk )
                   return result;
                 component.header.stringValue.size = p-component.header.stringValue.data-2;
-                callback(&component, arg);    
+                callback(&component, arg);
                 break;
               }
             }
-                
+
             state->ptr = (char*)p;
           } else if (result == httpResultNeedMoreData) {
             return result;
@@ -260,7 +260,7 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
               }
               p++;
             }
-                
+
             component.header.entryName.size = entryNameEnd-component.header.entryName.data;
             skipSPCharacters(&p, state->end);
             component.header.stringValue.data = p;
@@ -268,9 +268,9 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
               return result;
             component.header.stringValue.size = p-component.header.stringValue.data-2;
             callback(&component, arg);
-                
+
             state->ptr = (char*)p;
-          } 
+          }
         }
       }
     } else {
@@ -283,66 +283,58 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
       const char *readyChunk = 0;
       size_t readyChunkSize = 0;
       const char *p = state->ptr;
+
       for (;;) {
         if (state->dataRemaining) {
-          // TODO: implement
-          if (canRead(p, state->end, state->dataRemaining+2)) {
+          bool needMoreData = false;
+          // need read /httpDataRemaining/ bytes
+          if (canRead(p, state->end, state->dataRemaining)) {
             readyChunk = p;
             readyChunkSize = state->dataRemaining;
-            p += state->dataRemaining+2;
+            p += state->dataRemaining;
             state->dataRemaining = 0;
-          } else if (p != state->end) {
-            // Found data fragment
-            size_t size = std::min(state->dataRemaining, (size_t)(state->end - p));
-            component.type = httpDtDataFragment;                
-            component.data.data = p;
-            component.data.size = size;
-            callback(&component, arg);
             state->firstFragment = false;
-            state->dataRemaining = state->dataRemaining-size;
-            state->ptr = (char*)p + size;    
-            return httpResultNeedMoreData;
+          } else {
+            readyChunk = p;
+            readyChunkSize = std::min(state->dataRemaining, (size_t)(state->end - p));
+            p += readyChunkSize;
+            state->dataRemaining -= readyChunkSize;
+            needMoreData = true;
           }
-          
-        } else {
-          if (!canRead(p, state->end, 1+2))
-            return httpResultNeedMoreData;
-        
-          size_t chunkSize;
-          if ( ( result = readHex(&p, state->end, &chunkSize)) != httpResultOk )
-            return result;           
 
           if (readyChunkSize) {
-            component.type = (chunkSize == 0) && state->firstFragment ? httpDtData : httpDtDataFragment;
+            component.type = httpDtDataFragment;
             component.data.data = readyChunk;
             component.data.size = readyChunkSize;
             callback(&component, arg);
             state->ptr = (char*)p;
-            state->firstFragment = false;
-          }
-              
-          if (chunkSize == 0) {
-            state->state = httpStLast;
-            // TEMP
-            state->ptr += 2;
-            break;
           }
 
-          if (canRead(p, state->end, chunkSize+2)) {
-            readyChunk = p;
-            readyChunkSize = chunkSize;
-            p += chunkSize+2;
-          } else if (p != state->end) {
-            // Found data fragment
-            size_t size = std::min(chunkSize, (size_t)(state->end - p));
-            component.type = httpDtDataFragment;                
-            component.data.data = p;
-            component.data.size = size;
-            callback(&component, arg);
-            state->firstFragment = false;
-            state->dataRemaining = chunkSize-size;
-            state->ptr = (char*)p + size;    
+          if (needMoreData)
             return httpResultNeedMoreData;
+        } else {
+          // we at begin of next chunk
+          if (!state->firstFragment) {
+            // skip CRLF for non-first chunk
+            if (!canRead(p, state->end, 2))
+              return httpResultNeedMoreData;
+            p += 2;
+          }
+
+          size_t chunkSize;
+          if ( ( result = readHex(&p, state->end, &chunkSize)) != httpResultOk )
+            return result;
+
+          if (chunkSize == 0) {
+            component.type = httpDtData;
+            component.data.data = p;
+            component.data.size = 0;
+            callback(&component, arg);
+            state->state = httpStLast;
+            state->ptr = (char*)p+2;
+            break;
+          } else {
+            state->dataRemaining = chunkSize;
           }
         }
       }
