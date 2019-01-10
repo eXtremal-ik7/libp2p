@@ -149,6 +149,7 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
 {
   List *list = 0;
   tag_t tag = 0;
+  int restart = 0;
   aioObjectRoot *object = opptr->object;
   if (opptr->opCode & OPCODE_WRITE) {
     list = &object->writeQueue;
@@ -159,10 +160,21 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
   }
 
   asyncOpRoot *queueHead = list->head;
+  int userDefined = !(object->type == ioObjectDevice || object->type == ioObjectSocket);
 
   switch (actionType) {
     case aaStart : {
       opRun(opptr, list);
+      break;
+    }
+
+    case aaCancel : {
+      if (userDefined && opptr->running) {
+        opptr->finishMethod(opptr, aaCancel);
+        opptr->running = 0;
+      } else {
+        opRelease(opptr, opGetStatus(opptr), list, finished);
+      }
       break;
     }
 
@@ -171,11 +183,21 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
       break;
     }
 
+    case aaContinue : {
+      if (opptr->running) {
+        opptr->running = 0;
+        restart = 1;
+      } else {
+        opRelease(opptr, opGetStatus(opptr), list, finished);
+      }
+      break;
+    }
+
     default :
       break;
   }
 
-  *needStart |= (list->head && list->head != queueHead) ? tag : 0;
+  *needStart |= (list->head && (list->head != queueHead || restart)) ? tag : 0;
 }
 
 void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
@@ -299,7 +321,7 @@ void kqueueNextFinishedOperation(asyncBase *base)
               __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, 0u-1);
               return;
             case UserEvent :
-              op->finishMethod(op);
+              op->finishMethod(op, aaFinish);
               break;
           }
         }
@@ -314,7 +336,7 @@ void kqueueNextFinishedOperation(asyncBase *base)
             kqueueStopTimer(op);
           }
 
-          op->finishMethod(op);
+          op->finishMethod(op, aaFinish);
         } else {
           opCancel(op, opEncodeTag(op, timerId), aosTimeout);
         }

@@ -4,6 +4,7 @@
 #include "atomic.h"
 #include "p2p/p2pproto.h"
 #include <gtest/gtest.h>
+#include <chrono>
 #include <thread>
 
 const unsigned gPort = 65333;
@@ -31,8 +32,11 @@ aioObject *startTCPServer(asyncBase *base, aioAcceptCb callback, void *arg, unsi
   address.ipv4 = INADDR_ANY;
   address.port = htons(port);  
   socketTy acceptSocket = socketCreate(AF_INET, SOCK_STREAM, IPPROTO_TCP, 1);
-  if (socketBind(acceptSocket, &address) != 0)
-    return 0;
+  if (socketBind(acceptSocket, &address) != 0) {
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    if (socketBind(acceptSocket, &address) != 0)
+      return 0;
+  }
   
   if (socketListen(acceptSocket) != 0)
     return 0;
@@ -51,8 +55,11 @@ aioObject *startUDPServer(asyncBase *base, aioReadMsgCb callback, void *arg, voi
   address.ipv4 = INADDR_ANY;
   address.port = htons(port);  
   socketTy acceptSocket = socketCreate(AF_INET, SOCK_DGRAM, IPPROTO_UDP, 1);
-  if (socketBind(acceptSocket, &address) != 0)
-    return 0;
+  if (socketBind(acceptSocket, &address) != 0) {
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    if (socketBind(acceptSocket, &address) != 0)
+      return 0;
+  }
   
   aioObject *object = newSocketIo(base, acceptSocket);
   if (callback)

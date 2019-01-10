@@ -5,21 +5,9 @@
 
 #define INITIAL_BLOCKS_NUM 8
 
-//#ifndef OS_WINDOWS
-//static __thread ObjectPool pool = {0, 0};
-//#else
-//static __declspec(thread) ObjectPool pool = {0, 0};
-//#endif
-
 static __tls ObjectPool pool;
 
 ObjectList *getOrCreateElement(ObjectPool *pool, const void *type);
-
-//void initObjectPool(ObjectPool *pool)
-//{
-//  pool->elementsNum = 0;
-//  pool->elements = 0;
-//}
 
 void *objectGet(const void *type)
 {
@@ -78,7 +66,7 @@ ObjectList *getOrCreateElement(ObjectPool *pool, const void *type)
   }
   
   size_t index = searchElement(pool, type);
-  if (pool->elements[index].type == type)
+  if (index < pool->elementsNum && pool->elements[index].type == type)
     return &pool->elements[index];
     
   size_t newElementsNum = pool->elementsNum+1;

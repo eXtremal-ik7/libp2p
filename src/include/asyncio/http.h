@@ -42,6 +42,7 @@ typedef struct HTTPClient {
 
 typedef struct HTTPOp {
   asyncOpRoot root;
+  int state;
   HostAddress address;
   int resultCode;
   Raw contentType;

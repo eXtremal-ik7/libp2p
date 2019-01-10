@@ -88,8 +88,13 @@ int socketSyncRead(socketTy hSocket, void *buffer, size_t size, int waitAll, siz
 
 int socketSyncWrite(socketTy hSocket, const void *buffer, size_t size, int waitAll, size_t *bytesTransferred)
 {
+#ifdef OS_LINUX
+  int flags = MSG_NOSIGNAL;
+#else
+  int flags = 0;
+#endif
   if (!waitAll) {
-    ssize_t result = send(hSocket, buffer, size, MSG_NOSIGNAL);
+    ssize_t result = send(hSocket, buffer, size, flags);
     if (result > 0) {
       *bytesTransferred = (size_t)result;
       return 1;
@@ -99,7 +104,7 @@ int socketSyncWrite(socketTy hSocket, const void *buffer, size_t size, int waitA
   } else {
     size_t transferred = 0;
     ssize_t result;
-    while (transferred != size && (result = send(hSocket, (uint8_t*)buffer + transferred, size - transferred, MSG_NOSIGNAL)) > 0)
+    while (transferred != size && (result = send(hSocket, (uint8_t*)buffer + transferred, size - transferred, flags)) > 0)
       transferred += (size_t)result;
     *bytesTransferred = transferred;
     return transferred == size;

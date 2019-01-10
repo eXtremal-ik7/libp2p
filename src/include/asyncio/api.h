@@ -54,15 +54,14 @@ typedef enum AsyncFlags {
 typedef enum AsyncOpActionTy {
   aaNone = 0,
   aaStart,
+  aaCancel,
   aaFinish,
-  aaIOCPPacket,
-  aaIOCPRestart
+  aaContinue
 } AsyncOpActionTy;
 
 typedef struct asyncBase asyncBase;
 typedef struct aioObjectRoot aioObjectRoot;
 typedef struct asyncOpRoot asyncOpRoot;
-typedef struct asyncOpLink asyncOpLink;
 typedef struct asyncOpListLink asyncOpListLink;
 typedef struct asyncOpAction asyncOpAction;
 typedef struct coroutineTy coroutineTy;
@@ -85,7 +84,7 @@ typedef struct ListMt {
 typedef void processOperationCb(asyncOpRoot*, AsyncOpActionTy, List*, tag_t*);
 typedef asyncOpRoot *newAsyncOpTy();
 typedef AsyncOpStatus aioExecuteProc(asyncOpRoot*);
-typedef void aioFinishProc(asyncOpRoot*);
+typedef void aioFinishProc(asyncOpRoot*, AsyncOpActionTy);
 typedef void aioObjectDestructor(aioObjectRoot*);
 
 extern __tls List threadLocalQueue;
@@ -124,11 +123,6 @@ static inline tag_t __tag_make_processed(tag_t currentTag, tag_t enqueued)
 {
   return (currentTag & (TAG_READ_MASK | TAG_WRITE_MASK | TAG_ERROR_MASK | TAG_DELETE | TAG_CANCELIO)) | enqueued;
 }
-
-typedef struct asyncOpLink {
-  asyncOpRoot *op;
-  tag_t tag;
-} asyncOpLink;
 
 typedef struct asyncOpListLink {
   asyncOpRoot *op;
@@ -181,6 +175,7 @@ struct asyncOpRoot {
     uint64_t timeout;
     uint64_t endTime;
   };
+  int running;
 };
 
 void initObjectRoot(aioObjectRoot *object, asyncBase *base, IoObjectTy type, aioObjectDestructor destructor);
@@ -214,11 +209,9 @@ typedef struct combinerCallArgs {
 
 void combinerCallDelayed(combinerCallArgs *args, aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType, int needLock);
 
-asyncOpLink *opAllocateLink(asyncOpRoot *op);
-void opReleaseLinkOnly(asyncOpLink *link);
-void opReleaseLink(asyncOpLink *link, AsyncOpStatus status);
 void opStart(asyncOpRoot *op);
 void opCancel(asyncOpRoot *op, tag_t generation, AsyncOpStatus status);
+void resumeParent(asyncOpRoot *op, AsyncOpStatus status);
 
 void addToThreadLocalQueue(asyncOpRoot *op);
 void executeThreadLocalQueue();

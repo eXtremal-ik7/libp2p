@@ -24,7 +24,6 @@ __tls List threadLocalQueue;
 __tls unsigned currentFinishedSync;
 __tls unsigned messageLoopThreadId;
 
-static const char *asyncOpLinkPool = "asyncOpLinkPool";
 static const char *asyncOpLinkListPool = "asyncOpLinkListPool";
 static const char *asyncOpActionPool = "asyncOpActionPool";
 
@@ -327,6 +326,7 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
   op->arg = arg;
   op->timeout = timeout;
   op->timerId = realtime ? op->timerId : 0;
+  op->running = 0;
   objectIncrementReference(object);
   return op;
 }
@@ -364,7 +364,7 @@ void opRelease(asyncOpRoot *op, AsyncOpStatus status, List *executeList, List *f
   } else {
     aioObjectRoot *object = op->object;
     objectRelease(op, op->poolId);
-    op->finishMethod(op);
+    op->finishMethod(op, aaFinish);
     objectDecrementReference(object, 1);
   }
 
@@ -376,8 +376,10 @@ void executeOperationList(List *list, List *finished)
   while (op) {
     asyncOpRoot *next = op->executeQueue.next;
     AsyncOpStatus status = op->executeMethod(op);
-    if (status == aosPending)
+    if (status == aosPending) {
+      op->running = 1;
       break;
+    }
 
     if (opSetStatus(op, opGetGeneration(op), status))
       opRelease(op, status, 0, finished);
@@ -454,29 +456,6 @@ void combinerCallDelayed(combinerCallArgs *args, aioObjectRoot *object, tag_t ta
   coroutineSetYieldCallback(combinerCallDelayedCb, args);
 }
 
-asyncOpLink *opAllocateLink(asyncOpRoot *op)
-{
-  asyncOpLink *link = objectGet(asyncOpLinkPool);
-  if (!link)
-    link = malloc(sizeof(asyncOpLink));
-  link->op = op;
-  link->tag = opGetGeneration(op);
-  return link;
-}
-
-void opReleaseLinkOnly(asyncOpLink *link)
-{
-  objectRelease(link, asyncOpLinkPool);
-}
-
-void opReleaseLink(asyncOpLink *link, AsyncOpStatus status)
-{
-  asyncOpRoot *op = link->op;
-  tag_t tag = link->tag;
-  objectRelease(link, asyncOpLinkPool);
-  opCancel(op, tag, status);
-}
-
 void opStart(asyncOpRoot *op)
 {
   combinerCall(op->object, 1, op, aaStart);
@@ -485,9 +464,18 @@ void opStart(asyncOpRoot *op)
 void opCancel(asyncOpRoot *op, tag_t generation, AsyncOpStatus status)
 {
   if (opSetStatus(op, generation, status))
-    combinerCall(op->object, 1, op, aaFinish);
+    combinerCall(op->object, 1, op, aaCancel);
 }
 
+void resumeParent(asyncOpRoot *op, AsyncOpStatus status)
+{
+  if (status == aosSuccess) {
+    combinerCall(op->object, 1, op, aaContinue);
+  } else {
+    opSetStatus(op, opGetGeneration(op), status);
+    combinerCall(op->object, 1, op, aaFinish);
+  }
+}
 
 void addToThreadLocalQueue(asyncOpRoot *op)
 {
@@ -504,7 +492,7 @@ void executeThreadLocalQueue()
     asyncOpRoot *nextOp = op->next;
     aioObjectRoot *object = op->object;
     objectRelease(op, op->poolId);
-    op->finishMethod(op);
+    op->finishMethod(op, aaFinish);
     objectDecrementReference(object, 1);
     op = nextOp;
   }
