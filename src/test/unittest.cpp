@@ -19,8 +19,8 @@ struct TestContext {
   uint8_t serverBuffer[128];
   p2pStream serverStream;
   asyncBase *base;
-  unsigned state;
-  unsigned state2;
+  int state;
+  int state2;
   bool success;
   TestContext(asyncBase *baseArg) : base(baseArg), state(0), state2(0), success(false) {}
 };
@@ -332,7 +332,7 @@ TEST(basic, test_delete_object)
 void test_userevent_cb(aioUserEvent *event, void *arg)
 {
   TestContext *ctx = static_cast<TestContext*>(arg);
-  unsigned value = __uint_atomic_fetch_and_add(&ctx->state, 1);
+  unsigned value = __uint_atomic_fetch_and_add(reinterpret_cast<unsigned*>(&ctx->state), 1);
 
   if (value == 256) {
     userEventActivate(event);
@@ -497,9 +497,9 @@ void p2pproto_rw_serverread(AsyncOpStatus status, p2pConnection *connection, p2p
   TestContext *ctx = static_cast<TestContext*>(arg);
   ctx->state++;
   if (ctx->state == 3 && status == aosSuccess) {
-    EXPECT_EQ(header.id, 222);
+    EXPECT_EQ(header.id, 222u);
     EXPECT_EQ(header.type, p2pMsgRequest);
-    EXPECT_EQ(header.size, 5);
+    EXPECT_EQ(header.size, 5u);
     EXPECT_STREQ(static_cast<const char*>(stream->data()), "msg1");
     aiop2pSend(connection, "msg2", p2pHeader(222, p2pMsgResponse, 5), 1000000, nullptr, nullptr);
     aiop2pRecvStream(connection, ctx->serverStream, 4096, 1000000, p2pproto_rw_serverread, ctx);
@@ -518,9 +518,9 @@ void p2pproto_rw_clientread(AsyncOpStatus status, p2pConnection *connection, p2p
 {
   TestContext *ctx = static_cast<TestContext*>(arg);
   if (ctx->state2 == 1 && status == aosSuccess) {
-    EXPECT_EQ(header.id, 222);
+    EXPECT_EQ(header.id, 222u);
     EXPECT_EQ(header.type, p2pMsgResponse);
-    EXPECT_EQ(header.size, 5);
+    EXPECT_EQ(header.size, 5u);
     EXPECT_STREQ(static_cast<const char*>(data), "msg2");
     ctx->state2 = 2;
   }
@@ -690,9 +690,9 @@ void p2pproto_coro_rw_listener(void *arg)
       p2pStream stream;
       p2pHeader header;
       if (iop2pRecvStream(connection, stream, 4096, &header, 1000000) > 0) {
-        EXPECT_EQ(header.id, 333);
+        EXPECT_EQ(header.id, 333u);
         EXPECT_EQ(header.type, p2pMsgRequest);
-        EXPECT_EQ(header.size, 5);
+        EXPECT_EQ(header.size, 5u);
         EXPECT_STREQ(static_cast<char*>(stream.data()), "msg1");
         ctx->state = 3;
         if (iop2pSend(connection, "msg2", 333, p2pMsgResponse, 5, 1000000) == 5) {
@@ -728,9 +728,9 @@ void p2pproto_coro_rw_client(void *arg)
       p2pHeader header;
       ctx->state2 = 2;
       if (iop2pRecv(connection, ctx->clientBuffer, 128, &header, 1000000) > 0) {
-        EXPECT_EQ(header.id, 333);
+        EXPECT_EQ(header.id, 333u);
         EXPECT_EQ(header.type, p2pMsgResponse);
-        EXPECT_EQ(header.size, 5);
+        EXPECT_EQ(header.size, 5u);
         EXPECT_STREQ(reinterpret_cast<const char*>(ctx->clientBuffer), "msg2");
         ctx->state2 = 3;
       }
