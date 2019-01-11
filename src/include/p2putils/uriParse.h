@@ -30,8 +30,9 @@ struct URIComponent {
     struct {
       const char *data;
       size_t size;
-    } raw;  
-    int i32;
+    } raw;
+    int32_t i32;
+    uint32_t u32;
   };
   struct {
     const char *data;

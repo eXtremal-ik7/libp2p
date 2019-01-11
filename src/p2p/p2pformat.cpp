@@ -7,20 +7,20 @@ const char *p2pStream::jumpOverString()
   const char *e = jumpOver<char>(1);
   if (e && *e == 0)
     return s;
-  return 0;
+  return nullptr;
 }
 
 void p2pStream::writeString(const char *s)
 {
-  uint64_t length = strlen(s);
-  writeNetworkByteOrder<uint32_t>(length);
+  size_t length = strlen(s);
+  writeNetworkByteOrder<uint32_t>(static_cast<uint32_t>(length));
   write(s, length);
   write<uint8_t>(0);
 }
 
 bool p2pStream::readStatusMessage(p2pErrorTy *error)
 {
-  *error = (p2pErrorTy)read<uint8_t>();
+  *error = static_cast<p2pErrorTy>(read<uint8_t>());
   return !eof();
 }
 
@@ -30,7 +30,7 @@ bool p2pStream::readConnectMessage(p2pConnectData *data)
   data->login = jumpOverString();
   data->password = jumpOverString();
   data->application = jumpOverString();
-  return data->application != 0;
+  return data->application != nullptr;
 }
 
 void p2pStream::writeStatusMessage(p2pErrorTy error)

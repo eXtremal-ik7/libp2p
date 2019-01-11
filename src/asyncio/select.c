@@ -12,6 +12,11 @@
 #include <sys/types.h>
 #include <stdio.h>
 
+enum pipeDescrs {
+  Read = 0,
+  Write
+};
+
 void userEventTrigger(aioObjectRoot *event);
 
 typedef struct selectOp {
@@ -25,10 +30,12 @@ typedef enum {
   mtError = 4
 } MaskTy;
 
+__NO_PADDING_BEGIN
 typedef struct fdStruct {
   aioObject *object;
   int mask;
 } fdStruct;
+__NO_PADDING_END
 
 typedef struct selectBase {
   asyncBase B;
@@ -36,32 +43,31 @@ typedef struct selectBase {
   fdStruct *fdMap;
 } selectBase;
 
-
+static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType);
 void selectPostEmptyOperation(asyncBase *base);
 void selectNextFinishedOperation(asyncBase *base);
 aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data);
-asyncOpRoot *selectNewAsyncOp(asyncBase *base);
+asyncOpRoot *selectNewAsyncOp(void);
 void selectDeleteObject(aioObject *object);
-void selectFinishOp(selectOp *op);
-void selectInitializeTimer(asyncOpRoot *op);
-void selectStartTimer(asyncOpRoot *op, uint64_t usTimeout);
+void selectInitializeTimer(asyncBase *base, asyncOpRoot *op);
+void selectStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic);
 void selectStopTimer(asyncOpRoot *op);
-void selectActivate(asyncOpRoot *op);
-void selectAsyncConnect(selectOp *op, const HostAddress *address, uint64_t usTimeout);
-void selectAsyncAccept(selectOp *op, uint64_t usTimeout);
-void selectAsyncRead(selectOp *op, uint64_t usTimeout);
-void selectAsyncWrite(selectOp *op, uint64_t usTimeout);
-void selectAsyncReadMsg(selectOp *op, uint64_t usTimeout);
-void selectAsyncWriteMsg(selectOp *op, const HostAddress *address, uint64_t usTimeout);
+void selectActivate(aioUserEvent *op);
+AsyncOpStatus selectAsyncConnect(asyncOpRoot *opptr);
+AsyncOpStatus selectAsyncAccept(asyncOpRoot *opptr);
+AsyncOpStatus selectAsyncRead(asyncOpRoot *opptr);
+AsyncOpStatus selectAsyncWrite(asyncOpRoot *opptr);
+AsyncOpStatus selectAsyncReadMsg(asyncOpRoot *op);
+AsyncOpStatus selectAsyncWriteMsg(asyncOpRoot *op);
 
 
 static struct asyncImpl selectImpl = {
+  combiner,
   selectPostEmptyOperation,
   selectNextFinishedOperation,
   selectNewAioObject,
   selectNewAsyncOp,
   selectDeleteObject,
-  selectFinishOp,
   selectInitializeTimer,
   selectStartTimer,
   selectStopTimer,
@@ -74,59 +80,33 @@ static struct asyncImpl selectImpl = {
   selectAsyncWriteMsg
 };
 
+//static aioObject *getObject(selectOp *op)
+//{
+//  return (aioObject*)op->info.root.object;
+//}
 
-static int isWriteOperation(int action)
-{
-  return (action == actConnect ||
-          action == actWrite ||
-          action == actWriteMsg);
-}
-
-static aioObject *getObject(selectOp *op)
-{
-  return (aioObject*)op->info.root.object;
-}
-
-static int getFd(selectOp *op)
-{
-  aioObject *object = getObject(op);
-  switch (object->root.type) {
-    case ioObjectDevice :
-      return object->hDevice;
-      break;
-    case ioObjectSocket :
-      return object->hSocket;
-      break;
-    default :
-      return -1;
-      break;      
-  }
-}
+//static int getFd(selectOp *op)
+//{
+//  aioObject *object = getObject(op);
+//  switch (object->root.type) {
+//    case ioObjectDevice :
+//      return object->hDevice;
+//    case ioObjectSocket :
+//      return object->hSocket;
+//    default :
+//      return -1;
+//  }
+//}
 
 static fdStruct *getFdOperations(selectBase *base, int fd)
 {
   return &base->fdMap[fd];  
 }
 
-
-//static void asyncOpLink(fdStruct *list, selectOp *op)
-//{
-//  list->mask |= isWriteOperation(op->info.root.opCode) ? mtWrite : mtRead;
-//  list->object = getObject(op);
-//}
-
-
-static void asyncOpUnlink(selectOp *op)
-{
-  if (!op->info.root.executeQueue.next) {
-    selectBase *localBase = (selectBase*)op->info.root.object->base;
-    fdStruct *list = getFdOperations(localBase, getFd(op));
-    list->mask &= ~(isWriteOperation(op->info.root.opCode) ? mtWrite : mtRead);
-  }
-}
-
 static void timerCb(int sig, siginfo_t *si, void *uc)
 {
+  __UNUSED(sig);
+  __UNUSED(uc);
   asyncOpRoot *op = (asyncOpRoot*)si->si_value.sival_ptr;
   selectBase *base = (selectBase*)op->object->base;
   
@@ -162,28 +142,15 @@ static void stopTimer(asyncOpRoot *op)
   }  
 }
 
-
-static void startOperation(selectOp *op,
-                           IoActionTy action,
-                           uint64_t usTimeout)
-{
-//  selectBase *localBase = (selectBase*)op->info.root.base;
-///*
-//  OpLinksMap &links = isWriteOperation(action) ?
-//    localBase->writeOps : localBase->readOps;*/
-  
-//  asyncOpLink(getFdOperations(localBase, getFd(op)), op);
-}
-
-
 asyncBase *selectNewAsyncBase()
 {
+__NO_EXPAND_RECURSIVE_MACRO_BEGIN
   selectBase *base = malloc(sizeof(selectBase));
   if (base) {
     struct sigaction sAction;
 
     pipe(base->pipeFd);    
-    base->fdMap = (fdStruct*)calloc(getdtablesize(), sizeof(fdStruct));
+    base->fdMap = (fdStruct*)calloc((size_t)getdtablesize(), sizeof(fdStruct));
     base->B.methodImpl = selectImpl;
 
 #ifdef OS_QNX    
@@ -205,6 +172,16 @@ asyncBase *selectNewAsyncBase()
   }
 
   return (asyncBase*)base;
+__NO_EXPAND_RECURSIVE_MACRO_END
+}
+
+
+static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
+{
+  __UNUSED(object);
+  __UNUSED(tag);
+  __UNUSED(op);
+  __UNUSED(actionType);
 }
 
 
@@ -213,136 +190,6 @@ void selectPostEmptyOperation(asyncBase *base)
   void *p = 0;
   selectBase *localBase = (selectBase*)base;  
   write(localBase->pipeFd[1], &p, sizeof(p));
-}
-
-
-static void finish(selectOp *op, AsyncOpStatus status)
-{
-//  asyncOpUnlink(op);
-//  finishOperation(&op->info.root, status, 1);
-}
-
-
-static void processReadyFds(selectBase *base,
-                            fd_set *fds,
-                            int nfds,
-                            int isRead)
-{
-  for (int fd = 0; fd < nfds; fd++) {
-    fdStruct *list = getFdOperations(base, fd);
-    if (!FD_ISSET(fd, fds) || !list->object)
-      continue;
-  
-    int available;
-    aioObject *object = list->object;
-    selectOp *op = (selectOp*)(isRead ? object->root.readQueue.head : object->root.writeQueue.head);    
-    if (!op)
-      continue;
-  
-    assert(fd == getFd(op) && "Lost asyncop found!");
-    ioctl(fd, FIONREAD, &available);  
-    if (object->root.type == ioObjectSocket && available == 0 && isRead) {
-      if (op->info.root.opCode != actAccept) {
-        finish(op, aosDisconnected);
-        continue;
-      }
-    }  
-    
-    switch (op->info.root.opCode) {
-      case actConnect : {
-        int error;
-        socklen_t size = sizeof(error);
-        getsockopt(object->hSocket, SOL_SOCKET, SO_ERROR, &error, &size);
-        finish(op, (error == 0) ? aosSuccess : aosUnknownError);
-        break;
-      }
-              
-      case actAccept : {
-        struct sockaddr_in clientAddr;
-        socklen_t clientAddrSize = sizeof(clientAddr);
-        op->info.acceptSocket =
-          accept(fd, (struct sockaddr*)&clientAddr, &clientAddrSize);
-                
-        if (op->info.acceptSocket != -1) {
-          op->info.host.family = 0;
-          op->info.host.ipv4 = clientAddr.sin_addr.s_addr;
-          op->info.host.port = clientAddr.sin_port;
-          finish(op, aosSuccess);
-        } else {
-          finish(op, aosUnknownError);
-        }
-               
-        break;
-      }
-                
-      case actRead : {
-        int readyForRead = 0;
-        uint8_t *ptr = (uint8_t *)op->info.buffer + op->info.bytesTransferred;
-        readyForRead =
-          (op->info.transactionSize - op->info.bytesTransferred < (size_t)available) ?
-            op->info.transactionSize - op->info.bytesTransferred :
-            (size_t)available;
-        read(fd, ptr, readyForRead);
-        op->info.bytesTransferred += readyForRead;
-        if (op->info.bytesTransferred == op->info.transactionSize ||
-            !(op->info.root.flags & afWaitAll))
-          finish(op, aosSuccess);
-        break;
-      }
-              
-      case actWrite : {
-        void *buffer = op->info.buffer;
-        uint8_t *ptr = (uint8_t*)buffer + op->info.bytesTransferred;
-        size_t remaining = op->info.transactionSize - op->info.bytesTransferred;
-        ssize_t bytesWritten = write(fd, ptr, remaining);
-        if (bytesWritten == -1) {
-          if (object->root.type == ioObjectSocket && errno == EPIPE) {
-            finish(op, aosDisconnected);
-          } else {
-            finish(op, aosUnknownError);
-          }
-        } else {
-          op->info.bytesTransferred += bytesWritten;
-          if (op->info.bytesTransferred == op->info.transactionSize)
-            finish(op, aosSuccess);
-        }
-        
-        break;
-      }
-              
-      case actReadMsg : {
-        if (available <= op->info.transactionSize) {
-          struct sockaddr_in source;
-          socklen_t addrlen = sizeof(source);
-          recvfrom(fd, op->info.buffer, available, 0, (struct sockaddr*)&source, &addrlen);
-          op->info.host.family = 0;
-          op->info.host.ipv4 = source.sin_addr.s_addr;
-          op->info.host.port = source.sin_port;
-          op->info.bytesTransferred += available;
-          finish(op, aosSuccess);
-        } else {
-          finish(op, aosBufferTooSmall);
-        }
-        break;
-      }
-
-      case actWriteMsg : {
-        struct sockaddr_in remoteAddress;
-        void *ptr = op->info.buffer;
-        remoteAddress.sin_family = op->info.host.family;
-        remoteAddress.sin_addr.s_addr = op->info.host.ipv4;
-        remoteAddress.sin_port = op->info.host.port;
-
-        sendto(fd, ptr, op->info.transactionSize, 0,
-               (struct sockaddr*)&remoteAddress, sizeof(remoteAddress));
-        finish(op, aosSuccess);
-        break;
-      }
-      
-      default :
-        break;
-    }        
-  }
 }
 
 
@@ -392,18 +239,18 @@ void selectNextFinishedOperation(asyncBase *base)
             aioUserEvent *event = (aioUserEvent*)op;
             if (event->counter == 0)
               stopTimer(op);
-            event->root.finishMethod(&event->root);
+            event->root.finishMethod(&event->root, aaFinish);
           } else {
-            if (op->object->type != ioObjectUserDefined)
-              asyncOpUnlink((selectOp*)op);
+//            if (op->object->type != ioObjectUserDefined)
+//              asyncOpUnlink((selectOp*)op);
 //            finishOperation(op, aosTimeout, 0);
           }
         }
       }
     }
 
-    processReadyFds(localBase, &readFds, nfds, 1);
-    processReadyFds(localBase, &writeFds, nfds, 0);
+//    processReadyFds(localBase, &readFds, nfds, 1);
+//    processReadyFds(localBase, &writeFds, nfds, 0);
   } 
 }
 
@@ -415,6 +262,7 @@ aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data)
   switch (type) {
     case ioObjectDevice :
       object->hDevice = *(iodevTy*)data;
+      break;
     case ioObjectSocket :
       object->hSocket = *(socketTy*)data;
       break;
@@ -426,7 +274,7 @@ aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 }
 
 
-asyncOpRoot *selectNewAsyncOp(asyncBase *base)
+asyncOpRoot *selectNewAsyncOp()
 {
   selectOp *op = malloc(sizeof(selectOp));
   if (op) {
@@ -443,13 +291,9 @@ void selectDeleteObject(aioObject *object)
   free(object);
 }
 
-void selectFinishOp(selectOp *op)
+void selectInitializeTimer(asyncBase *base, asyncOpRoot *op)
 {
-  asyncOpUnlink(op);
-}
-
-void selectInitializeTimer(asyncOpRoot *op)
-{
+  __UNUSED(base);
   timer_t timerId = 0;
   struct sigevent sEvent;
   sEvent.sigev_notify = SIGEV_SIGNAL;
@@ -459,9 +303,9 @@ void selectInitializeTimer(asyncOpRoot *op)
   op->timerId = (void*)timerId;
 }
 
-void selectStartTimer(asyncOpRoot *op, uint64_t usTimeout)
+void selectStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic)
 {
-  startTimer(op, usTimeout, op->opCode == actUserEvent);
+  startTimer(op, usTimeout, periodic);
 }
 
 
@@ -471,60 +315,50 @@ void selectStopTimer(asyncOpRoot *op)
 }
 
 
-void selectActivate(asyncOpRoot *op)
+void selectActivate(aioUserEvent *event)
 {
-  selectBase *localBase = (selectBase*)op->object->base;
-  write(localBase->pipeFd[1], op, sizeof(op));
+  selectBase *localBase = (selectBase*)event->base;
+  write(localBase->pipeFd[Write], &event, sizeof(void*));
 }
 
 
-void selectAsyncConnect(selectOp *op,
-                        const HostAddress *address,
-                        uint64_t usTimeout)
+AsyncOpStatus selectAsyncConnect(asyncOpRoot *opptr)
 {
-  struct sockaddr_in localAddress;
-  localAddress.sin_family = address->family;
-  localAddress.sin_addr.s_addr = address->ipv4;
-  localAddress.sin_port = address->port;
-  int err = connect(getObject(op)->hSocket, (struct sockaddr*)&localAddress, sizeof(localAddress));
-
-  if (err == -1 && errno != EINPROGRESS) {
-    fprintf(stderr, "connect error, errno: %s\n", strerror(errno));
-   return;
-  }
-
-  startOperation(op, actConnect, usTimeout);
+  __UNUSED(opptr);
+  return aosUnknownError;
 }
 
 
-void selectAsyncAccept(selectOp *op, uint64_t usTimeout)
+AsyncOpStatus selectAsyncAccept(asyncOpRoot *opptr)
 {
-  startOperation(op, actAccept, usTimeout);
+  __UNUSED(opptr);
+  return aosUnknownError;
 }
 
 
-void selectAsyncRead(selectOp *op, uint64_t usTimeout)
+AsyncOpStatus selectAsyncRead(asyncOpRoot *opptr)
 {
-  startOperation(op, actRead, usTimeout);
+  __UNUSED(opptr);
+  return aosUnknownError;
 }
 
 
-void selectAsyncWrite(selectOp *op, uint64_t usTimeout)
+AsyncOpStatus selectAsyncWrite(asyncOpRoot *opptr)
 {
-  startOperation(op, actWrite, usTimeout);
+  __UNUSED(opptr);
+  return aosUnknownError;
 }
 
 
-void selectAsyncReadMsg(selectOp *op, uint64_t usTimeout)
+AsyncOpStatus selectAsyncReadMsg(asyncOpRoot *opptr)
 {
-  startOperation(op, actReadMsg, usTimeout);
+  __UNUSED(opptr);
+  return aosUnknownError;
 }
 
 
-void selectAsyncWriteMsg(selectOp *op,
-                         const HostAddress *address,
-                         uint64_t usTimeout)
+AsyncOpStatus selectAsyncWriteMsg(asyncOpRoot *opptr)
 {
-  op->info.host = *address;
-  startOperation(op, actWriteMsg, usTimeout);
+  __UNUSED(opptr);
+  return aosUnknownError;
 }

@@ -8,17 +8,20 @@
 
 const size_t clientBufferSize = 1024;
 
-
+__NO_PADDING_BEGIN
 struct ClientData {
   asyncBase *base;
   aioObject *socket;
   bool isConnected;
   uint8_t buffer[clientBufferSize];
 };
+__NO_PADDING_END
 
 void writeCb(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 {
-  ClientData *data = (ClientData*)arg;
+  __UNUSED(object);
+  __UNUSED(transferred);
+  ClientData *data = static_cast<ClientData*>(arg);
   if (status != aosSuccess) {
     printf("write error\n");
     postQuitOperation(data->base);
@@ -27,10 +30,11 @@ void writeCb(AsyncOpStatus status, aioObject *object, size_t transferred, void *
 
 void readCb(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 {
-  ClientData *data = (ClientData*)arg;  
+  __UNUSED(object);
+  ClientData *data = static_cast<ClientData*>(arg);
   if (status == aosSuccess) {
     for (uint8_t *p = data->buffer, *pe = p+transferred; p < pe; p++)
-      printf("%02X", (unsigned)*p);
+      printf("%02X", static_cast<unsigned>(*p));
     printf("\n");
   } else if (status == aosDisconnected) {
     fprintf(stderr, "connection lost!\n");
@@ -43,10 +47,11 @@ void readCb(AsyncOpStatus status, aioObject *object, size_t transferred, void *a
 
 void pingTimerCb(aioUserEvent *event, void *arg)
 {
-  ClientData *data = (ClientData*)arg;
+  __UNUSED(event);
+  ClientData *data = static_cast<ClientData*>(arg);
   if (data->isConnected) {
     char symbol = 32 + rand() % 96;
-    printf("%02X:", (int)symbol);
+    printf("%02X:", static_cast<int>(symbol));
     fflush(stdout);
     aioWrite(data->socket, &symbol, 1, afNone, 1000000, writeCb, data);
     aioRead(data->socket, data->buffer, clientBufferSize, afNone, 1000000, readCb, data);
@@ -56,7 +61,8 @@ void pingTimerCb(aioUserEvent *event, void *arg)
 
 void connectCb(AsyncOpStatus status, aioObject *object, void *arg)
 {
-  ClientData *data = (ClientData*)arg;
+  __UNUSED(object);
+  ClientData *data = static_cast<ClientData*>(arg);
   if (status == aosSuccess) {
     fprintf(stderr, "connected\n");
     data->isConnected = true;
@@ -92,7 +98,7 @@ int main(int argc, char **argv)
   
   HostAddress address;
   initializeSocketSubsystem();
-  srand((unsigned)time(NULL));
+  srand(static_cast<unsigned>(time(nullptr)));
 
   asyncBase *base = createAsyncBase(method);
   
@@ -110,7 +116,7 @@ int main(int argc, char **argv)
 
   address.family = AF_INET;
   address.ipv4 = inet_addr(argv[2]);
-  address.port = htons(atoi(argv[3]));
+  address.port = htons(static_cast<uint16_t>(atoi(argv[3])));
   data.base = base;
   data.socket = socketOp;
   data.isConnected = false;    

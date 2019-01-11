@@ -1,4 +1,5 @@
 #include "config.h"
+#include "macro.h"
 #include "p2putils/uriParse.h"
 #include "p2putils/strExtras.h"
 #include <string.h>
@@ -90,7 +91,7 @@ int uriParseScheme(const char **ptr, uriParseCb callback, void *arg)
         URIComponent component;
         component.type = uriCtSchema;
         component.raw.data = *ptr;
-        component.raw.size = p - *ptr;
+        component.raw.size = static_cast<size_t>(p - *ptr);
         callback(&component, arg);
         *ptr = p;
         return 1;
@@ -103,6 +104,7 @@ int uriParseScheme(const char **ptr, uriParseCb callback, void *arg)
 
 int uriParseIpLiteral(const char **ptr, uriParseCb callback, void *arg)
 {
+  __UNUSED(ptr); __UNUSED(callback); __UNUSED(arg);
   return 0;
 }
 
@@ -114,7 +116,7 @@ int uriParseIpv4(const char **ptr, uriParseCb callback, void *arg)
   int segments = 0;
   for (;;) {
     if (isDigit(*p)) {
-      u32 = u32*10 + (*p - '0');
+      u32 = u32*10 + static_cast<uint32_t>(*p - '0');
       p++;
     } else if (*p == '.' && segments < 3) {
       ipv4 |= (u32 << (8*segments));
@@ -127,7 +129,7 @@ int uriParseIpv4(const char **ptr, uriParseCb callback, void *arg)
       ipv4 |= (u32 << (8*segments));
       URIComponent component;
       component.type = uriCtHostIPv4;
-      component.i32 = ipv4;
+      component.u32 = ipv4;
       callback(&component, arg);
       break;
     }
@@ -150,7 +152,7 @@ int uriParsePath(const char **ptr, uriParseCb callback, void *arg)
         URIComponent component;
         component.type = uriCtPathElement;
         component.raw.data = lastElement;
-        component.raw.size = p-lastElement;
+        component.raw.size = static_cast<size_t>(p-lastElement);
         callback(&component, arg);
       }
       p++;
@@ -162,13 +164,13 @@ int uriParsePath(const char **ptr, uriParseCb callback, void *arg)
         // send last fragment
         component.type = uriCtPathElement;
         component.raw.data = lastElement;
-        component.raw.size = p-lastElement;
+        component.raw.size = static_cast<size_t>(p-lastElement);
         callback(&component, arg);
         
         // send entire path
         component.type = uriCtPath;
         component.raw.data = *ptr;
-        component.raw.size = p-*ptr;
+        component.raw.size = static_cast<size_t>(p-*ptr);
         callback(&component, arg);
       }
       break;
@@ -212,7 +214,7 @@ int uriParseAuthority(const char **ptr, uriParseCb callback, void *arg)
     
   if (state == StUserinfoOrRegname) {
     state = StWaitPort;
-    const char *firstColon = 0;
+    const char *firstColon = nullptr;
     for (;;) {
       if (isUnreserved(*p) || isSubDelims(*p)) {
         p++;
@@ -239,14 +241,14 @@ int uriParseAuthority(const char **ptr, uriParseCb callback, void *arg)
       URIComponent component;
       component.type = uriCtHostDNS;
       component.raw.data = b;
-      component.raw.size = p-b;
+      component.raw.size = static_cast<size_t>(p-b);
       callback(&component, arg);
     } else if (state == StWaitHost) {
       // user info found
       URIComponent component;
       component.type = uriCtUserInfo;
       component.raw.data = b;
-      component.raw.size = p-b-1;
+      component.raw.size = static_cast<size_t>(p-b-1);
       callback(&component, arg);      
     }
   }
@@ -282,7 +284,7 @@ int uriParseAuthority(const char **ptr, uriParseCb callback, void *arg)
           URIComponent component;
           component.type = uriCtHostDNS;
           component.raw.data = b;
-          component.raw.size = p-b;
+          component.raw.size = static_cast<size_t>(p-b);
           callback(&component, arg);
         }
       }
@@ -293,7 +295,7 @@ int uriParseAuthority(const char **ptr, uriParseCb callback, void *arg)
   
   if (state == StWaitPort && *p == ':') {
     p++;
-    int i32 = 0;
+    int32_t i32 = 0;
     for (;;) {
       if (isDigit(*p)) {
         i32 = i32*10 + (*p - '0');
@@ -348,11 +350,11 @@ int uriParseQuery(const char **ptr, uriParseCb callback, void *arg)
 {
   const char *p = *ptr;
   const char *lastName = p;
-  const char *lastValue = 0;  
+  const char *lastValue = nullptr;
   size_t lastNameSize = 0;
   for (;;) {
     if (*p == '=') {
-      lastNameSize = p - lastName;
+      lastNameSize = static_cast<size_t>(p - lastName);
       p++;
       lastValue = p;
     } else if (*p == '&') {
@@ -362,7 +364,7 @@ int uriParseQuery(const char **ptr, uriParseCb callback, void *arg)
         component.raw.data = lastName;
         component.raw.size = lastNameSize;
         component.raw2.data = lastValue;
-        component.raw2.size = p - lastValue;
+        component.raw2.size = static_cast<size_t>(p - lastValue);
         callback(&component, arg);
       }
       p++;
@@ -380,13 +382,13 @@ int uriParseQuery(const char **ptr, uriParseCb callback, void *arg)
           component.raw.data = lastName;
           component.raw.size = lastNameSize;
           component.raw2.data = lastValue;
-          component.raw2.size = p - lastValue;        
+          component.raw2.size = static_cast<size_t>(p - lastValue);
           callback(&component, arg);
         }
         
         component.type = uriCtQuery;
         component.raw.data = *ptr;
-        component.raw.size = p-*ptr;
+        component.raw.size = static_cast<size_t>(p-*ptr);
         callback(&component, arg);
       }
       break;
@@ -411,7 +413,7 @@ int uriParseFragment(const char **ptr, uriParseCb callback, void *arg)
         URIComponent component;
         component.type = uriCtFragment;
         component.raw.data = *ptr;
-        component.raw.size = p-*ptr;
+        component.raw.size = static_cast<size_t>(p-*ptr);
         callback(&component, arg);
       }
       break;
@@ -474,7 +476,8 @@ static void uriPctDecode(const char *ptr, size_t size, std::string &out)
   const char *p = ptr, *e = ptr+size;
   while (p < e) {
     if (*p == '%' && (e-p) >= 3 && isHexDigit(*(p+1)) && isHexDigit(*(p+2))) {
-      out.push_back((decodeHex(*(p+1)) << 4) + decodeHex(*(p+2)));
+      int s = (decodeHex(*(p+1)) << 4) + decodeHex(*(p+2));
+      out.push_back(static_cast<char>(s));
       p += 3;
     } else {
       out.push_back(*p++);
@@ -500,7 +503,7 @@ static void uriPctEncode(const char *ptr, size_t size, const char *extra, std::s
 
 static void stdCb(URIComponent *component, void *arg)
 {
-  URI *data = (URI*)arg;
+  URI *data = static_cast<URI*>(arg);
   switch (component->type) {
     case uriCtSchema :
       data->schema.assign(component->raw.data, component->raw.size);
@@ -510,7 +513,7 @@ static void stdCb(URIComponent *component, void *arg)
       break;
     case uriCtHostIPv4 :
       data->hostType = URI::HostTypeIPv4;
-      data->ipv4 = component->i32;
+      data->ipv4 = component->u32;
       break;
     case uriCtHostDNS :
       data->hostType = URI::HostTypeDNS;
@@ -536,7 +539,7 @@ int uriParse(const char *uri, URI *data)
   data->schema.clear();
   data->userInfo.clear();
   data->hostType = URI::HostTypeNone;
-  data->port = -1;
+  data->port = 0;
   data->path.clear();
   data->query.clear();
   data->fragment.clear();

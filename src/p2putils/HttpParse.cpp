@@ -1,16 +1,81 @@
+#include "macro.h"
 #include "p2putils/CommonParse.h"
 #include "p2putils/HttpParse.h"
+#include <stdlib.h>
 #include <string.h>
 #include <algorithm>
+#include <vector>
 
-extern StateElement httpHeaderFSM[128];
+static StateElement *headerNames = nullptr;
+
+struct Terminal {
+  const char *key;
+  int value;
+};
+
+struct FSMNode {
+  std::vector<Terminal> elements;
+};
+
+static Terminal httpHeaders[] = {
+  {"Content-Length:", hhContentLength},
+  {"Content-Type:", hhContentType},
+  {"Connection:", hhConnection},
+  {"Date:", hhDate},
+  {"Server:", hhServer},
+  {"Transfer-Encoding:", hhTransferEncoding}
+};
+
+constexpr unsigned TABLE_SIZE = 128;
+
+StateElement *buildTable(Terminal *terminals, size_t count)
+{
+  FSMNode current[TABLE_SIZE];
+
+  for (unsigned i = 0; i < TABLE_SIZE; i++)
+    current[i].elements.clear();
+
+  for (size_t i = 0; i < count; i++)
+    current[static_cast<unsigned char>(terminals[i].key[0])].elements.push_back(terminals[i]);
+
+  StateElement *table = new StateElement[TABLE_SIZE];
+  for (unsigned i = 0; i < TABLE_SIZE; i++) {
+    if (current[i].elements.size() == 0) {
+      table[i].state = stError;
+    } else if (current[i].elements.size() == 1) {
+      Terminal singleTerminal = current[i].elements[0];
+      if (strlen(singleTerminal.key) == 1) {
+        table[i].state = stFinish;
+        table[i].token = singleTerminal.value;
+      } else {
+        table[i].state = stMemcmp;
+        table[i].token = singleTerminal.value;
+        table[i].terminal = singleTerminal.key+1;
+        table[i].intValue = static_cast<int>(strlen(singleTerminal.key)-1);
+      }
+    } else {
+      // build subtable
+      std::vector<Terminal> &subTerminals = current[i].elements;
+      for (size_t tIdx = 0; tIdx < current[i].elements.size(); tIdx++) {
+        subTerminals[tIdx].key = subTerminals[tIdx].key + 1;
+      }
+
+      StateElement *newTable = buildTable(&subTerminals[0], current[i].elements.size());
+      table[i].state = stSwitchTable;
+      table[i].element = newTable;
+    }
+
+  }
+
+  return table;
+}
 
 HttpParserResultTy simpleTableParse(const char **ptr, const char *end, StateElement *entry, int *token)
 {
   const char *p = *ptr;
   StateElement *currentState = entry;
   while (p != end) {
-    StateElement &current = currentState[(int)*p];
+    StateElement &current = currentState[static_cast<unsigned char>(*p)];
     switch (current.state) {
       case stFinish :
         *token = current.token;
@@ -20,14 +85,14 @@ HttpParserResultTy simpleTableParse(const char **ptr, const char *end, StateElem
         return httpResultError;
       case stMemcmp:
         *token = current.token;
-        if (memcmp(p+1, current.ptr, current.intValue) == 0) {
+        if (memcmp(p+1, current.terminal, static_cast<size_t>(current.intValue)) == 0) {
           *ptr = p+1+current.intValue;
           return httpResultOk;
         } else {
           return httpResultError;
         }
       case stSwitchTable:
-        currentState = (StateElement*)current.ptr;
+        currentState = current.element;
         break;
     }
       
@@ -44,11 +109,12 @@ static int isDigit(char s)
 
 static inline int canRead(const char *ptr, const char *end, size_t size)
 {
-  return size <= (size_t)(end-ptr);
+  return size <= static_cast<size_t>(end-ptr);
 }
 
 static HttpParserResultTy compareUnchecked(const char **ptr, const char *end, const char *substr, size_t size)
 {
+  __UNUSED(end);
   if (memcmp(*ptr, substr, size) == 0) {
     (*ptr) += size;
     return httpResultOk;
@@ -94,7 +160,8 @@ static inline HttpParserResultTy readDec(const char **ptr, const char *end, size
       *ptr = p+2;
       return httpResultOk;
     } else if (*p >= '0' && *p <= '9') {
-      *size *= 10; *size += *p-'0';
+      *size *= 10;
+      *size += static_cast<unsigned char>(*p-'0');
     } else {
       return httpResultError;
     }
@@ -114,11 +181,11 @@ static inline HttpParserResultTy readHex(const char **ptr, const char *end, size
       *ptr = p+2;
       return httpResultOk;
     } else if (*p >= '0' && *p <= '9') {
-      *size <<= 4; *size += *p-'0';
+      *size <<= 4; *size += static_cast<unsigned char>(*p-'0');
     } else if (*p >= 'A' && *p <= 'F') {
-      *size <<= 4; *size += *p-'A'+10;
+      *size <<= 4; *size += static_cast<unsigned char>(*p-'A'+10);
     } else if (*p >= 'a' && *p <= 'f') {
-      *size <<= 4; *size += *p-'a'+10;
+      *size <<= 4; *size += static_cast<unsigned char>(*p-'a'+10);
     } else {
       return httpResultError;
     }
@@ -144,15 +211,18 @@ static HttpParserResultTy httpParseStartLine(HttpParserState *state, httpParseCb
     return result;
   if ( !(isDigit(ptr[0]) && ptr[1] == '.' && isDigit(ptr[2])) )
     return httpResultError;
-  component.startLine.majorVersion = ptr[0]-'0';
-  component.startLine.minorVersion = ptr[2]-'0';
+  component.startLine.majorVersion = static_cast<unsigned char>(ptr[0]-'0');
+  component.startLine.minorVersion = static_cast<unsigned char>(ptr[2]-'0');
   ptr += 3;
   
   // HTTP response code
   skipSPCharacters(&ptr, state->end);
   if (!canRead(ptr, state->end, 3))
     return httpResultNeedMoreData;
-  component.startLine.code = 100*(ptr[0]-'0') + 10*(ptr[1]-'0') + (ptr[2]-'0');
+  component.startLine.code =
+      100*static_cast<unsigned char>(ptr[0]-'0') +
+      10*static_cast<unsigned char>(ptr[1]-'0') +
+      static_cast<unsigned char>(ptr[2]-'0');
   ptr += 3;
   
   // associated textual phrase
@@ -160,11 +230,11 @@ static HttpParserResultTy httpParseStartLine(HttpParserState *state, httpParseCb
   component.startLine.description.data = ptr;
   if ( ( result = readUntilCRLF(&ptr, state->end)) != httpResultOk )
     return result;
-  component.startLine.description.size = ptr-component.startLine.description.data-2;
+  component.startLine.description.size = static_cast<size_t>(ptr-component.startLine.description.data-2);
   component.type = httpDtStartLine;
   callback(&component, arg);
   
-  state->ptr = (char*)ptr;
+  state->ptr = ptr;
   return httpResultOk;
 }
 
@@ -173,12 +243,14 @@ void httpInit(HttpParserState *state)
   state->state = httpStStartLine;
   state->chunked = false;
   state->dataRemaining = 0;
-  state->firstFragment = true;  
+  state->firstFragment = true;
+  if (!headerNames)
+    headerNames = buildTable(httpHeaders, sizeof(httpHeaders)/sizeof(Terminal));
 }
 
-void httpSetBuffer(HttpParserState *state, void *buffer, size_t size)
+void httpSetBuffer(HttpParserState *state, const void *buffer, size_t size)
 {
-  state->ptr = state->buffer = (char*)buffer;
+  state->ptr = state->buffer = static_cast<const char*>(buffer);
   state->end = state->buffer + size;
 }
 
@@ -204,7 +276,7 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
         } else {
           int token;
           const char *p = state->ptr;
-          HttpParserResultTy result = simpleTableParse(&p, state->end, httpHeaderFSM, &token);
+          HttpParserResultTy result = simpleTableParse(&p, state->end, headerNames, &token);
           if (result == httpResultOk) {
             component.header.entryType = token;
             skipSPCharacters(&p, state->end);
@@ -214,7 +286,7 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
                 size_t contentSize;
                 if ( ( result = readDec(&p, state->end, &contentSize)) != httpResultOk )
                   return result;
-                component.header.intValue = contentSize;
+                component.header.sizeValue = contentSize;
                 state->dataRemaining = contentSize;
                 callback(&component, arg);
                 break;
@@ -224,7 +296,7 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
                 component.header.stringValue.data = p;
                 if ( ( result = readUntilCRLF(&p, state->end)) != httpResultOk )
                   return result;
-                component.header.stringValue.size = p-component.header.stringValue.data-2;
+                component.header.stringValue.size = static_cast<size_t>(p-component.header.stringValue.data-2);
                 callback(&component, arg);
 
                 state->chunked = (component.header.stringValue.size == 7) &&
@@ -239,19 +311,19 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
                 component.header.stringValue.data = p;
                 if ( ( result = readUntilCRLF(&p, state->end)) != httpResultOk )
                   return result;
-                component.header.stringValue.size = p-component.header.stringValue.data-2;
+                component.header.stringValue.size = static_cast<size_t>(p-component.header.stringValue.data-2);
                 callback(&component, arg);
                 break;
               }
             }
 
-            state->ptr = (char*)p;
+            state->ptr = p;
           } else if (result == httpResultNeedMoreData) {
             return result;
           } else if (result == httpResultError) {
             component.header.entryType = 0;
             component.header.entryName.data = p;
-            const char *entryNameEnd = 0;
+            const char *entryNameEnd = nullptr;
             while (p < state->end) {
               if (*p == ':') {
                 entryNameEnd = p;
@@ -261,15 +333,15 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
               p++;
             }
 
-            component.header.entryName.size = entryNameEnd-component.header.entryName.data;
+            component.header.entryName.size = static_cast<size_t>(entryNameEnd-component.header.entryName.data);
             skipSPCharacters(&p, state->end);
             component.header.stringValue.data = p;
             if ( ( result = readUntilCRLF(&p, state->end)) != httpResultOk )
               return result;
-            component.header.stringValue.size = p-component.header.stringValue.data-2;
+            component.header.stringValue.size = static_cast<size_t>(p-component.header.stringValue.data-2);
             callback(&component, arg);
 
-            state->ptr = (char*)p;
+            state->ptr = p;
           }
         }
       }
@@ -280,7 +352,7 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
 
   if (state->state == httpStBody) {
     if (state->chunked) {
-      const char *readyChunk = 0;
+      const char *readyChunk = nullptr;
       size_t readyChunkSize = 0;
       const char *p = state->ptr;
 
@@ -296,7 +368,7 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
             state->firstFragment = false;
           } else {
             readyChunk = p;
-            readyChunkSize = std::min(state->dataRemaining, (size_t)(state->end - p));
+            readyChunkSize = std::min(state->dataRemaining, static_cast<size_t>(state->end - p));
             p += readyChunkSize;
             state->dataRemaining -= readyChunkSize;
             needMoreData = true;
@@ -307,7 +379,7 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
             component.data.data = readyChunk;
             component.data.size = readyChunkSize;
             callback(&component, arg);
-            state->ptr = (char*)p;
+            state->ptr = p;
           }
 
           if (needMoreData)
@@ -331,7 +403,7 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
             component.data.size = 0;
             callback(&component, arg);
             state->state = httpStLast;
-            state->ptr = (char*)p+2;
+            state->ptr = p+2;
             break;
           } else {
             state->dataRemaining = chunkSize;
@@ -345,15 +417,15 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
         component.data.data = p;
         component.data.size = state->dataRemaining;
         callback(&component, arg);
-        state->ptr = (char*)p + state->dataRemaining;
+        state->ptr = p + state->dataRemaining;
         state->state = httpStLast;
       } else if (p != state->end) {
-        size_t size = std::min(state->dataRemaining, (size_t)(state->end - p));
+        size_t size = std::min(state->dataRemaining, static_cast<size_t>(state->end - p));
         component.type = httpDtDataFragment;
         component.data.data = p;
         component.data.size = size;
         callback(&component, arg);
-        state->ptr = (char*)p + size;
+        state->ptr = p + size;
         state->firstFragment = false;
         state->dataRemaining -= size;
         return httpResultNeedMoreData;
@@ -364,12 +436,12 @@ HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void 
   return httpResultOk;
 }
 
-void *httpDataPtr(HttpParserState *state)
+const void *httpDataPtr(HttpParserState *state)
 {
   return state->ptr;
 }
 
 size_t httpDataRemaining(HttpParserState *state)
 {
-  return state->end - state->ptr;
+  return static_cast<size_t>(state->end - state->ptr);
 }

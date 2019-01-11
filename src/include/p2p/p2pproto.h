@@ -35,7 +35,7 @@ struct p2pOp {
     void *buffer;
     p2pStream *stream;
   };
-  size_t bufferSize;
+  uint32_t bufferSize;
 
   HostAddress address;
   p2pHeader header;  
@@ -65,14 +65,14 @@ void aiop2pConnect(p2pConnection *connection,
   
 void aiop2pRecvStream(p2pConnection *connection,
                       p2pStream &stream,
-                      size_t maxMsgSize,
+                      uint32_t maxMsgSize,
                       uint64_t timeout,
                       p2preadStreamCb *callback,
                       void *arg);
 
 void aiop2pRecv(p2pConnection *connection,
                 void *buffer,
-                size_t bufferSize,
+                uint32_t bufferSize,
                 uint64_t timeout,
                 p2preadCb *callback,
                 void *arg);
@@ -86,7 +86,7 @@ void aiop2pSend(p2pConnection *connection,
 
 int iop2pAccept(p2pConnection *connection, uint64_t timeout, p2pAcceptCb *callback, void *arg);
 int iop2pConnect(p2pConnection *connection, const HostAddress *address, uint64_t timeout, p2pConnectData *data);
-ssize_t iop2pSend(p2pConnection *connection, const void *data, uint32_t id, uint32_t type, size_t size, uint64_t timeout);
-ssize_t iop2pRecvStream(p2pConnection *connection, p2pStream &stream, size_t maxMsgSize, p2pHeader *header, uint64_t timeout);
-ssize_t iop2pRecv(p2pConnection *connection, void *buffer, size_t bufferSize, p2pHeader *header, uint64_t timeout);
+ssize_t iop2pSend(p2pConnection *connection, const void *data, uint32_t id, uint32_t type, uint32_t size, uint64_t timeout);
+ssize_t iop2pRecvStream(p2pConnection *connection, p2pStream &stream, uint32_t maxMsgSize, p2pHeader *header, uint64_t timeout);
+ssize_t iop2pRecv(p2pConnection *connection, void *buffer, uint32_t bufferSize, p2pHeader *header, uint64_t timeout);
 

@@ -8,6 +8,10 @@ if (WIN32)
     include_directories(${CMAKE_SOURCE_DIR}/msvc/include)
   endif(MSVC)
   set(OS_WINDOWS 1)
+  add_definitions(
+    -D__STDC_LIMIT_MACROS
+    -D__STDC_FORMAT_MACROS
+  )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(OS_LINUX 1)
   set(OS_COMMONUNIX 1)
@@ -30,15 +34,13 @@ endif()
 
 if(MSVC)
   add_definitions(
-    -D__STDC_LIMIT_MACROS
-    -D__STDC_FORMAT_MACROS
     -D_CRT_SECURE_NO_DEPRECATE
     -D_CRT_SECURE_NO_WARNINGS
     -D_CRT_NONSTDC_NO_DEPRECATE
   )
 else(MSVC)
-  set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall")
-  set (CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -Wall")
+  set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra")
+  set (CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra")
 endif(MSVC)
 
 include(TestBigEndian)

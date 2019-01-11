@@ -74,7 +74,7 @@ static inline uint64_t getPt(uint64_t endTime)
   return (endTime / 1000000) + (endTime % 1000000 != 0);
 }
 
-static inline void pageMapKeys(time_t tm, uint32_t *lo, uint32_t *hi)
+static inline void pageMapKeys(uint64_t tm, uint32_t *lo, uint32_t *hi)
 {
   uint32_t ltm = (uint32_t)tm;
   *hi = ltm >> 16;
@@ -114,7 +114,7 @@ void pageMapInit(pageMap *map)
   map->lock = 0;
 }
 
-asyncOpListLink *pageMapExtractAll(pageMap *map, time_t tm)
+asyncOpListLink *pageMapExtractAll(pageMap *map, uint64_t tm)
 {
   uint32_t lo;
   uint32_t hi;
@@ -225,7 +225,7 @@ void processTimeoutQueue(asyncBase *base, time_t currentTime)
   // check timeout queue
   time_t begin = base->lastCheckPoint;
   for (; begin < currentTime; begin++) {
-    asyncOpListLink *link = pageMapExtractAll(&base->timerMap, begin);
+    asyncOpListLink *link = pageMapExtractAll(&base->timerMap, (uint64_t)begin);
     while (link) {
       asyncOpListLink *next = link->next;
       opCancel(link->op, link->tag, aosTimeout);
@@ -277,12 +277,12 @@ int opSetStatus(asyncOpRoot *op, tag_t generation, AsyncOpStatus status)
 {
   return __tag_atomic_compare_and_swap(&op->tag,
                                       (generation<<TAG_STATUS_SIZE) | aosPending,
-                                      (generation<<TAG_STATUS_SIZE) | status);
+                                      (generation<<TAG_STATUS_SIZE) | (tag_t)status);
 }
 
 void opForceStatus(asyncOpRoot *op, AsyncOpStatus status)
 {
-  op->tag = (op->tag & TAG_GENERATION_MASK) | status;
+  op->tag = (op->tag & TAG_GENERATION_MASK) | (tag_t)status;
 }
 
 tag_t opEncodeTag(asyncOpRoot *op, tag_t tag)

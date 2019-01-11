@@ -18,7 +18,7 @@ typedef struct HTTPInfo HTTPInfo;
 typedef struct HTTPOp HTTPOp;
 
 typedef void httpConnectCb(AsyncOpStatus, HTTPClient*, void*);
-typedef void httpRequestCb(AsyncOpStatus, HTTPClient*, int, void*);
+typedef void httpRequestCb(AsyncOpStatus, HTTPClient*, unsigned, void*);
 
 typedef struct HTTPClient {
   aioObjectRoot root;
@@ -44,7 +44,7 @@ typedef struct HTTPOp {
   asyncOpRoot root;
   int state;
   HostAddress address;
-  int resultCode;
+  unsigned resultCode;
   Raw contentType;
   Raw body;
   httpParseCb *parseCallback;

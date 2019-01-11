@@ -5,7 +5,7 @@
 extern "C" {
 #endif
 
-#include <stddef.h>
+#include "asyncio/asyncioTypes.h"
 
 enum SeekTy {
   SeekSet = 0,
@@ -36,7 +36,7 @@ void dynamicBufferClear(dynamicBuffer *buffer);
 void *dynamicBufferPtr(dynamicBuffer *buffer);
 size_t dynamicBufferRemaining(dynamicBuffer *buffer);
 
-void dynamicBufferSeek(dynamicBuffer *buffer, SeekTy type, size_t offset);
+void dynamicBufferSeek(dynamicBuffer *buffer, SeekTy type, ssize_t offset);
 
 #ifdef __cplusplus
 }

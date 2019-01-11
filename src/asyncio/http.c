@@ -4,8 +4,8 @@
 #include "asyncio/coroutine.h"
 #include <string.h>
 
-const char *httpPoolId = "HTTP";
-const char *httpPoolTimerId = "HTTPTimer";
+static const char *httpPoolId = "HTTP";
+static const char *httpPoolTimerId = "HTTPTimer";
 
 typedef enum {
   httpOpConnect = 0,
@@ -27,7 +27,7 @@ typedef struct coroReturnStruct {
 
 static AsyncOpStatus httpParseStart(asyncOpRoot *opptr);
 
-static asyncOpRoot *alloc(asyncBase *base)
+static asyncOpRoot *alloc()
 {
   return (asyncOpRoot*)malloc(sizeof(HTTPOp));
 }
@@ -61,6 +61,7 @@ static void finish(asyncOpRoot *root, AsyncOpActionTy action)
 
 static void coroutineConnectCb(AsyncOpStatus status, HTTPClient *client, void *arg)
 {
+  __UNUSED(client)
   coroReturnStruct *r = (coroReturnStruct*)arg;
   r->status = status;
   coroutineCall(r->coroutine);
@@ -68,6 +69,7 @@ static void coroutineConnectCb(AsyncOpStatus status, HTTPClient *client, void *a
 
 static void coroutineRequestCb(AsyncOpStatus status, HTTPClient *client, int resultCode, void *arg)
 {
+  __UNUSED(client)
   coroReturnStruct *r = (coroReturnStruct*)arg;
   r->status = status;
   r->resultCode = resultCode;
@@ -76,6 +78,7 @@ static void coroutineRequestCb(AsyncOpStatus status, HTTPClient *client, int res
 
 void httpRequestProc(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 {
+  __UNUSED(object)
   asyncOpRoot *opptr = (asyncOpRoot*)arg;
   HTTPClient *client = (HTTPClient*)opptr->object;
   httpSetBuffer(&client->state, client->inBuffer, client->inBufferOffset+transferred);
@@ -84,6 +87,7 @@ void httpRequestProc(AsyncOpStatus status, aioObject *object, size_t transferred
 
 void httpsRequestProc(AsyncOpStatus status, SSLSocket *object, size_t transferred, void *arg)
 {
+  __UNUSED(object)
   asyncOpRoot *opptr = (asyncOpRoot*)arg;
   HTTPClient *client = (HTTPClient*)opptr->object;
   httpSetBuffer(&client->state, client->inBuffer, client->inBufferOffset+transferred);
@@ -93,11 +97,13 @@ void httpsRequestProc(AsyncOpStatus status, SSLSocket *object, size_t transferre
 
 void httpConnectProc(AsyncOpStatus status, aioObject *object, void *arg)
 {
+  __UNUSED(object)
   resumeParent((asyncOpRoot*)arg, status);
 }
 
 void httpsConnectProc(AsyncOpStatus status, SSLSocket *object, void *arg)
 {
+  __UNUSED(object)
   resumeParent((asyncOpRoot*)arg, status);
 }
 
@@ -160,6 +166,8 @@ static AsyncOpStatus httpParseStart(asyncOpRoot *opptr)
     case httpResultError :
       return aosUnknownError;
   }
+
+  return aosUnknownError;
 }
 
 
@@ -274,13 +282,15 @@ void aioHttpConnect(HTTPClient *client,
                     httpConnectCb callback,
                     void *arg)
 {
-  HTTPOp *op = allocHttpOp(client, httpOpConnect, httpConnectStart, 0, callback, arg, usTimeout);
+  HTTPOp *op = allocHttpOp(client, httpOpConnect, httpConnectStart, 0, (void*)callback, arg, usTimeout);
   op->address = *address;
   opStart(&op->root);
 }
 
 void writeCb(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 {
+  __UNUSED(object);
+  __UNUSED(transferred);
   asyncOpRoot *op = (asyncOpRoot*)arg;
   if (status == aosSuccess)
     opStart(op);
@@ -290,6 +300,8 @@ void writeCb(AsyncOpStatus status, aioObject *object, size_t transferred, void *
 
 void sslWriteCb(AsyncOpStatus status, SSLSocket *object, size_t transferred, void *arg)
 {
+  __UNUSED(object);
+  __UNUSED(transferred);
   asyncOpRoot *op = (asyncOpRoot*)arg;
   if (status == aosSuccess)
     opStart(op);
@@ -305,11 +317,11 @@ void aioHttpRequest(HTTPClient *client,
                     httpRequestCb callback,
                     void *arg)
 {
-  HTTPOp *op = allocHttpOp(client, httpOpConnect, httpParseStart, parseCallback, callback, arg, usTimeout);
+  HTTPOp *op = allocHttpOp(client, httpOpConnect, httpParseStart, parseCallback, (void*)callback, arg, usTimeout);
   if (client->isHttps)
-    aioSslWrite(client->sslSocket, (void*)request, requestSize, afSerialized, 0, sslWriteCb, op);
+    aioSslWrite(client->sslSocket, request, requestSize, afSerialized, 0, sslWriteCb, op);
   else
-    aioWrite(client->plainSocket, (void*)request, requestSize, afSerialized, 0, writeCb, op);
+    aioWrite(client->plainSocket, request, requestSize, afSerialized, 0, writeCb, op);
 }
 
 
@@ -317,7 +329,7 @@ int ioHttpConnect(HTTPClient *client, const HostAddress *address, uint64_t usTim
 {
   combinerCallArgs ccArgs;
   coroReturnStruct r = {coroutineCurrent(), aosPending, 0};
-  HTTPOp *op = allocHttpOp(client, httpOpConnect, httpConnectStart, 0, coroutineConnectCb, &r, usTimeout);
+  HTTPOp *op = allocHttpOp(client, httpOpConnect, httpConnectStart, 0, (void*)coroutineConnectCb, &r, usTimeout);
   op->address = *address;
   combinerCallDelayed(&ccArgs, &client->root, 1, &op->root, aaStart, 1);
   coroutineYield();
@@ -341,7 +353,7 @@ int ioHttpRequest(HTTPClient *client,
 {
   ioHttpRequestArg hrArgs;
   coroReturnStruct r = {coroutineCurrent(), aosPending, 0};
-  HTTPOp *op = allocHttpOp(client, httpOpRequest, httpParseStart, parseCallback, coroutineRequestCb, &r, usTimeout);
+  HTTPOp *op = allocHttpOp(client, httpOpRequest, httpParseStart, parseCallback, (void*)coroutineRequestCb, &r, usTimeout);
   hrArgs.client = client;
   hrArgs.op = op;
   hrArgs.request = request;

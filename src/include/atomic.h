@@ -1,5 +1,7 @@
 #include "asyncio/asyncioTypes.h"
+#include "macro.h"
 
+__NO_UNUSED_FUNCTION_BEGIN
 static inline tag_t __tag_atomic_fetch_and_add(tag_t volatile *tag, tag_t value)
 {
 #ifndef _MSC_VER // Not Microsoft compiler
@@ -78,3 +80,5 @@ static inline void __spinlock_release(volatile unsigned *lock)
 {
   *lock = 0;
 }
+
+__NO_UNUSED_FUNCTION_END

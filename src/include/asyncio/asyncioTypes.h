@@ -51,6 +51,4 @@ typedef struct HostAddress {
   uint16_t family;
 } HostAddress;
 
-#define __UNUSED(x) (void)x;
-
 #endif //__ASYNCTYPES_H_

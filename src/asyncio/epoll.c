@@ -28,7 +28,7 @@ typedef enum pipeCmd {
   UserEvent
 } pipeCmd;
 
-
+__NO_PADDING_BEGIN
 typedef struct pipeMsg {
   pipeCmd cmd;
   void *data;
@@ -46,12 +46,13 @@ typedef struct aioTimer {
   int fd;
   asyncOpRoot *op;
 } aioTimer;
+__NO_PADDING_END
 
-void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType);
+static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType);
 void epollPostEmptyOperation(asyncBase *base);
 void epollNextFinishedOperation(asyncBase *base);
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data);
-asyncOpRoot *epollNewAsyncOp();
+asyncOpRoot *epollNewAsyncOp(void);
 void epollDeleteObject(aioObject *object);
 void epollInitializeTimer(asyncBase *base, asyncOpRoot *op);
 void epollStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic);
@@ -128,8 +129,8 @@ asyncBase *epollNewAsyncBase()
 
 void epollPostEmptyOperation(asyncBase *base)
 {
-  int count = base->messageLoopThreadCounter;
-  for (int i = 0; i < count; i++) {
+  unsigned count = base->messageLoopThreadCounter;
+  for (unsigned i = 0; i < count; i++) {
     pipeMsg msg = {Reset, 0};
     epollBase *localBase = (epollBase *)base;
     write(localBase->pipeFd[Write], &msg, sizeof(pipeMsg));
@@ -156,6 +157,7 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
 {
   List *list = 0;
   tag_t tag = 0;
+  int restart = 0;
   aioObjectRoot *object = opptr->object;
   if (opptr->opCode & OPCODE_WRITE) {
     list = &object->writeQueue;
@@ -166,10 +168,21 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
   }
 
   asyncOpRoot *queueHead = list->head;
+  int userDefined = !(object->type == ioObjectDevice || object->type == ioObjectSocket);
 
   switch (actionType) {
     case aaStart : {
       opRun(opptr, list);
+      break;
+    }
+
+    case aaCancel : {
+      if (userDefined && opptr->running) {
+        opptr->finishMethod(opptr, aaCancel);
+        opptr->running = 0;
+      } else {
+        opRelease(opptr, opGetStatus(opptr), list, finished);
+      }
       break;
     }
 
@@ -178,14 +191,24 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
       break;
     }
 
+    case aaContinue : {
+      if (opptr->running) {
+        opptr->running = 0;
+        restart = 1;
+      } else {
+        opRelease(opptr, opGetStatus(opptr), list, finished);
+      }
+      break;
+    }
+
     default :
       break;
   }
 
-  *needStart |= (list->head && list->head != queueHead) ? tag : 0;
+  *needStart |= (list->head && (list->head != queueHead || restart)) ? tag : 0;
 }
 
-void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
+static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
 {
   epollBase *base = (epollBase*)object->base;
   tag_t currentTag = tag;
@@ -312,7 +335,7 @@ void epollNextFinishedOperation(asyncBase *base)
               __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, 0u-1);
               return;
             case UserEvent :
-              op->finishMethod(op);
+              op->finishMethod(op, aaFinish);
               break;
           }
         }
@@ -336,7 +359,7 @@ void epollNextFinishedOperation(asyncBase *base)
                            __tagged_pointer_make(timer, opGetGeneration(op)));
             }
 
-            op->finishMethod(op);
+            op->finishMethod(op, aaFinish);
           } else {
             opCancel(op, opEncodeTag(op, timerId), aosTimeout);
           }
@@ -508,7 +531,7 @@ AsyncOpStatus epollAsyncRead(asyncOpRoot *opptr)
                            op->transactionSize - op->bytesTransferred);
 
   if (bytesRead > 0) {
-    op->bytesTransferred += bytesRead;
+    op->bytesTransferred += (size_t)bytesRead;
     if (op->root.flags & afWaitAll && op->bytesTransferred < op->transactionSize)
       return aosPending;
     else
@@ -530,7 +553,7 @@ AsyncOpStatus epollAsyncWrite(asyncOpRoot *opptr)
                                (uint8_t *)op->buffer + op->bytesTransferred,
                                op->transactionSize - op->bytesTransferred);
   if (bytesWritten > 0) {
-    op->bytesTransferred += bytesWritten;
+    op->bytesTransferred += (size_t)bytesWritten;
     if (op->root.flags & afWaitAll && op->bytesTransferred < op->transactionSize)
       return aosPending;
     else
@@ -555,7 +578,7 @@ AsyncOpStatus epollAsyncReadMsg(asyncOpRoot *opptr)
     op->host.family = 0;
     op->host.ipv4 = source.sin_addr.s_addr;
     op->host.port = source.sin_port;
-    op->bytesTransferred = result;
+    op->bytesTransferred = (size_t)result;
     return aosSuccess;
   } else {
     if (errno == EAGAIN)

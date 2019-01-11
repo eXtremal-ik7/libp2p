@@ -1,5 +1,4 @@
 #include "asyncio/asyncio.h"
-#include "asyncio/dynamicBuffer.h"
 #include "asyncio/socket.h"
 #include "asyncio/timer.h"
 
@@ -15,14 +14,14 @@
 #endif
 
 static option longOpts[] = {
-  {"interval", required_argument, 0, 'i'},
-  {"count", required_argument, 0, 'c'},
-  {"help", no_argument, 0, 0},
-  {0, 0, 0, 0}
+  {"interval", required_argument, nullptr, 'i'},
+  {"count", required_argument, nullptr, 'c'},
+  {"help", no_argument, nullptr, 0},
+  {nullptr, 0, nullptr, 0}
 };
 
 static const char shortOpts[] = "i:c:";
-static const char *gTarget = 0;
+static const char *gTarget = nullptr;
 static double gInterval = 1.0;
 static unsigned gCount = 4;
 
@@ -54,7 +53,7 @@ static const uint8_t ICMP_ECHOREPLY = 0;
   };
 #pragma pack(pop)
 
-
+__NO_PADDING_BEGIN
 struct ICMPClientData {
   aioObject *rawSocket;
   HostAddress remoteAddress;
@@ -63,6 +62,7 @@ struct ICMPClientData {
   uint8_t buffer[1024];
   std::map<unsigned, timeMark> times;
 };
+__NO_PADDING_END
 
 uint16_t InternetChksum(uint16_t *lpwIcmpData, uint16_t wDataLength)
 {
@@ -79,13 +79,13 @@ uint16_t InternetChksum(uint16_t *lpwIcmpData, uint16_t wDataLength)
 
   if (wDataLength == 1)  {
     wOddByte = 0;
-    *((uint8_t*) &wOddByte) = *(uint8_t*)lpwIcmpData;
+    *(reinterpret_cast<uint8_t*>(&wOddByte)) = *reinterpret_cast<uint8_t*>(lpwIcmpData);
     lSum += wOddByte;
   }
 
   lSum = (lSum >> 16) + (lSum & 0xffff);
   lSum += (lSum >> 16);
-  wAnswer = (uint16_t)~lSum;
+  wAnswer = static_cast<uint16_t>(~lSum);
   return(wAnswer);
 }
 
@@ -103,19 +103,19 @@ void printHelpMessage(const char *appName)
 
 void readCb(AsyncOpStatus status, aioObject *rawSocket, HostAddress address, size_t transferred, void *arg)
 {
-  ICMPClientData *client = (ICMPClientData*)arg;
+  __UNUSED(address)
+  ICMPClientData *client = static_cast<ICMPClientData*>(arg);
   if (status == aosSuccess && transferred >= (sizeof(ip) + sizeof(icmp))) {
-//     dynamicBufferSeek(&client->buffer, SeekSet, 0);
-    uint8_t *ptr = (uint8_t*)client->buffer;
-    icmp *receivedIcmp = (icmp*)(ptr + sizeof(ip));
+    uint8_t *ptr = static_cast<uint8_t*>(client->buffer);
+    icmp *receivedIcmp = reinterpret_cast<icmp*>(ptr + sizeof(ip));
 
     if (receivedIcmp->icmp_type == ICMP_ECHOREPLY) {     
       std::map<unsigned, timeMark>::iterator F = client->times.find(receivedIcmp->icmp_id);
       if (F != client->times.end()) {
-        double diff = (double)usDiff(F->second, getTimeMark());
+        double diff = usDiff(F->second, getTimeMark());
         fprintf(stdout,
                 " * [%u] response from %s %0.4lgms\n",
-                (unsigned)receivedIcmp->icmp_id,
+                static_cast<unsigned>(receivedIcmp->icmp_id),
                 gTarget,
                 diff / 1000.0);
         client->times.erase(F);
@@ -128,30 +128,32 @@ void readCb(AsyncOpStatus status, aioObject *rawSocket, HostAddress address, siz
 
 void pingTimerCb(aioUserEvent *event, void *arg)
 {
-  ICMPClientData *clientData = (ICMPClientData*)arg;
+  __UNUSED(event);
+  ICMPClientData *clientData = static_cast<ICMPClientData*>(arg);
   clientData->id++;
   clientData->data.icmp_id = clientData->id;
   clientData->data.icmp_cksum = 0;
   clientData->data.icmp_cksum =
-    InternetChksum((uint16_t*)&clientData->data, sizeof(icmp));
+    InternetChksum(reinterpret_cast<uint16_t*>(&clientData->data), sizeof(icmp));
     
   aioWriteMsg(clientData->rawSocket,
               &clientData->remoteAddress,
               &clientData->data, sizeof(icmp),
-              afNone, 1000000, 0, 0);
+              afNone, 1000000, nullptr, nullptr);
   clientData->times[clientData->id] = getTimeMark();
 }
 
 
 void printTimerCb(aioUserEvent *event, void *arg)
 {
+  __UNUSED(event);
   std::vector<uint32_t> forDelete;
-  ICMPClientData *clientData = (ICMPClientData*)arg;
+  ICMPClientData *clientData = static_cast<ICMPClientData*>(arg);
   for (std::map<unsigned, timeMark>::iterator I = clientData->times.begin(),
        IE = clientData->times.end(); I != IE; ++I) {
     uint64_t diff = usDiff(I->second, getTimeMark());
     if (diff > 1000000) {
-      fprintf(stdout, " * [%u] timeout\n", (unsigned)I->first);
+      fprintf(stdout, " * [%u] timeout\n", static_cast<unsigned>(I->first));
       forDelete.push_back(I->first);
     }
   }
@@ -173,7 +175,7 @@ int main(int argc, char **argv)
         }
         break;
       case 'c' :
-        gCount = atoi(optarg);
+        gCount = static_cast<unsigned>(atoi(optarg));
         break;
       case 'i' :
         gInterval = atof(optarg);
@@ -207,7 +209,7 @@ int main(int argc, char **argv)
     return 1;
   }
 
-  u_long addr = host->h_addr ? *(u_long*)host->h_addr : 0;
+  u_long addr = host->h_addr ? *reinterpret_cast<u_long*>(host->h_addr) : 0;
   if (!addr) {
     fprintf(stderr,
             " * cannot retrieve address of %s (gethostbyname returns 0)\n",
@@ -228,7 +230,7 @@ int main(int argc, char **argv)
   ICMPClientData client;
   client.id = 0;
   client.remoteAddress.family = AF_INET;
-  client.remoteAddress.ipv4 = addr;
+  client.remoteAddress.ipv4 = static_cast<uint32_t>(addr);
 
   client.data.icmp_type = ICMP_ECHO;
   client.data.icmp_code = 0;
@@ -241,7 +243,7 @@ int main(int argc, char **argv)
 
   aioReadMsg(client.rawSocket, client.buffer, sizeof(client.buffer), afNone, 0, readCb, &client);
   userEventStartTimer(printTimer, 100000, -1);
-  userEventStartTimer(pingTimer, (uint64_t)(gInterval*1000000), -1);
+  userEventStartTimer(pingTimer, static_cast<uint64_t>(gInterval*1000000.0), -1);
   asyncLoop(base);
   return 0;
 }

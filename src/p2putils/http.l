@@ -1,6 +1,0 @@
-hhContentLength: "Content-Length:"
-hhContentType: "Content-Type:"
-hhConnection: "Connection:"
-hhDate: "Date:"
-hhServer: "Server:"
-hhTransferEncoding: "Transfer-Encoding:"

@@ -7,6 +7,7 @@ extern "C" {
 
 #include <stddef.h>
 #include <stdint.h>
+#include "macro.h"
 #include "asyncio/asyncioTypes.h"
 
 #define MAX_SYNCHRONOUS_FINISHED_OPERATION 32
@@ -59,6 +60,15 @@ typedef enum AsyncOpActionTy {
   aaContinue
 } AsyncOpActionTy;
 
+#ifdef __cplusplus
+__NO_UNUSED_FUNCTION_BEGIN
+static inline AsyncFlags operator|(AsyncFlags a, AsyncFlags b) {
+  return static_cast<AsyncFlags>(static_cast<int>(a) | static_cast<int>(b));
+}
+__NO_UNUSED_FUNCTION_END
+#endif
+
+
 typedef struct asyncBase asyncBase;
 typedef struct aioObjectRoot aioObjectRoot;
 typedef struct asyncOpRoot asyncOpRoot;
@@ -91,18 +101,24 @@ extern __tls List threadLocalQueue;
 extern __tls unsigned currentFinishedSync;
 extern __tls unsigned messageLoopThreadId;
 
-#define TAG_READ (((tag_t)1) << (sizeof(tag_t)*8 - 2))
-#define TAG_READ_MASK (((tag_t)3) << (sizeof(tag_t)*8 - 2))
-#define TAG_WRITE (((tag_t)1) << (sizeof(tag_t)*8 - 4))
-#define TAG_WRITE_MASK (((tag_t)3) << (sizeof(tag_t)*8 - 4))
-#define TAG_ERROR (((tag_t)1) << (sizeof(tag_t)*8 - 6))
-#define TAG_ERROR_MASK (((tag_t)3) << (sizeof(tag_t)*8 - 6))
-#define TAG_DELETE (((tag_t)1) << (sizeof(tag_t)*8 - 8))
-#define TAG_CANCELIO (((tag_t)1) << (sizeof(tag_t)*8 - 9))
+#ifndef __cplusplus
+#define TAG(x) ((tag_t)x)
+#else
+#define TAG(x) static_cast<tag_t>(x)
+#endif
+
+#define TAG_READ (TAG(1) << (sizeof(tag_t)*8 - 2))
+#define TAG_READ_MASK (TAG(3) << (sizeof(tag_t)*8 - 2))
+#define TAG_WRITE (TAG(1) << (sizeof(tag_t)*8 - 4))
+#define TAG_WRITE_MASK (TAG(3) << (sizeof(tag_t)*8 - 4))
+#define TAG_ERROR (TAG(1) << (sizeof(tag_t)*8 - 6))
+#define TAG_ERROR_MASK (TAG(3) << (sizeof(tag_t)*8 - 6))
+#define TAG_DELETE (TAG(1) << (sizeof(tag_t)*8 - 8))
+#define TAG_CANCELIO (TAG(1) << (sizeof(tag_t)*8 - 9))
 
 #define OPCODE_READ 0
-#define OPCODE_WRITE (1<<(sizeof(int)*8-2))
-#define OPCODE_OTHER (1<<(sizeof(int)*8-1))
+#define OPCODE_WRITE (1<<(sizeof(int)*8-4))
+#define OPCODE_OTHER (1<<(sizeof(int)*8-2))
 
 
 
@@ -114,6 +130,7 @@ void eqRemove(List *list, asyncOpRoot *op);
 void eqPushBack(List *list, asyncOpRoot *op);
 void fnPushBack(List *list, asyncOpRoot *op);
 
+__NO_UNUSED_FUNCTION_BEGIN
 static inline tag_t __tag_get_opcount(tag_t tag)
 {
   return tag & ~(TAG_READ_MASK | TAG_WRITE_MASK | TAG_ERROR_MASK | TAG_DELETE | TAG_CANCELIO);
@@ -123,6 +140,7 @@ static inline tag_t __tag_make_processed(tag_t currentTag, tag_t enqueued)
 {
   return (currentTag & (TAG_READ_MASK | TAG_WRITE_MASK | TAG_ERROR_MASK | TAG_DELETE | TAG_CANCELIO)) | enqueued;
 }
+__NO_UNUSED_FUNCTION_END
 
 typedef struct asyncOpListLink {
   asyncOpRoot *op;

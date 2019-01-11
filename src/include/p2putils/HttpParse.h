@@ -7,7 +7,32 @@ extern "C" {
 
 #include <stddef.h>
 #include <stdint.h>
-#include "p2putils/http.h"
+
+typedef enum StateTy {
+  stFinish = 0,
+  stMemcmp,
+  stError,
+  stSwitchTable
+} StateTy;
+
+typedef struct StateElement {
+  StateTy state;
+  int token;
+  union {
+    struct StateElement *element;
+    const char *terminal;
+  };
+  int intValue;
+} StateElement;
+
+enum {
+  hhContentLength = 1,
+  hhContentType,
+  hhConnection,
+  hhDate,
+  hhServer,
+  hhTransferEncoding
+};
 
 typedef enum HttpParserStateTy {
   httpStStartLine = 0,
@@ -31,9 +56,9 @@ typedef enum HttpParserDataTy {
 
 typedef struct HttpParserState {
   HttpParserStateTy state;
-  char *buffer;
-  char *ptr;
-  char *end;
+  const char *buffer;
+  const char *ptr;
+  const char *end;
   int chunked;
   int firstFragment;
   size_t dataRemaining;
@@ -61,7 +86,7 @@ typedef struct HttpComponent {
       Raw entryName;
       union {
         Raw stringValue;
-        int64_t intValue;
+        size_t sizeValue;
       };
     } header;
     
@@ -72,10 +97,10 @@ typedef struct HttpComponent {
 typedef void httpParseCb(HttpComponent *component, void *arg);
 
 void httpInit(HttpParserState *state);
-void httpSetBuffer(HttpParserState *state, void *buffer, size_t size);
+void httpSetBuffer(HttpParserState *state, const void *buffer, size_t size);
 HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void *arg);
 
-void *httpDataPtr(HttpParserState *state);
+const void *httpDataPtr(HttpParserState *state);
 size_t httpDataRemaining(HttpParserState *state);
 
 #endif //__LIBP2P_HTTPPARSE_H_

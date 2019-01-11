@@ -73,18 +73,22 @@ size_t dynamicBufferRemaining(dynamicBuffer *buffer)
 }
 
 
-void dynamicBufferSeek(dynamicBuffer *buffer, SeekTy type, size_t offset)
+void dynamicBufferSeek(dynamicBuffer *buffer, SeekTy type, ssize_t offset)
 {
+  size_t offsetModulus = offset >= 0 ? (size_t)offset : (size_t)(-offset);
   switch (type) {
     case SeekSet :
-      buffer->offset = (offset <= buffer->size) ? offset : buffer->size;
+      buffer->offset = (offsetModulus <= buffer->size) ? offsetModulus : buffer->size;
       break;
     case SeekCur :
-      buffer->offset = (buffer->offset+offset <= buffer->size) ?
-        buffer->offset+offset : buffer->size;
+      if (offset >= 0) {
+        buffer->offset = (buffer->offset+offsetModulus <= buffer->size) ? buffer->offset+offsetModulus : buffer->size;
+      } else {
+        buffer->offset = (offsetModulus <= buffer->offset) ? buffer->offset - offsetModulus : 0;
+      }
       break;
     case SeekEnd :
-      buffer->offset = (offset <= buffer->size) ? buffer->size - offset : 0;
+      buffer->offset = (offsetModulus <= buffer->size) ? buffer->size - offsetModulus : 0;
       break;
   }
 }

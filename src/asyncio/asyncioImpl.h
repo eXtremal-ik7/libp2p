@@ -91,6 +91,7 @@ struct aioUserEvent {
   int counter;
 };
 
+void pageMapInit(pageMap *map);
 void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op);
 void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op);
 void processTimeoutQueue(asyncBase *base, time_t currentTime);

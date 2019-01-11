@@ -9,8 +9,9 @@
 
 const unsigned gPort = 65333;
 
-static asyncBase *gBase = 0;
+static asyncBase *gBase = nullptr;
 
+__NO_PADDING_BEGIN
 struct TestContext {
   aioObject *serverSocket;
   aioObject *clientSocket;
@@ -23,8 +24,10 @@ struct TestContext {
   bool success;
   TestContext(asyncBase *baseArg) : base(baseArg), state(0), state2(0), success(false) {}
 };
+__NO_PADDING_END
 
-aioObject *startTCPServer(asyncBase *base, aioAcceptCb callback, void *arg, unsigned port)
+
+aioObject *startTCPServer(asyncBase *base, aioAcceptCb callback, void *arg, uint16_t port)
 {
   HostAddress address;
   
@@ -35,11 +38,11 @@ aioObject *startTCPServer(asyncBase *base, aioAcceptCb callback, void *arg, unsi
   if (socketBind(acceptSocket, &address) != 0) {
     std::this_thread::sleep_for(std::chrono::seconds(1));
     if (socketBind(acceptSocket, &address) != 0)
-      return 0;
+      return nullptr;
   }
   
   if (socketListen(acceptSocket) != 0)
-    return 0;
+    return nullptr;
   
   aioObject *object = newSocketIo(base, acceptSocket);
   if (callback)
@@ -47,7 +50,7 @@ aioObject *startTCPServer(asyncBase *base, aioAcceptCb callback, void *arg, unsi
   return object;
 }
 
-aioObject *startUDPServer(asyncBase *base, aioReadMsgCb callback, void *arg, void *buffer, size_t size, unsigned port)
+aioObject *startUDPServer(asyncBase *base, aioReadMsgCb callback, void *arg, void *buffer, size_t size, uint16_t port)
 {
   HostAddress address;
   
@@ -58,7 +61,7 @@ aioObject *startUDPServer(asyncBase *base, aioReadMsgCb callback, void *arg, voi
   if (socketBind(acceptSocket, &address) != 0) {
     std::this_thread::sleep_for(std::chrono::seconds(1));
     if (socketBind(acceptSocket, &address) != 0)
-      return 0;
+      return nullptr;
   }
   
   aioObject *object = newSocketIo(base, acceptSocket);
@@ -67,7 +70,7 @@ aioObject *startUDPServer(asyncBase *base, aioReadMsgCb callback, void *arg, voi
   return object;
 }
 
-aioObject *initializeTCPClient(asyncBase *base, aioConnectCb callback, void *arg, unsigned port)
+aioObject *initializeTCPClient(asyncBase *base, aioConnectCb callback, void *arg, uint16_t port)
 {
   HostAddress address;  
   address.family = AF_INET;
@@ -75,7 +78,7 @@ aioObject *initializeTCPClient(asyncBase *base, aioConnectCb callback, void *arg
   address.port = 0;
   socketTy connectSocket = socketCreate(AF_INET, SOCK_STREAM, IPPROTO_TCP, 1);
   if (socketBind(connectSocket, &address) != 0)
-    return 0;
+    return nullptr;
   
   address.family = AF_INET;
   address.ipv4 = inet_addr("127.0.0.1");
@@ -86,7 +89,7 @@ aioObject *initializeTCPClient(asyncBase *base, aioConnectCb callback, void *arg
   return object;
 }
 
-aioObject *initializeUDPClient(asyncBase *base, unsigned port)
+aioObject *initializeUDPClient(asyncBase *base)
 {
   HostAddress address;  
   address.family = AF_INET;
@@ -94,7 +97,7 @@ aioObject *initializeUDPClient(asyncBase *base, unsigned port)
   address.port = 0;
   socketTy clientSocket = socketCreate(AF_INET, SOCK_DGRAM, IPPROTO_UDP, 1);
   if (socketBind(clientSocket, &address) != 0)
-    return 0;
+    return nullptr;
   
   aioObject *object = newSocketIo(base, clientSocket);
   return object;
@@ -102,7 +105,8 @@ aioObject *initializeUDPClient(asyncBase *base, unsigned port)
 
 void test_connect_accept_readcb(AsyncOpStatus status, aioObject *socket, size_t transferred, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  __UNUSED(transferred);
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosDisconnected) {
     if (ctx->state == 1)
       ctx->success = true;
@@ -114,7 +118,9 @@ void test_connect_accept_readcb(AsyncOpStatus status, aioObject *socket, size_t 
 
 void test_connect_accept_acceptcb(AsyncOpStatus status, aioObject *listener, HostAddress client, socketTy acceptSocket, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  __UNUSED(listener);
+  __UNUSED(client);
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosSuccess) {
     aioObject *newSocketOp = newSocketIo(ctx->base, acceptSocket);
     aioRead(newSocketOp, ctx->serverBuffer, sizeof(ctx->serverBuffer), afNone, 1000000, test_connect_accept_readcb, ctx);
@@ -125,7 +131,7 @@ void test_connect_accept_acceptcb(AsyncOpStatus status, aioObject *listener, Hos
 
 void test_connect_accept_connectcb(AsyncOpStatus status, aioObject *object, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosSuccess)
     ctx->state = 1;
   deleteAioObject(object);
@@ -146,7 +152,7 @@ TEST(basic, test_connect_accept)
 
 void test_tcp_rw_client_read(AsyncOpStatus status, aioObject *socket, size_t transferred, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosSuccess && transferred == 6 && ctx->state == 1) {
     ctx->success = memcmp(ctx->clientBuffer, "234567", 6) == 0;
   } 
@@ -156,10 +162,10 @@ void test_tcp_rw_client_read(AsyncOpStatus status, aioObject *socket, size_t tra
 
 void test_tcp_rw_connectcb(AsyncOpStatus status, aioObject *object, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosSuccess) {
     ctx->state = 1;
-    aioWrite(object, (void*)"123456", 6, afWaitAll, 0, 0, 0);
+    aioWrite(object, "123456", 6, afWaitAll, 0, nullptr, nullptr);
     aioRead(object, ctx->clientBuffer, 6, afWaitAll, 333000, test_tcp_rw_client_read, ctx);
   } else {
     deleteAioObject(object);
@@ -169,11 +175,11 @@ void test_tcp_rw_connectcb(AsyncOpStatus status, aioObject *object, void *arg)
 
 void test_tcp_rw_server_readcb(AsyncOpStatus status, aioObject *socket, size_t transferred, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosSuccess) {
     for (size_t i = 0; i < transferred; i++)
       ctx->serverBuffer[i]++;
-    aioWrite(socket, ctx->serverBuffer, transferred, afNone, 0, 0, 0);
+    aioWrite(socket, ctx->serverBuffer, transferred, afNone, 0, nullptr, nullptr);
     aioRead(socket, ctx->serverBuffer, sizeof(ctx->serverBuffer), afNone, 0, test_tcp_rw_server_readcb, ctx);
   } else {
     deleteAioObject(socket);
@@ -183,7 +189,9 @@ void test_tcp_rw_server_readcb(AsyncOpStatus status, aioObject *socket, size_t t
 
 void test_tcp_rw_acceptcb(AsyncOpStatus status, aioObject *listener, HostAddress client, socketTy acceptSocket, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  __UNUSED(listener);
+  __UNUSED(client);
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosSuccess) {
     aioObject *newSocketOp = newSocketIo(ctx->base, acceptSocket);
     aioRead(newSocketOp, ctx->serverBuffer, sizeof(ctx->serverBuffer), afNone, 0, test_tcp_rw_server_readcb, ctx);
@@ -207,7 +215,8 @@ TEST(basic, test_tcp_rw)
 
 void test_udp_rw_client_readcb(AsyncOpStatus status, aioObject *socket, HostAddress address, size_t transferred, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  __UNUSED(address);
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosSuccess && transferred == 6 && ctx->state == 1) {
     if (memcmp(ctx->clientBuffer, "234567", 6) == 0)
       ctx->state++;
@@ -219,12 +228,12 @@ void test_udp_rw_client_readcb(AsyncOpStatus status, aioObject *socket, HostAddr
 
 void test_udp_rw_server_readcb(AsyncOpStatus status, aioObject *socket, HostAddress address, size_t transferred, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosSuccess) {
     ctx->state++;
     for (size_t i = 0; i < transferred; i++)
       ctx->serverBuffer[i]++;
-    aioWriteMsg(socket, &address, ctx->serverBuffer, transferred, afNone, 0, 0, 0);
+    aioWriteMsg(socket, &address, ctx->serverBuffer, transferred, afNone, 0, nullptr, nullptr);
     aioReadMsg(socket, ctx->serverBuffer, sizeof(ctx->serverBuffer), afNone, 1000000, test_udp_rw_server_readcb, ctx);
   } else {
     if (status == aosCanceled)
@@ -237,15 +246,15 @@ TEST(basic, test_udp_rw)
 {
   TestContext context(gBase);
   context.serverSocket = startUDPServer(gBase, test_udp_rw_server_readcb, &context, context.serverBuffer, sizeof(context.serverBuffer), gPort);
-  context.clientSocket = initializeUDPClient(gBase, gPort);
-  ASSERT_NE(context.serverSocket, (void*)0);
-  ASSERT_NE(context.clientSocket, (void*)0);
+  context.clientSocket = initializeUDPClient(gBase);
+  ASSERT_NE(context.serverSocket, nullptr);
+  ASSERT_NE(context.clientSocket, nullptr);
   
   HostAddress address;
   address.family = AF_INET;
   address.ipv4 = inet_addr("127.0.0.1");
   address.port = htons(gPort);  
-  aioWriteMsg(context.clientSocket, &address, (void*)"123456", 6, afNone, 0, 0, 0);
+  aioWriteMsg(context.clientSocket, &address, "123456", 6, afNone, 0, nullptr, nullptr);
   aioReadMsg(context.clientSocket, context.clientBuffer, sizeof(context.clientBuffer), afNone, 1000000, test_udp_rw_client_readcb, &context);
   asyncLoop(gBase);
   ASSERT_TRUE(context.success);
@@ -253,7 +262,10 @@ TEST(basic, test_udp_rw)
 
 void test_timeout_readcb(AsyncOpStatus status, aioObject *socket, HostAddress address, size_t transferred, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  __UNUSED(socket);
+  __UNUSED(address);
+  __UNUSED(transferred);
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosTimeout) {
     ctx->state++;
     if (ctx->state == 4) {
@@ -266,8 +278,8 @@ void test_timeout_readcb(AsyncOpStatus status, aioObject *socket, HostAddress ad
 TEST(basic, test_timeout)
 {
   TestContext context(gBase);
-  context.serverSocket = startUDPServer(gBase, 0, &context, context.serverBuffer, sizeof(context.serverBuffer), gPort);
-  ASSERT_NE(context.serverSocket, (void*)0);
+  context.serverSocket = startUDPServer(gBase, nullptr, &context, context.serverBuffer, sizeof(context.serverBuffer), gPort);
+  ASSERT_NE(context.serverSocket, nullptr);
   aioReadMsg(context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afRealtime, 1000, test_timeout_readcb, &context);
   aioReadMsg(context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afRealtime, 5000, test_timeout_readcb, &context);
   aioReadMsg(context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afRealtime, 10000, test_timeout_readcb, &context);
@@ -279,13 +291,17 @@ TEST(basic, test_timeout)
 
 void test_delete_object_eventcb(aioUserEvent *event, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  __UNUSED(event);
+  TestContext *ctx = static_cast<TestContext*>(arg);
   deleteAioObject(ctx->serverSocket);
 }
 
 void test_delete_object_readcb(AsyncOpStatus status, aioObject *socket, HostAddress address, size_t transferred, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  __UNUSED(socket);
+  __UNUSED(address);
+  __UNUSED(transferred);
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosCanceled) {
     ctx->state++;
     if (ctx->state == 1000) {
@@ -300,7 +316,7 @@ void test_delete_object_readcb(AsyncOpStatus status, aioObject *socket, HostAddr
 TEST(basic, test_delete_object)
 {
   TestContext context(gBase);
-  context.serverSocket = startUDPServer(gBase, 0, &context, context.serverBuffer, sizeof(context.serverBuffer), gPort);
+  context.serverSocket = startUDPServer(gBase, nullptr, &context, context.serverBuffer, sizeof(context.serverBuffer), gPort);
   ASSERT_NE(context.serverSocket, nullptr);
   
   for (int i = 0; i < 1000; i++)
@@ -315,7 +331,7 @@ TEST(basic, test_delete_object)
 
 void test_userevent_cb(aioUserEvent *event, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  TestContext *ctx = static_cast<TestContext*>(arg);
   unsigned value = __uint_atomic_fetch_and_add(&ctx->state, 1);
 
   if (value == 256) {
@@ -347,7 +363,7 @@ TEST(basic, test_userevent)
 
 void coroutine_create_proc(void *arg)
 {
-  int *x = (int*)arg;
+  int *x = static_cast<int*>(arg);
   (*x)++;
 }
 
@@ -362,7 +378,7 @@ TEST(coroutine, create)
 
 void coroutine_yield_proc(void *arg)
 {
-  int *x = (int*)arg;
+  int *x = static_cast<int*>(arg);
   (*x)++;
   coroutineYield();
   (*x)++;
@@ -379,13 +395,13 @@ TEST(coroutine, yield)
 
 void coroutine_nested_proc2(void *arg)
 {
-  int *x = (int*)arg;
+  int *x = static_cast<int*>(arg);
   (*x)++;
 }
 
 void coroutine_nested_proc1(void *arg)
 {
-  int *x = (int*)arg;
+  int *x = static_cast<int*>(arg);
   (*x)++;
   coroutineYield();
   coroutineTy *coro = coroutineNew(coroutine_nested_proc2, x, 0x10000);
@@ -405,7 +421,9 @@ TEST(coroutine, nested)
 
 void p2pproto_ca_read(AsyncOpStatus status, p2pConnection *connection, p2pHeader header, void *data, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  __UNUSED(header);
+  __UNUSED(data);
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosDisconnected && ctx->state2 == 2)
     ctx->state = 3;
   p2pConnectionDelete(connection);
@@ -414,7 +432,7 @@ void p2pproto_ca_read(AsyncOpStatus status, p2pConnection *connection, p2pHeader
 
 p2pErrorTy p2pproto_ca_check(AsyncOpStatus status, p2pConnection *connection, p2pConnectData *data, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (data) {
     EXPECT_EQ(ctx->state, 0);
     EXPECT_STREQ(data->login, "p2pproto_ca_login");
@@ -433,7 +451,9 @@ p2pErrorTy p2pproto_ca_check(AsyncOpStatus status, p2pConnection *connection, p2
 
 void p2pproto_ca_accept(AsyncOpStatus status, aioObject *listener, HostAddress client, socketTy acceptSocket, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  __UNUSED(listener);
+  __UNUSED(client);
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosSuccess) {
     p2pConnection *connection = p2pConnectionNew(newSocketIo(ctx->base, acceptSocket));
     aiop2pAccept(connection, 1000000, p2pproto_ca_check, ctx);
@@ -442,7 +462,7 @@ void p2pproto_ca_accept(AsyncOpStatus status, aioObject *listener, HostAddress c
 
 void p2pproto_ca_connect(AsyncOpStatus status, p2pConnection *connection, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosSuccess)
     ctx->state2 = 1;
   p2pConnectionDelete(connection);
@@ -474,14 +494,14 @@ TEST(p2pproto, connect_accept)
 
 void p2pproto_rw_serverread(AsyncOpStatus status, p2pConnection *connection, p2pHeader header, p2pStream *stream, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  TestContext *ctx = static_cast<TestContext*>(arg);
   ctx->state++;
   if (ctx->state == 3 && status == aosSuccess) {
     EXPECT_EQ(header.id, 222);
     EXPECT_EQ(header.type, p2pMsgRequest);
     EXPECT_EQ(header.size, 5);
-    EXPECT_STREQ((const char*)stream->data(), "msg1");
-    aiop2pSend(connection, "msg2", p2pHeader(222, p2pMsgResponse, 5), 1000000, 0, 0);
+    EXPECT_STREQ(static_cast<const char*>(stream->data()), "msg1");
+    aiop2pSend(connection, "msg2", p2pHeader(222, p2pMsgResponse, 5), 1000000, nullptr, nullptr);
     aiop2pRecvStream(connection, ctx->serverStream, 4096, 1000000, p2pproto_rw_serverread, ctx);
     ctx->state = 4;
   } else if (ctx->state == 4 && status == aosDisconnected) {
@@ -496,12 +516,12 @@ void p2pproto_rw_serverread(AsyncOpStatus status, p2pConnection *connection, p2p
 
 void p2pproto_rw_clientread(AsyncOpStatus status, p2pConnection *connection, p2pHeader header, void *data, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (ctx->state2 == 1 && status == aosSuccess) {
     EXPECT_EQ(header.id, 222);
     EXPECT_EQ(header.type, p2pMsgResponse);
     EXPECT_EQ(header.size, 5);
-    EXPECT_STREQ((const char*)data, "msg2");
+    EXPECT_STREQ(static_cast<const char*>(data), "msg2");
     ctx->state2 = 2;
   }
 
@@ -510,7 +530,7 @@ void p2pproto_rw_clientread(AsyncOpStatus status, p2pConnection *connection, p2p
 
 p2pErrorTy p2pproto_rw_check(AsyncOpStatus status, p2pConnection *connection, p2pConnectData *data, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (data) {
     EXPECT_EQ(ctx->state, 0);
     EXPECT_STREQ(data->login, "p2pproto_rw_login");
@@ -529,7 +549,9 @@ p2pErrorTy p2pproto_rw_check(AsyncOpStatus status, p2pConnection *connection, p2
 
 void p2pproto_rw_accept(AsyncOpStatus status, aioObject *listener, HostAddress client, socketTy acceptSocket, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  __UNUSED(listener);
+  __UNUSED(client);
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosSuccess) {
     p2pConnection *connection = p2pConnectionNew(newSocketIo(ctx->base, acceptSocket));
     aiop2pAccept(connection, 1000000, p2pproto_rw_check, ctx);
@@ -538,7 +560,7 @@ void p2pproto_rw_accept(AsyncOpStatus status, aioObject *listener, HostAddress c
 
 void p2pproto_rw_connect(AsyncOpStatus status, p2pConnection *connection, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosSuccess) {
     ctx->state2 = 1;
     aiop2pSend(connection, "msg1", p2pHeader(222, p2pMsgRequest, 5), 1000000, nullptr, nullptr);
@@ -575,8 +597,9 @@ TEST(p2pproto, read_write)
 
 p2pErrorTy p2pproto_coro_ca_check(AsyncOpStatus status, p2pConnection *connection, p2pConnectData *data, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
-  if (data) {
+  __UNUSED(connection);
+  TestContext *ctx = static_cast<TestContext*>(arg);
+  if (status == aosPending && data) {
     EXPECT_EQ(ctx->state, 0);
     EXPECT_STREQ(data->login, "p2pproto_coro_ca_login");
     EXPECT_STREQ(data->password, "p2pproto_coro_ca_password");
@@ -589,7 +612,7 @@ p2pErrorTy p2pproto_coro_ca_check(AsyncOpStatus status, p2pConnection *connectio
 
 void p2pproto_coro_ca_listener(void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  TestContext *ctx = static_cast<TestContext*>(arg);
 
   socketTy socket = ioAccept(ctx->serverSocket, 1000000);
   if (socket >= 0) {
@@ -607,7 +630,7 @@ void p2pproto_coro_ca_listener(void *arg)
 
 void p2pproto_coro_ca_client(void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  TestContext *ctx = static_cast<TestContext*>(arg);
   HostAddress address;
   p2pConnectData data;
   address.family = AF_INET;
@@ -641,8 +664,9 @@ TEST(p2pproto, coro_connect_accept)
 
 p2pErrorTy p2pproto_coro_rw_check(AsyncOpStatus status, p2pConnection *connection, p2pConnectData *data, void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
-  if (data) {
+  __UNUSED(connection);
+  TestContext *ctx = static_cast<TestContext*>(arg);
+  if (status == aosPending && data) {
     EXPECT_EQ(ctx->state, 0);
     EXPECT_STREQ(data->login, "p2pproto_coro_rw_login");
     EXPECT_STREQ(data->password, "p2pproto_coro_rw_password");
@@ -655,7 +679,7 @@ p2pErrorTy p2pproto_coro_rw_check(AsyncOpStatus status, p2pConnection *connectio
 
 void p2pproto_coro_rw_listener(void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  TestContext *ctx = static_cast<TestContext*>(arg);
 
   socketTy socket = ioAccept(ctx->serverSocket, 1000000);
   if (socket >= 0) {
@@ -669,7 +693,7 @@ void p2pproto_coro_rw_listener(void *arg)
         EXPECT_EQ(header.id, 333);
         EXPECT_EQ(header.type, p2pMsgRequest);
         EXPECT_EQ(header.size, 5);
-        EXPECT_STREQ((char*)stream.data(), "msg1");
+        EXPECT_STREQ(static_cast<char*>(stream.data()), "msg1");
         ctx->state = 3;
         if (iop2pSend(connection, "msg2", 333, p2pMsgResponse, 5, 1000000) == 5) {
           ctx->state = 4;
@@ -688,7 +712,7 @@ void p2pproto_coro_rw_listener(void *arg)
 
 void p2pproto_coro_rw_client(void *arg)
 {
-  TestContext *ctx = (TestContext*)arg;
+  TestContext *ctx = static_cast<TestContext*>(arg);
   HostAddress address;
   p2pConnectData data;
   address.family = AF_INET;
@@ -707,7 +731,7 @@ void p2pproto_coro_rw_client(void *arg)
         EXPECT_EQ(header.id, 333);
         EXPECT_EQ(header.type, p2pMsgResponse);
         EXPECT_EQ(header.size, 5);
-        EXPECT_STREQ((char*)ctx->clientBuffer, "msg2");
+        EXPECT_STREQ(reinterpret_cast<const char*>(ctx->clientBuffer), "msg2");
         ctx->state2 = 3;
       }
     }

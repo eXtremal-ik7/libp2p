@@ -51,6 +51,7 @@ enum AIOReceiverTy {
   aioReceiverCoroutine
 };
 
+__NO_PADDING_BEGIN
 struct SenderCtx {
   Context *config;
   asyncBase *localBase;
@@ -76,15 +77,16 @@ struct ReceiverCtx {
   
   ReceiverCtx() : started(false), oldPacketsNum(0), packetsNum(0) {}
 };
+__NO_PADDING_END
 
 
-const char *aioSenderName[] = {
+static const char *aioSenderName[] = {
   "blocking",
   "async",
   "coroutine"
 };
 
-const char *aioReceiverName[] = {
+static const char *aioReceiverName[] = {
   "blocking",
   "async",
   "async+timer",
@@ -102,7 +104,7 @@ void *test_sync_sender(void *arg)
 {
   char msg[65536];
   memset(msg, 'm', sizeof(msg));
-  SenderCtx *senderCtx = (SenderCtx*)arg;    
+  SenderCtx *senderCtx = static_cast<SenderCtx*>(arg);
   
   sockaddr_in destAddr;
   destAddr.sin_family = AF_INET;  
@@ -110,18 +112,19 @@ void *test_sync_sender(void *arg)
   destAddr.sin_port = htons(senderCtx->config->port);
 
   for (uint64_t i = 0; i < senderCtx->config->totalPacketNum; i++) {
-    if (sendto(senderCtx->clientSocket, msg, senderCtx->config->messageSize, 0, (sockaddr*)&destAddr, sizeof(destAddr)) == -1) {
+    if (sendto(senderCtx->clientSocket, msg, senderCtx->config->messageSize, 0, reinterpret_cast<sockaddr*>(&destAddr), sizeof(destAddr)) == -1) {
       fprintf(stderr, "sendto return error %s\n", strerror(errno));
       exit(1);
     }
   }
   
-  return 0;
+  return nullptr;
 }
 
 void test_aio_writecb(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 { 
-  SenderCtx *senderCtx = (SenderCtx*)arg;
+  __UNUSED(transferred);
+  SenderCtx *senderCtx = static_cast<SenderCtx*>(arg);
   if (status == aosSuccess)
     senderCtx->counter++;
   if (senderCtx->counter >= senderCtx->config->totalPacketNum) {
@@ -139,7 +142,7 @@ void test_aio_writecb(AsyncOpStatus status, aioObject *object, size_t transferre
 
 void *test_aio_sender(void *arg)
 {
-  SenderCtx *senderCtx = (SenderCtx*)arg;
+  SenderCtx *senderCtx = static_cast<SenderCtx*>(arg);
   asyncBase *localBase = createAsyncBase(amOSDefault);
 
   senderCtx->localBase = localBase;
@@ -153,14 +156,14 @@ void *test_aio_sender(void *arg)
   address.port = htons(senderCtx->config->port);
   aioWriteMsg(senderCtx->client, &address, &senderCtx->buffer, senderCtx->config->messageSize, afNone, 0, test_aio_writecb, senderCtx);
   asyncLoop(localBase);
-  return 0;
+  return nullptr;
 }
 
 void test_coroutine_sender_coro(void *arg)
 {
   char msg[65536];
   memset(msg, 'm', sizeof(msg));
-  SenderCtx *senderCtx = (SenderCtx*)arg;      
+  SenderCtx *senderCtx = static_cast<SenderCtx*>(arg);
   
   HostAddress address;
   address.family = AF_INET;
@@ -174,12 +177,12 @@ void *test_coroutine_sender(void *arg)
 {
   asyncBase *localBase = createAsyncBase(amOSDefault); 
   
-  SenderCtx *senderCtx = (SenderCtx*)arg;  
+  SenderCtx *senderCtx = static_cast<SenderCtx*>(arg);
   senderCtx->localBase = localBase;
   senderCtx->client = newSocketIo(localBase, senderCtx->clientSocket);
   coroutineCall(coroutineNew(test_coroutine_sender_coro, senderCtx, 0x40000));
   asyncLoop(localBase);  
-  return 0;
+  return nullptr;
 }
 
 // ======================================================================
@@ -193,13 +196,13 @@ void *test_coroutine_sender(void *arg)
 void *test_sync_receiver(void *arg)
 {
   char msg[65536];
-  ReceiverCtx *receiverCtx = (ReceiverCtx*)arg;  
+  ReceiverCtx *receiverCtx = static_cast<ReceiverCtx*>(arg);
   
   for (;;) {
     for (unsigned i = 0; i < receiverCtx->config->groupSize; i++) {
       sockaddr_in addr;
       socketLenTy len = sizeof(addr);
-      recvfrom(receiverCtx->serverSocket, msg, sizeof(msg), 0, (sockaddr*)&addr, &len);
+      recvfrom(receiverCtx->serverSocket, msg, sizeof(msg), 0, reinterpret_cast<sockaddr*>(&addr), &len);
       if (!receiverCtx->started) {
         receiverCtx->started = true;
         receiverCtx->beginPt = getTimeMark();
@@ -218,14 +221,19 @@ void test_readcb(AsyncOpStatus status,
                  size_t transferred,
                  void *arg)
 {
+  __UNUSED(status);
+  __UNUSED(transferred);
+  __UNUSED(address);
   threadPacketsNum++;
-  ReceiverCtx *ctx = (ReceiverCtx*)arg;
-  ctx->started = true;
-  if (ctx->packetsNum == 0)
-    ctx->beginPt = getTimeMark();
-  ctx->packetsNum++;
-  if (ctx->packetsNum % ctx->config->groupSize == 0)
-    ctx->endPt = getTimeMark();
+  ReceiverCtx *ctx = static_cast<ReceiverCtx*>(arg);
+  if (status == aosSuccess) {
+    ctx->started = true;
+    if (ctx->packetsNum == 0)
+      ctx->beginPt = getTimeMark();
+    ctx->packetsNum++;
+    if (ctx->packetsNum % ctx->config->groupSize == 0)
+      ctx->endPt = getTimeMark();
+  }
   aioReadMsg(socket, &ctx->buffer, sizeof(ctx->buffer), afNone, 0, test_readcb, ctx);
 }
 
@@ -236,8 +244,10 @@ void test_readcb_timer(AsyncOpStatus status,
                        size_t transferred,
                        void *arg)
 {
+  __UNUSED(address);
+  __UNUSED(transferred);
   threadPacketsNum++;
-  ReceiverCtx *ctx = (ReceiverCtx*)arg;
+  ReceiverCtx *ctx = static_cast<ReceiverCtx*>(arg);
   
   if (status == aosSuccess) {
     ctx->started = true;
