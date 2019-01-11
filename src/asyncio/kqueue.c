@@ -48,7 +48,8 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
 void kqueuePostEmptyOperation(asyncBase *base);
 void kqueueNextFinishedOperation(asyncBase *base);
 aioObject *kqueueNewAioObject(asyncBase *base, IoObjectTy type, void *data);
-asyncOpRoot *kqueueNewAsyncOp();
+asyncOpRoot *kqueueNewAsyncOp(void);
+int kqueueCancelAsyncOp(asyncOpRoot *opptr);
 void kqueueDeleteObject(aioObject *object);
 void kqueueInitializeTimer(asyncBase *base, asyncOpRoot *op);
 void kqueueStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic);
@@ -67,6 +68,7 @@ static struct asyncImpl kqueueImpl = {
   kqueueNextFinishedOperation,
   kqueueNewAioObject,
   kqueueNewAsyncOp,
+  kqueueCancelAsyncOp,
   kqueueDeleteObject,
   kqueueInitializeTimer,
   kqueueStartTimer,
@@ -129,77 +131,6 @@ void kqueuePostEmptyOperation(asyncBase *base)
   }
 }
 
-static void opRun(asyncOpRoot *op, List *list)
-{
-  eqPushBack(list, op);
-  if (op->timeout) {
-    asyncBase *base = op->object->base;
-    if (op->flags & afRealtime) {
-      // start timer for this operation
-      base->methodImpl.startTimer(op, op->timeout, op->opCode == actUserEvent);
-    } else {
-      // add operation to timeout grid
-      op->endTime = ((uint64_t)time(0)) * 1000000ULL + op->timeout;
-      addToTimeoutQueue(base, op);
-    }
-  }
-}
-
-void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finished, tag_t *needStart)
-{
-  List *list = 0;
-  tag_t tag = 0;
-  int restart = 0;
-  aioObjectRoot *object = opptr->object;
-  if (opptr->opCode & OPCODE_WRITE) {
-    list = &object->writeQueue;
-    tag = TAG_WRITE;
-  } else {
-    list = &object->readQueue;
-    tag = TAG_READ;
-  }
-
-  asyncOpRoot *queueHead = list->head;
-  int userDefined = !(object->type == ioObjectDevice || object->type == ioObjectSocket);
-
-  switch (actionType) {
-    case aaStart : {
-      opRun(opptr, list);
-      break;
-    }
-
-    case aaCancel : {
-      if (userDefined && opptr->running) {
-        opptr->finishMethod(opptr, aaCancel);
-        opptr->running = 0;
-      } else {
-        opRelease(opptr, opGetStatus(opptr), list, finished);
-      }
-      break;
-    }
-
-    case aaFinish : {
-      opRelease(opptr, opGetStatus(opptr), list, finished);
-      break;
-    }
-
-    case aaContinue : {
-      if (opptr->running) {
-        opptr->running = 0;
-        restart = 1;
-      } else {
-        opRelease(opptr, opGetStatus(opptr), list, finished);
-      }
-      break;
-    }
-
-    default :
-      break;
-  }
-
-  *needStart |= (list->head && (list->head != queueHead || restart)) ? tag : 0;
-}
-
 void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
 {
   kqueueBase *base = (kqueueBase*)object->base;
@@ -246,7 +177,7 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
         newOp = 0;
       } else {
         while (enqueuedOperationsNum < pendingOperationsNum)
-          processOperationList(object, &threadLocalQueue, &needStart, processAction, &enqueuedOperationsNum);
+          processOperationList(object, &threadLocalQueue, &needStart, &enqueuedOperationsNum);
       }
     }
 
@@ -321,7 +252,7 @@ void kqueueNextFinishedOperation(asyncBase *base)
               __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, 0u-1);
               return;
             case UserEvent :
-              op->finishMethod(op, aaFinish);
+              op->finishMethod(op);
               break;
           }
         }
@@ -336,7 +267,7 @@ void kqueueNextFinishedOperation(asyncBase *base)
             kqueueStopTimer(op);
           }
 
-          op->finishMethod(op, aaFinish);
+          op->finishMethod(op);
         } else {
           opCancel(op, opEncodeTag(op, timerId), aosTimeout);
         }
@@ -388,6 +319,11 @@ asyncOpRoot *kqueueNewAsyncOp()
   return &op->root;
 }
 
+int kqueueCancelAsyncOp(asyncOpRoot *opptr)
+{
+  __UNUSED(opptr);
+  return 1;
+}
 
 void kqueueDeleteObject(aioObject *object)
 {

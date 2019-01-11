@@ -31,6 +31,7 @@ struct asyncImpl {
   nextFinishedOperationTy *nextFinishedOperation;
   newAioObjectTy *newAioObject;
   newAsyncOpTy *newAsyncOp;
+  aioCancelProc *cancelAsyncOp;
   deleteObjectTy *deleteObject;
   initializeTimerTy *initializeTimer;
   startTimerTy *startTimer;

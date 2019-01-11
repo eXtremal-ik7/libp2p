@@ -32,32 +32,27 @@ static asyncOpRoot *alloc()
   return (asyncOpRoot*)malloc(sizeof(HTTPOp));
 }
 
-
-static void finish(asyncOpRoot *root, AsyncOpActionTy action)
+static int cancel(asyncOpRoot *opptr)
 {
-  HTTPOp *op = (HTTPOp*)root;
-  HTTPClient *client = (HTTPClient*)root->object; 
-  AsyncOpStatus status = opGetStatus(root);
-  
-    // cleanup child operation after timeout
-  if (action == aaCancel) {
-    cancelIo(client->isHttps ? (aioObjectRoot*)client->sslSocket : (aioObjectRoot*)client->plainSocket);
-    return;
-  }
-  
-  if (root->callback) {
-     switch (root->opCode) {
-       case httpOpConnect :
-         ((httpConnectCb*)root->callback)(status, client, root->arg);
-         break;
-       case httpOpRequest :
-         client->contentType = op->contentType;
-         client->body = op->body;
-         ((httpRequestCb*)root->callback)(status, client, op->resultCode, root->arg);
-         break;
-     }
-  }
+  HTTPClient *client = (HTTPClient*)opptr->object;
+  cancelIo(client->isHttps ? (aioObjectRoot*)client->sslSocket : (aioObjectRoot*)client->plainSocket);
+  return 0;
 }
+
+static void connectFinish(asyncOpRoot *opptr)
+{
+  ((httpConnectCb*)opptr->callback)(opGetStatus(opptr), (HTTPClient*)opptr->object, opptr->arg);
+}
+
+static void requestFinish(asyncOpRoot *opptr)
+{
+  HTTPOp *op = (HTTPOp*)opptr;
+  HTTPClient *client = (HTTPClient*)opptr->object;
+  client->contentType = op->contentType;
+  client->body = op->body;
+  ((httpRequestCb*)opptr->callback)(opGetStatus(opptr), client, op->resultCode, opptr->arg);
+}
+
 
 static void coroutineConnectCb(AsyncOpStatus status, HTTPClient *client, void *arg)
 {
@@ -93,7 +88,6 @@ void httpsRequestProc(AsyncOpStatus status, SSLSocket *object, size_t transferre
   httpSetBuffer(&client->state, client->inBuffer, client->inBufferOffset+transferred);
   resumeParent(opptr, status);
 }
-
 
 void httpConnectProc(AsyncOpStatus status, aioObject *object, void *arg)
 {
@@ -171,16 +165,17 @@ static AsyncOpStatus httpParseStart(asyncOpRoot *opptr)
 }
 
 
-static HTTPOp *allocHttpOp(HTTPClient *client,
-                           int type,
-                           aioExecuteProc executeProc,
+static HTTPOp *allocHttpOp(aioExecuteProc executeProc,
+                           aioFinishProc finishProc,
+                           HTTPClient *client,
+                           int type,           
                            httpParseCb parseCallback,
                            void *callback,
                            void *arg,
                            uint64_t timeout)
 {
   HTTPOp *op = (HTTPOp*)
-    initAsyncOpRoot(httpPoolId, httpPoolTimerId, alloc, executeProc, finish, &client->root, callback, arg, 0, type, timeout);
+    initAsyncOpRoot(httpPoolId, httpPoolTimerId, alloc, executeProc, cancel, finishProc, &client->root, callback, arg, 0, type, timeout);
 
   op->parseCallback = parseCallback;
   op->resultCode = 0;
@@ -282,7 +277,7 @@ void aioHttpConnect(HTTPClient *client,
                     httpConnectCb callback,
                     void *arg)
 {
-  HTTPOp *op = allocHttpOp(client, httpOpConnect, httpConnectStart, 0, (void*)callback, arg, usTimeout);
+  HTTPOp *op = allocHttpOp(httpConnectStart, connectFinish, client, httpOpConnect, 0, (void*)callback, arg, usTimeout);
   op->address = *address;
   opStart(&op->root);
 }
@@ -317,7 +312,7 @@ void aioHttpRequest(HTTPClient *client,
                     httpRequestCb callback,
                     void *arg)
 {
-  HTTPOp *op = allocHttpOp(client, httpOpConnect, httpParseStart, parseCallback, (void*)callback, arg, usTimeout);
+  HTTPOp *op = allocHttpOp(httpParseStart, requestFinish, client, httpOpConnect, parseCallback, (void*)callback, arg, usTimeout);
   if (client->isHttps)
     aioSslWrite(client->sslSocket, request, requestSize, afSerialized, 0, sslWriteCb, op);
   else
@@ -329,7 +324,7 @@ int ioHttpConnect(HTTPClient *client, const HostAddress *address, uint64_t usTim
 {
   combinerCallArgs ccArgs;
   coroReturnStruct r = {coroutineCurrent(), aosPending, 0};
-  HTTPOp *op = allocHttpOp(client, httpOpConnect, httpConnectStart, 0, (void*)coroutineConnectCb, &r, usTimeout);
+  HTTPOp *op = allocHttpOp(httpConnectStart, connectFinish, client, httpOpConnect, 0, (void*)coroutineConnectCb, &r, usTimeout);
   op->address = *address;
   combinerCallDelayed(&ccArgs, &client->root, 1, &op->root, aaStart, 1);
   coroutineYield();
@@ -353,7 +348,7 @@ int ioHttpRequest(HTTPClient *client,
 {
   ioHttpRequestArg hrArgs;
   coroReturnStruct r = {coroutineCurrent(), aosPending, 0};
-  HTTPOp *op = allocHttpOp(client, httpOpRequest, httpParseStart, parseCallback, (void*)coroutineRequestCb, &r, usTimeout);
+  HTTPOp *op = allocHttpOp(httpParseStart, requestFinish, client, httpOpRequest, parseCallback, (void*)coroutineRequestCb, &r, usTimeout);
   hrArgs.client = client;
   hrArgs.op = op;
   hrArgs.request = request;

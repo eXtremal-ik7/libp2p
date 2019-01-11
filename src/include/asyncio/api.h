@@ -94,7 +94,8 @@ typedef struct ListMt {
 typedef void processOperationCb(asyncOpRoot*, AsyncOpActionTy, List*, tag_t*);
 typedef asyncOpRoot *newAsyncOpTy();
 typedef AsyncOpStatus aioExecuteProc(asyncOpRoot*);
-typedef void aioFinishProc(asyncOpRoot*, AsyncOpActionTy);
+typedef int aioCancelProc(asyncOpRoot*);
+typedef void aioFinishProc(asyncOpRoot*);
 typedef void aioObjectDestructor(aioObjectRoot*);
 
 extern __tls List threadLocalQueue;
@@ -180,7 +181,8 @@ struct asyncOpRoot {
   volatile tag_t tag;
   const char *poolId;
   aioExecuteProc *executeMethod;
-  aioFinishProc *finishMethod;  
+  aioCancelProc *cancelMethod;
+  aioFinishProc *finishMethod;
   ListImpl executeQueue;
   asyncOpRoot *next;
   aioObjectRoot *object;
@@ -210,7 +212,8 @@ void opForceStatus(asyncOpRoot *op, AsyncOpStatus status);
 tag_t opEncodeTag(asyncOpRoot *op, tag_t tag);
 
 void opRelease(asyncOpRoot *op, AsyncOpStatus status, List *executeList, List *finished);
-void processOperationList(aioObjectRoot *object, List *finished, tag_t *needStart, processOperationCb *processCb, tag_t *enqueued);
+void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finished, tag_t *needStart);
+void processOperationList(aioObjectRoot *object, List *finished, tag_t *needStart, tag_t *enqueued);
 void executeOperationList(List *list, List *finished);
 void cancelOperationList(List *list, List *finished, AsyncOpStatus status);
 
@@ -238,6 +241,7 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
                              const char *timerPool,
                              newAsyncOpTy *newOpProc,
                              aioExecuteProc *startMethod,
+                             aioCancelProc *cancelMethod,
                              aioFinishProc *finishMethod,
                              aioObjectRoot *object,
                              void *callback,

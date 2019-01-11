@@ -294,6 +294,7 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
                              const char *timerPool,
                              newAsyncOpTy *newOpProc,
                              aioExecuteProc *startMethod,
+                             aioCancelProc *cancelMethod,
                              aioFinishProc *finishMethod,
                              aioObjectRoot *object,
                              void *callback,
@@ -315,6 +316,7 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
 
   op->tag = ((opGetGeneration(op)+1) << TAG_STATUS_SIZE) | aosPending;
   op->executeMethod = startMethod;
+  op->cancelMethod = cancelMethod;
   op->finishMethod = finishMethod;
   op->executeQueue.prev = 0;
   op->executeQueue.next = 0;  
@@ -331,7 +333,78 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
   return op;
 }
 
-void processOperationList(aioObjectRoot *object, List *finished, tag_t *needStart, processOperationCb *processCb, tag_t *enqueued)
+static void opRun(asyncOpRoot *op, List *list)
+{
+  eqPushBack(list, op);
+  if (op->timeout) {
+    asyncBase *base = op->object->base;
+    if (op->flags & afRealtime) {
+      // start timer for this operation
+      base->methodImpl.startTimer(op, op->timeout, op->opCode == actUserEvent);
+    } else {
+      // add operation to timeout grid
+      op->endTime = ((uint64_t)time(0)) * 1000000ULL + op->timeout;
+      addToTimeoutQueue(base, op);
+    }
+  }
+}
+
+void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finished, tag_t *needStart)
+{
+  List *list = 0;
+  tag_t tag = 0;
+  int restart = 0;
+  aioObjectRoot *object = opptr->object;
+  if (opptr->opCode & OPCODE_WRITE) {
+    list = &object->writeQueue;
+    tag = TAG_WRITE;
+  } else {
+    list = &object->readQueue;
+    tag = TAG_READ;
+  }
+
+  asyncOpRoot *queueHead = list->head;
+
+  switch (actionType) {
+    case aaStart : {
+      opRun(opptr, list);
+      break;
+    }
+
+    case aaCancel : {
+      if (opptr->running) {
+        opptr->running = 0;
+        if (opptr->cancelMethod(opptr))
+          opRelease(opptr, opGetStatus(opptr), list, finished);
+      } else {
+        opRelease(opptr, opGetStatus(opptr), list, finished);
+      }
+      break;
+    }
+
+    case aaFinish : {
+      opRelease(opptr, opGetStatus(opptr), list, finished);
+      break;
+    }
+
+    case aaContinue : {
+      if (opptr->running) {
+        opptr->running = 0;
+        restart = 1;
+      } else {
+        opRelease(opptr, opGetStatus(opptr), list, finished);
+      }
+      break;
+    }
+
+    default :
+      break;
+  }
+
+  *needStart |= (list->head && (list->head != queueHead || restart)) ? tag : 0;
+}
+
+void processOperationList(aioObjectRoot *object, List *finished, tag_t *needStart, tag_t *enqueued)
 {
   asyncOpAction *action;
   __spinlock_acquire(&object->announcementQueue.lock);
@@ -341,7 +414,7 @@ void processOperationList(aioObjectRoot *object, List *finished, tag_t *needStar
   __spinlock_release(&object->announcementQueue.lock);
 
   while (action) {
-    processCb(action->op, action->actionType, finished, needStart);
+    processAction(action->op, action->actionType, finished, needStart);
     objectRelease(action, asyncOpActionPool);
     action = action->next;
     (*enqueued)++;
@@ -364,7 +437,8 @@ void opRelease(asyncOpRoot *op, AsyncOpStatus status, List *executeList, List *f
   } else {
     aioObjectRoot *object = op->object;
     objectRelease(op, op->poolId);
-    op->finishMethod(op, aaFinish);
+    if (op->callback)
+      op->finishMethod(op);
     objectDecrementReference(object, 1);
   }
 
@@ -400,10 +474,11 @@ void cancelOperationList(List *list, List *finished, AsyncOpStatus status)
     asyncOpRoot *next = op->executeQueue.next;
     if (opSetStatus(op, opGetGeneration(op), status)) {
       if (op->running) {
-        op->finishMethod(op, aaCancel);
         op->running = 0;
+        if (op->cancelMethod(op))
+          opRelease(op, opGetStatus(op), list, finished);
       } else {
-        opRelease(op, aosCanceled, list, finished);
+        opRelease(op, opGetStatus(op), list, finished);
       }
     }
     op = next;
@@ -496,7 +571,8 @@ void executeThreadLocalQueue()
     asyncOpRoot *nextOp = op->next;
     aioObjectRoot *object = op->object;
     objectRelease(op, op->poolId);
-    op->finishMethod(op, aaFinish);
+    if (op->callback)
+      op->finishMethod(op);
     objectDecrementReference(object, 1);
     op = nextOp;
   }
