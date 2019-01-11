@@ -398,10 +398,14 @@ void cancelOperationList(List *list, List *finished, AsyncOpStatus status)
   asyncOpRoot *op = list->head;
   while (op) {
     asyncOpRoot *next = op->executeQueue.next;
-    if (opSetStatus(op, opGetGeneration(op), status))
-      opRelease(op, status, 0, finished);
-    else
-      op->executeQueue.prev = op->executeQueue.next = 0;
+    if (opSetStatus(op, opGetGeneration(op), status)) {
+      if (op->running) {
+        op->finishMethod(op, aaCancel);
+        op->running = 0;
+      } else {
+        opRelease(op, aosCanceled, list, finished);
+      }
+    }
     op = next;
   }
 
