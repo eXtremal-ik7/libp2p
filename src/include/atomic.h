@@ -59,7 +59,8 @@ static inline int __pointer_atomic_compare_and_swap(void *volatile *tag, void *v
 static inline void __spinlock_acquire(unsigned *lock)
 {
   for (;;) {
-    for (int i = 0; i < 7777; i++) {
+    int i;
+    for (i = 0; i < 7777; i++) {
       if (__uint_atomic_compare_and_swap(lock, 0, 1))
         return;
     }

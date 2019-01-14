@@ -209,8 +209,9 @@ void selectNextFinishedOperation(asyncBase *base)
     FD_ZERO(&writeFds);
     FD_SET(localBase->pipeFd[0], &readFds);
 
-    nfds = localBase->pipeFd[0] + 1;      
-    for (int i = 0; i < FD_SETSIZE; i++) {
+    nfds = localBase->pipeFd[0] + 1;
+    int i;
+    for (i = 0; i < FD_SETSIZE; i++) {
       fdStruct *fds = getFdOperations(localBase, i);
       if (fds->mask & mtRead)
         FD_SET(i, &readFds);
@@ -231,7 +232,8 @@ void selectNextFinishedOperation(asyncBase *base)
       int available;
       ioctl(localBase->pipeFd[0], FIONREAD, &available);
       asyncOpRoot *op;
-      for (int i = 0; i < available/(int)sizeof(op); i++) {
+      int i;
+      for (i = 0; i < available/(int)sizeof(op); i++) {
         read(localBase->pipeFd[0], &op, sizeof(op));
         if (!op)
           return;

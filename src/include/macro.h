@@ -2,11 +2,16 @@
 #define __UNUSED_H_
 #define __UNUSED(x) (void)x;
 
-#ifdef __clang__
+#if defined(__clang__)
 #define __NO_PADDING_BEGIN \
   _Pragma("clang diagnostic push") \
   _Pragma("clang diagnostic ignored \"-Wpadded\"")
 #define __NO_PADDING_END _Pragma("clang diagnostic pop")
+#elif defined(__GNUC__)
+#define __NO_PADDING_BEGIN \
+  _Pragma("GCC diagnostic push") \
+  _Pragma("GCC diagnostic ignored \"-Wpadded\"")
+#define __NO_PADDING_END _Pragma("GCC diagnostic pop")
 #else
 #define __NO_PADDING_BEGIN
 #define __NO_PADDING_END

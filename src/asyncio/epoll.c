@@ -132,7 +132,8 @@ asyncBase *epollNewAsyncBase()
 void epollPostEmptyOperation(asyncBase *base)
 {
   unsigned count = base->messageLoopThreadCounter;
-  for (unsigned i = 0; i < count; i++) {
+  unsigned i;
+  for (i = 0; i < count; i++) {
     pipeMsg msg = {Reset, 0};
     epollBase *localBase = (epollBase *)base;
     write(localBase->pipeFd[Write], &msg, sizeof(pipeMsg));
@@ -178,8 +179,7 @@ static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpA
     if ( (pendingOperationsNum = __tag_get_opcount(currentTag)) ) {
       if (newOp) {
         // Don't try synchonously execute operation second time
-        tag_t X;
-        processAction(newOp, actionType, &threadLocalQueue, (!hasFd || (hasFd && newOp->opCode == actConnect)) ? &needStart : &X);
+        processAction(newOp, actionType, &threadLocalQueue, &needStart);
         enqueuedOperationsNum = 1;
         newOp = 0;
       } else {
@@ -255,7 +255,8 @@ void epollNextFinishedOperation(asyncBase *base)
         int available;
         int fd = localBase->pipeFd[Read];
         ioctl(fd, FIONREAD, &available);
-        for (int i = 0; i < available / (int)sizeof(pipeMsg); i++) {
+        int i;
+        for (i = 0; i < available / (int)sizeof(pipeMsg); i++) {
           read(fd, &msg, sizeof(pipeMsg));
           asyncOpRoot *op = (asyncOpRoot*)msg.data;
           switch (msg.cmd) {
