@@ -27,6 +27,24 @@ void userEventStopTimer(aioUserEvent *event);
 void userEventActivate(aioUserEvent *event);
 void deleteUserEvent(aioUserEvent *event);
 
+asyncOpRoot *implRead(aioObject *object,
+                      void *buffer,
+                      size_t size,
+                      AsyncFlags flags,
+                      uint64_t usTimeout,
+                      aioCb callback,
+                      void *arg,
+                      size_t *bytesTransferred);
+
+asyncOpRoot *implWrite(aioObject *object,
+                       const void *buffer,
+                       size_t size,
+                       AsyncFlags flags,
+                       uint64_t usTimeout,
+                       aioCb callback,
+                       void *arg,
+                       size_t *bytesTransferred);
+
 void aioConnect(aioObject *object,
                 const HostAddress *address,
                 uint64_t usTimeout,

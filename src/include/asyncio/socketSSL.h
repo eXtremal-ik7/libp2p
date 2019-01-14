@@ -24,15 +24,14 @@ typedef struct SSLSocket {
   BIO *bioOut;
   size_t sslReadBufferSize;
   uint8_t *sslReadBuffer;
+  size_t sslWriteBufferSize;
+  uint8_t *sslWriteBuffer;
 } SSLSocket;
 
 typedef struct SSLOp {
   asyncOpRoot root;
   HostAddress address;
   int state;    
-  size_t sslBufferSize;
-  uint8_t *sslBuffer;
-  
   void *buffer;
   size_t transactionSize;
   size_t bytesTransferred;  
@@ -44,27 +43,44 @@ void sslSocketDelete(SSLSocket *socket);
 
 socketTy sslGetSocket(const SSLSocket *socket);
 
+asyncOpRoot *implSslRead(SSLSocket *socket,
+                         void *buffer,
+                         size_t size,
+                         AsyncFlags flags,
+                         uint64_t usTimeout,
+                         sslCb callback,
+                         void *arg,
+                         size_t *bytesTransferred);
+
+asyncOpRoot *implSslWrite(SSLSocket *socket,
+                          const void *buffer,
+                          size_t size,
+                          AsyncFlags flags,
+                          uint64_t usTimeout,
+                          sslCb callback,
+                          void *arg);
+
 void aioSslConnect(SSLSocket *socket,
                    const HostAddress *address,
                    uint64_t usTimeout,
                    sslConnectCb callback,
                    void *arg);
 
-void aioSslRead(SSLSocket *socket,
-                void *buffer,
-                size_t size,
-                AsyncFlags flags,
-                uint64_t usTimeout,
-                sslCb callback,
-                void *arg);
+ssize_t aioSslRead(SSLSocket *socket,
+                   void *buffer,
+                   size_t size,
+                   AsyncFlags flags,
+                   uint64_t usTimeout,
+                   sslCb callback,
+                   void *arg);
 
-void aioSslWrite(SSLSocket *socket,
-                 const void *buffer,
-                 size_t size,
-                 AsyncFlags flags,
-                 uint64_t usTimeout,
-                 sslCb callback,
-                 void *arg);
+ssize_t aioSslWrite(SSLSocket *socket,
+                    const void *buffer,
+                    size_t size,
+                    AsyncFlags flags,
+                    uint64_t usTimeout,
+                    sslCb callback,
+                    void *arg);
 
 
 int ioSslConnect(SSLSocket *socket, const HostAddress *address, uint64_t usTimeout);

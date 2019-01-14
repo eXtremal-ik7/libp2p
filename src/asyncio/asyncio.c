@@ -316,6 +316,52 @@ void deleteUserEvent(aioUserEvent *event)
   objectRelease(&event->root, event->root.poolId);
 }
 
+asyncOpRoot *implRead(aioObject *object,
+                      void *buffer,
+                      size_t size,
+                      AsyncFlags flags,
+                      uint64_t usTimeout,
+                      aioCb callback,
+                      void *arg,
+                      size_t *bytesTransferred)
+{
+  size_t bytes = 0;
+  int result = object->root.type == ioObjectSocket ?
+    socketSyncRead(object->hSocket, buffer, size, flags & afWaitAll, &bytes) :
+    deviceSyncRead(object->hDevice, buffer, size, flags & afWaitAll, &bytes);
+  if (result) {
+    *bytesTransferred = bytes;
+    return 0;
+  } else {
+    asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)callback, arg, flags|afRunning, actRead, usTimeout, buffer, size);
+    op->bytesTransferred = bytes;
+    return &op->root;
+  }
+}
+
+asyncOpRoot *implWrite(aioObject *object,
+                       const void *buffer,
+                       size_t size,
+                       AsyncFlags flags,
+                       uint64_t usTimeout,
+                       aioCb callback,
+                       void *arg,
+                       size_t *bytesTransferred)
+{
+  size_t bytes = 0;
+  int result = object->root.type == ioObjectSocket ?
+    socketSyncWrite(object->hSocket, buffer, size, flags & afWaitAll, &bytes) :
+    deviceSyncWrite(object->hDevice, buffer, size, flags & afWaitAll, &bytes);
+  if (result) {
+    *bytesTransferred = bytes;
+    return 0;
+  } else {
+    asyncOp *op = initWriteAsyncOp(object->root.base->methodImpl.write, rwFinish, object, (void*)callback, arg, flags|afRunning, actWrite, usTimeout, buffer, size);
+    op->bytesTransferred = bytes;
+    return &op->root;
+  }
+}
+
 void aioConnect(aioObject *object,
                 const HostAddress *address,
                 uint64_t usTimeout,
@@ -333,7 +379,7 @@ void aioAccept(aioObject *object,
                aioAcceptCb callback,
                void *arg)
 {
-  asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.accept, acceptFinish, object, (void*)callback, arg, afNone, actAccept, usTimeout, 0, 0);
+  asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.accept, acceptFinish, object, (void*)callback, arg, afRunning, actAccept, usTimeout, 0, 0);
   opStart(&op->root);
 }
 
@@ -346,43 +392,42 @@ ssize_t aioRead(aioObject *object,
                 aioCb callback,
                 void *arg)
 {
+#define MAKE_OP initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)callback, arg, flags, actRead, usTimeout, buffer, size)
   if (__tag_atomic_fetch_and_add(&object->root.tag, 1) == 0) {
-    size_t bytesTransferred = 0;
-    int result = object->root.type == ioObjectSocket ?
-      socketSyncRead(object->hSocket, buffer, size, flags & afWaitAll, &bytesTransferred) :
-      deviceSyncRead(object->hDevice, buffer, size, flags & afWaitAll, &bytesTransferred);
-    if (result) {
-      if (flags & afSerialized) {
-        callback(aosSuccess, object, bytesTransferred, arg);
-      }
+    if (!object->root.readQueue.head) {
+      size_t bytesTransferred;
+      asyncOpRoot *op = implRead(object, buffer, size, flags, usTimeout, callback, arg, &bytesTransferred);
+      if (!op) {
+        if (flags & afSerialized)
+          callback(aosSuccess, object, bytesTransferred, arg);
 
-      tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
-      if (tag)
-        object->root.base->methodImpl.combiner(&object->root, tag, 0, aaNone);
-      if (!(flags & afSerialized)) {
-        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
-          return (ssize_t)bytesTransferred;
-        } else {
-          asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)callback, arg, flags, actRead, usTimeout, buffer, size);
-          op->bytesTransferred = bytesTransferred;
-          opForceStatus(&op->root, aosSuccess);
-          addToThreadLocalQueue(&op->root);
+        tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
+        if (tag)
+          object->root.base->methodImpl.combiner(&object->root, tag, 0, aaNone);
+
+        if (!(flags & afSerialized)) {
+          if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
+            return (ssize_t)bytesTransferred;
+          } else {
+            asyncOp *op = MAKE_OP;
+            op->bytesTransferred = bytesTransferred;
+            opForceStatus(&op->root, aosSuccess);
+            addToThreadLocalQueue(&op->root);
+          }
         }
+      } else {
+        object->root.base->methodImpl.combiner(&object->root, 1, op, aaStart);
       }
     } else {
-      asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)callback, arg, flags, actRead, usTimeout, buffer, size);
-      op->bytesTransferred = bytesTransferred;
-      object->root.base->methodImpl.combiner(&object->root, 1, &op->root, aaStart);
+      eqPushBack(&object->root.readQueue, &MAKE_OP->root);
     }
   } else {
-    asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)callback, arg, flags, actRead, usTimeout, buffer, size);
-    combinerAddAction(&object->root, &op->root, aaStart);
+    combinerAddAction(&object->root, &MAKE_OP->root, aaStart);
   }
 
   return -(ssize_t)aosPending;
+#undef MAKE_OP
 }
-
-
 
 ssize_t aioWrite(aioObject *object,
                  const void *buffer,
@@ -392,40 +437,41 @@ ssize_t aioWrite(aioObject *object,
                  aioCb callback,
                  void *arg)
 {
+#define MAKE_OP initWriteAsyncOp(object->root.base->methodImpl.write, rwFinish, object, (void*)callback, arg, flags, actWrite, usTimeout, buffer, size)
   if (__tag_atomic_fetch_and_add(&object->root.tag, 1) == 0) {
-    size_t bytesTransferred = 0;
-    int result = object->root.type == ioObjectSocket ?
-      socketSyncWrite(object->hSocket, buffer, size, flags & afWaitAll, &bytesTransferred) :
-      deviceSyncWrite(object->hDevice, buffer, size, flags & afWaitAll, &bytesTransferred);
-    if (result) {
-      if (flags & afSerialized)
-        callback(aosSuccess, object, bytesTransferred, arg);
+    if (!object->root.writeQueue.head) {
+      size_t bytesTransferred;
+      asyncOpRoot *op = implWrite(object, buffer, size, flags, usTimeout, callback, arg, &bytesTransferred);
+      if (!op) {
+        if (flags & afSerialized)
+          callback(aosSuccess, object, bytesTransferred, arg);
 
-      tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
-      if (tag)
-        object->root.base->methodImpl.combiner(&object->root, tag, 0, aaNone);
+        tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
+        if (tag)
+          object->root.base->methodImpl.combiner(&object->root, tag, 0, aaNone);
 
-      if (!(flags & afSerialized)) {
-        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
-          return (ssize_t)bytesTransferred;
-        } else {
-          asyncOp *op = initWriteAsyncOp(object->root.base->methodImpl.write, rwFinish, object, (void*)callback, arg, flags, actWrite, usTimeout, buffer, size);
-          op->bytesTransferred = bytesTransferred;
-          opForceStatus(&op->root, aosSuccess);
-          addToThreadLocalQueue(&op->root);
+        if (!(flags & afSerialized)) {
+          if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
+            return (ssize_t)bytesTransferred;
+          } else {
+            asyncOp *op = MAKE_OP;
+            op->bytesTransferred = bytesTransferred;
+            opForceStatus(&op->root, aosSuccess);
+            addToThreadLocalQueue(&op->root);
+          }
         }
+      } else {
+        object->root.base->methodImpl.combiner(&object->root, 1, op, aaStart);
       }
     } else {
-      asyncOp *op = initWriteAsyncOp(object->root.base->methodImpl.write, rwFinish, object, (void*)callback, arg, flags, actWrite, usTimeout, buffer, size);
-      op->bytesTransferred = bytesTransferred;
-      object->root.base->methodImpl.combiner(&object->root, 1, &op->root, aaStart);
+      eqPushBack(&object->root.writeQueue, &MAKE_OP->root);
     }
   } else {
-    asyncOp *op = initWriteAsyncOp(object->root.base->methodImpl.write, rwFinish, object, (void*)callback, arg, flags, actWrite, usTimeout, buffer, size);
-    combinerAddAction(&object->root, &op->root, aaStart);
+    combinerAddAction(&object->root, &MAKE_OP->root, aaStart);
   }
 
   return -(ssize_t)aosPending;
+#undef MAKE_OP
 }
 
 ssize_t aioReadMsg(aioObject *object,

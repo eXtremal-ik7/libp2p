@@ -328,7 +328,7 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
   op->arg = arg;
   op->timeout = timeout;
   op->timerId = realtime ? op->timerId : 0;
-  op->running = 0;
+  op->running = (flags & afRunning) ? arRunning : arWaiting;
   objectIncrementReference(object);
   return op;
 }
@@ -353,7 +353,6 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
 {
   List *list = 0;
   tag_t tag = 0;
-  int restart = 0;
   aioObjectRoot *object = opptr->object;
   if (opptr->opCode & OPCODE_WRITE) {
     list = &object->writeQueue;
@@ -363,8 +362,6 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
     tag = TAG_READ;
   }
 
-  asyncOpRoot *queueHead = list->head;
-
   switch (actionType) {
     case aaStart : {
       opRun(opptr, list);
@@ -372,8 +369,8 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
     }
 
     case aaCancel : {
-      if (opptr->running) {
-        opptr->running = 0;
+      if (opptr->running == arRunning) {
+        opptr->running = arCancelling;
         if (opptr->cancelMethod(opptr))
           opRelease(opptr, opGetStatus(opptr), list, finished);
       } else {
@@ -388,12 +385,10 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
     }
 
     case aaContinue : {
-      if (opptr->running) {
-        opptr->running = 0;
-        restart = 1;
-      } else {
+      if (opptr->running == arRunning)
+        opptr->running = arWaiting;
+      else
         opRelease(opptr, opGetStatus(opptr), list, finished);
-      }
       break;
     }
 
@@ -401,7 +396,7 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
       break;
   }
 
-  *needStart |= (list->head && (list->head != queueHead || restart)) ? tag : 0;
+  *needStart |= (list->head && list->head->running == arWaiting) ? tag : 0;
 }
 
 void processOperationList(aioObjectRoot *object, List *finished, tag_t *needStart, tag_t *enqueued)
@@ -451,7 +446,7 @@ void executeOperationList(List *list, List *finished)
     asyncOpRoot *next = op->executeQueue.next;
     AsyncOpStatus status = op->executeMethod(op);
     if (status == aosPending) {
-      op->running = 1;
+      op->running = arRunning;
       break;
     }
 
@@ -473,8 +468,8 @@ void cancelOperationList(List *list, List *finished, AsyncOpStatus status)
   while (op) {
     asyncOpRoot *next = op->executeQueue.next;
     if (opSetStatus(op, opGetGeneration(op), status)) {
-      if (op->running) {
-        op->running = 0;
+      if (op->running == arRunning) {
+        op->running = arCancelling;
         if (op->cancelMethod(op))
           opRelease(op, opGetStatus(op), list, finished);
       } else {

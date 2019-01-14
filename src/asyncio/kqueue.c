@@ -170,9 +170,7 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
     tag_t needStart = currentTag;
     if ( (pendingOperationsNum = __tag_get_opcount(currentTag)) ) {
       if (newOp) {
-        // Don't try synchonously execute operation second time
-        tag_t X;
-        processAction(newOp, actionType, &threadLocalQueue, (!hasFd || (hasFd && newOp->opCode == actConnect)) ? &needStart : &X);
+        processAction(newOp, actionType, &threadLocalQueue, &needStart);
         enqueuedOperationsNum = 1;
         newOp = 0;
       } else {

@@ -59,9 +59,15 @@ include_directories(
 option(SSL_ENABLED "SSL support (OpenSSL is required)" ON)
 option(HTTP_ENABLED "HTTP protocol support" ON)
 option(TEST_ENABLED "Build tests" OFF)
+option(SANITIZER_ENABLED "Build with address sanitizer" OFF)
 
 if (SSL_ENABLED)
   find_package(OpenSSL REQUIRED)
+endif()
+
+if (SANITIZER_ENABLED)
+  set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
+  set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
 endif()
 
 add_subdirectory(asyncio)

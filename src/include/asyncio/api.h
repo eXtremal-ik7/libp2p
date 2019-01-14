@@ -49,7 +49,8 @@ typedef enum AsyncFlags {
   afNoCopy = 2,
   afRealtime = 4,
   afActiveOnce = 8,
-  afSerialized = 16
+  afSerialized = 16,
+  afRunning = 32,
 } AsyncFlags;
 
 typedef enum AsyncOpActionTy {
@@ -59,6 +60,12 @@ typedef enum AsyncOpActionTy {
   aaFinish,
   aaContinue
 } AsyncOpActionTy;
+
+typedef enum AsyncOpRunningTy {
+  arWaiting = 0,
+  arRunning,
+  arCancelling
+} AsyncOpRunningTy;
 
 #ifdef __cplusplus
 __NO_UNUSED_FUNCTION_BEGIN
@@ -195,7 +202,7 @@ struct asyncOpRoot {
     uint64_t timeout;
     uint64_t endTime;
   };
-  int running;
+  AsyncOpRunningTy running;
 };
 
 void initObjectRoot(aioObjectRoot *object, asyncBase *base, IoObjectTy type, aioObjectDestructor destructor);

@@ -128,40 +128,50 @@ static AsyncOpStatus httpParseStart(asyncOpRoot *opptr)
     op->state = 1;
   }
 
-  switch (httpParse(&client->state, op->parseCallback, op)) {
-    case httpResultOk :
-      return aosSuccess;
-    case httpResultNeedMoreData : {
-      // copy 'tail' to begin of buffer
-      size_t offset = httpDataRemaining(&client->state);
-      if (offset)
-        memcpy(client->inBuffer, httpDataPtr(&client->state), offset);
+  for (;;) {
+    switch (httpParse(&client->state, op->parseCallback, op)) {
+      case httpResultOk :
+        return aosSuccess;
+      case httpResultNeedMoreData : {
+        // copy 'tail' to begin of buffer
+        size_t offset = httpDataRemaining(&client->state);
+        if (offset)
+          memcpy(client->inBuffer, httpDataPtr(&client->state), offset);
 
-      if (client->isHttps)
-        aioSslRead(client->sslSocket,
-                   client->inBuffer+offset,
-                   client->inBufferSize-offset,
-                   afNone,
-                   0,
-                   httpsRequestProc,
-                   op);
-      else
-        aioRead(client->plainSocket,
-                client->inBuffer+offset,
-                client->inBufferSize-offset,
-                afNone,
-                0,
-                httpRequestProc,
-                op);
+        asyncOpRoot *readOp;
+        size_t bytesTransferred = 0;
+        if (client->isHttps)
+          readOp = implSslRead(client->sslSocket,
+                               client->inBuffer+offset,
+                               client->inBufferSize-offset,
+                               afNone,
+                               0,
+                               httpsRequestProc,
+                               op,
+                               &bytesTransferred);
+        else
+          readOp = implRead(client->plainSocket,
+                            client->inBuffer+offset,
+                            client->inBufferSize-offset,
+                            afNone,
+                            0,
+                            httpRequestProc,
+                            op,
+                            &bytesTransferred);
 
-      client->inBufferOffset = offset;
-      return aosPending;
+        client->inBufferOffset = offset;
+        if (readOp) {
+          opStart(readOp);
+          return aosPending;
+        } else {
+          httpSetBuffer(&client->state, client->inBuffer, client->inBufferOffset+bytesTransferred);
+        }
+        break;
+      }
+      case httpResultError :
+        return aosUnknownError;
     }
-    case httpResultError :
-      return aosUnknownError;
   }
-
-  return aosUnknownError;
 }
 
 
