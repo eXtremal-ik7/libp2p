@@ -53,6 +53,7 @@ void epollPostEmptyOperation(asyncBase *base);
 void epollNextFinishedOperation(asyncBase *base);
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data);
 asyncOpRoot *epollNewAsyncOp(void);
+int epollCancelAsyncOp(asyncOpRoot *opptr);
 void epollDeleteObject(aioObject *object);
 void epollInitializeTimer(asyncBase *base, asyncOpRoot *op);
 void epollStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic);
@@ -71,6 +72,7 @@ static struct asyncImpl epollImpl = {
   epollNextFinishedOperation,
   epollNewAioObject,
   epollNewAsyncOp,
+  epollCancelAsyncOp,
   epollDeleteObject,
   epollInitializeTimer,
   epollStartTimer,
@@ -264,7 +266,7 @@ void epollNextFinishedOperation(asyncBase *base)
               __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, 0u-1);
               return;
             case UserEvent :
-              op->finishMethod(op, aaFinish);
+              op->finishMethod(op);
               break;
           }
         }
@@ -288,7 +290,7 @@ void epollNextFinishedOperation(asyncBase *base)
                            __tagged_pointer_make(timer, opGetGeneration(op)));
             }
 
-            op->finishMethod(op, aaFinish);
+            op->finishMethod(op);
           } else {
             opCancel(op, opEncodeTag(op, timerId), aosTimeout);
           }
@@ -343,6 +345,11 @@ asyncOpRoot *epollNewAsyncOp()
   return &op->root;
 }
 
+int epollCancelAsyncOp(asyncOpRoot *opptr)
+{
+  __UNUSED(opptr);
+  return 1;
+}
 
 void epollDeleteObject(aioObject *object)
 {

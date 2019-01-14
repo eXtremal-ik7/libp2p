@@ -48,6 +48,7 @@ void selectPostEmptyOperation(asyncBase *base);
 void selectNextFinishedOperation(asyncBase *base);
 aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data);
 asyncOpRoot *selectNewAsyncOp(void);
+int selectCancelAsyncOp(asyncOpRoot *opptr);
 void selectDeleteObject(aioObject *object);
 void selectInitializeTimer(asyncBase *base, asyncOpRoot *op);
 void selectStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic);
@@ -67,6 +68,7 @@ static struct asyncImpl selectImpl = {
   selectNextFinishedOperation,
   selectNewAioObject,
   selectNewAsyncOp,
+  selectCancelAsyncOp,
   selectDeleteObject,
   selectInitializeTimer,
   selectStartTimer,
@@ -239,7 +241,7 @@ void selectNextFinishedOperation(asyncBase *base)
             aioUserEvent *event = (aioUserEvent*)op;
             if (event->counter == 0)
               stopTimer(op);
-            event->root.finishMethod(&event->root, aaFinish);
+            event->root.finishMethod(&event->root);
           } else {
 //            if (op->object->type != ioObjectUserDefined)
 //              asyncOpUnlink((selectOp*)op);
@@ -285,6 +287,11 @@ asyncOpRoot *selectNewAsyncOp()
   return (asyncOpRoot*)op;
 }
 
+int selectCancelAsyncOp(asyncOpRoot *opptr)
+{
+  __UNUSED(opptr);
+  return 1;
+}
 
 void selectDeleteObject(aioObject *object)
 {
