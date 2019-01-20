@@ -1,0 +1,20 @@
+project(asyncioextras)
+
+set(Sources
+  asyncioextras.cpp
+)
+
+if (ZMTP_ENABLED)
+  set(Sources ${Sources} zmtp.cpp)
+endif()
+
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+  add_definitions(-fPIC)
+endif ()
+
+add_library(asyncioextras-0.4 STATIC ${Sources})
+
+install(
+  TARGETS asyncioextras-0.4
+  ARCHIVE DESTINATION lib
+)

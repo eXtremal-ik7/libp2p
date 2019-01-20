@@ -1,31 +1,11 @@
-#include "asyncio/asyncio.h"
+#include "unittest.h"
 #include "asyncio/coroutine.h"
 #include "asyncio/socket.h"
 #include "atomic.h"
-#include "p2p/p2pproto.h"
-#include <gtest/gtest.h>
 #include <chrono>
 #include <thread>
 
-const unsigned gPort = 65333;
-
-static asyncBase *gBase = nullptr;
-
-__NO_PADDING_BEGIN
-struct TestContext {
-  aioObject *serverSocket;
-  aioObject *clientSocket;
-  uint8_t clientBuffer[128];
-  uint8_t serverBuffer[128];
-  p2pStream serverStream;
-  asyncBase *base;
-  int state;
-  int state2;
-  bool success;
-  TestContext(asyncBase *baseArg) : base(baseArg), state(0), state2(0), success(false) {}
-};
-__NO_PADDING_END
-
+asyncBase *gBase = nullptr;
 
 aioObject *startTCPServer(asyncBase *base, aioAcceptCb callback, void *arg, uint16_t port)
 {
@@ -77,15 +57,19 @@ aioObject *initializeTCPClient(asyncBase *base, aioConnectCb callback, void *arg
   address.ipv4 = INADDR_ANY;
   address.port = 0;
   socketTy connectSocket = socketCreate(AF_INET, SOCK_STREAM, IPPROTO_TCP, 1);
-  if (socketBind(connectSocket, &address) != 0)
+  int bindResult = socketBind(connectSocket, &address);
+  EXPECT_EQ(bindResult, 0);
+  if (bindResult != 0)
     return nullptr;
   
-  address.family = AF_INET;
-  address.ipv4 = inet_addr("127.0.0.1");
-  address.port = htons(port);    
   aioObject *object = newSocketIo(base, connectSocket);
-  if (callback)
+  if (callback) {
+    address.family = AF_INET;
+    address.ipv4 = inet_addr("127.0.0.1");
+    address.port = htons(port);
     aioConnect(object, &address, 333000, callback, arg);
+  }
+
   return object;
 }
 

@@ -1,3 +1,4 @@
+project(libp2p)
 cmake_minimum_required(VERSION 2.8)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
@@ -58,6 +59,7 @@ include_directories(
 
 option(SSL_ENABLED "SSL support (OpenSSL is required)" ON)
 option(HTTP_ENABLED "HTTP protocol support" ON)
+option(ZMTP_ENABLED "ZMTP (zmq) protocol support" ON)
 option(TEST_ENABLED "Build tests" OFF)
 option(SANITIZER_ENABLED "Build with address sanitizer" OFF)
 
@@ -71,6 +73,7 @@ if (SANITIZER_ENABLED)
 endif()
 
 add_subdirectory(asyncio)
+add_subdirectory(asyncioextras)
 add_subdirectory(p2putils)
 add_subdirectory(p2p)
 add_subdirectory(examples)
