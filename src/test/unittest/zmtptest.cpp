@@ -78,9 +78,9 @@ static void zmq_server_pull(zmtpContext *ctx, uint16_t port)
     {
       reqStruct msg = {0, 0};
       recvResult = zmq_recv(socket, &msg, sizeof(msg), 0);
-      EXPECT_EQ(recvResult, sizeof(msg));
-      EXPECT_EQ(msg.a, 11);
-      EXPECT_EQ(msg.b, 77);
+      EXPECT_EQ(recvResult, static_cast<ssize_t>(sizeof(msg)));
+      EXPECT_EQ(msg.a, 11u);
+      EXPECT_EQ(msg.b, 77u);
       if (recvResult == sizeof(msg) && msg.a == 11 && msg.b == 77)
         ctx->serverState++;
     }
@@ -88,7 +88,7 @@ static void zmq_server_pull(zmtpContext *ctx, uint16_t port)
     {
       reqStruct longMsg[1024];
       recvResult = zmq_recv(socket, longMsg, sizeof(longMsg), 0);
-      EXPECT_EQ(recvResult, sizeof(longMsg));
+      EXPECT_EQ(recvResult, static_cast<ssize_t>(sizeof(longMsg)));
       bool valid = true;
       for (unsigned i = 0; i < 1024; i++) {
         EXPECT_EQ(longMsg[i].a, i);
@@ -137,9 +137,9 @@ static void zmq_server_rep(zmtpContext *ctx, uint16_t port)
     {
       reqStruct msg = {0, 0};
       recvResult = zmq_recv(socket, &msg, sizeof(msg), 0);
-      EXPECT_EQ(recvResult, sizeof(msg));
-      EXPECT_EQ(msg.a, 11);
-      EXPECT_EQ(msg.b, 77);
+      EXPECT_EQ(recvResult, static_cast<ssize_t>(sizeof(msg)));
+      EXPECT_EQ(msg.a, 11u);
+      EXPECT_EQ(msg.b, 77u);
       if (recvResult == sizeof(msg) && msg.a == 11 && msg.b == 77) {
         repStruct rep;
         rep.c = msg.a + msg.b;
@@ -152,7 +152,7 @@ static void zmq_server_rep(zmtpContext *ctx, uint16_t port)
       reqStruct longReq[1024];
       repStruct longRep[1024];
       recvResult = zmq_recv(socket, longReq, sizeof(longReq), 0);
-      EXPECT_EQ(recvResult, sizeof(longReq));
+      EXPECT_EQ(recvResult, static_cast<ssize_t>(sizeof(longReq)));
       bool valid = true;
       for (unsigned i = 0; i < 1024; i++) {
         longRep[i].c = longReq[i].a + longReq[i].b;
@@ -173,7 +173,7 @@ static void zmq_server_rep(zmtpContext *ctx, uint16_t port)
     {
       reqStruct msg;
       recvResult = zmq_recv(socket, &msg, sizeof(msg), 0);
-      EXPECT_EQ(recvResult, sizeof(msg));
+      EXPECT_EQ(recvResult, static_cast<ssize_t>(sizeof(msg)));
       if (recvResult == sizeof(msg)) {
         repStruct rep;
         rep.c = msg.a + msg.b;
@@ -266,7 +266,7 @@ static void zmq_server_req(zmtpContext *ctx, uint16_t port)
       req.b = 77;
       zmq_send(socket, &req, sizeof(req), 0);
       recvResult = zmq_recv(socket, &rep, sizeof(rep), 0);
-      EXPECT_EQ(recvResult, sizeof(rep));
+      EXPECT_EQ(recvResult, static_cast<ssize_t>(sizeof(rep)));
       EXPECT_EQ(rep.c, req.a+req.b);
       if (recvResult == sizeof(rep) && rep.c == req.a+req.b)
         ctx->clientState++;
@@ -283,7 +283,7 @@ static void zmq_server_req(zmtpContext *ctx, uint16_t port)
       }
       zmq_send(socket, data.get(), 1024*sizeof(reqStruct), 0);
       recvResult = zmq_recv(socket, rep.get(), 1024*sizeof(repStruct), 0);
-      EXPECT_EQ(recvResult, 1024*sizeof(repStruct));
+      EXPECT_EQ(recvResult, static_cast<ssize_t>(1024*sizeof(repStruct)));
       if (recvResult == 1024*sizeof(repStruct)) {
         for (unsigned i = 0; i < 1024; i++) {
           EXPECT_EQ(rep[i].c, data[i].a + data[i].b);
@@ -395,7 +395,7 @@ void aio_push_client_coro(void *arg)
       req.a = 11;
       req.b = 77;
       sendResult = ioZmtpSend(ctx->clientSocket, &req, sizeof(req), zmtpMessage, afNone, 1000000);
-      EXPECT_EQ(sendResult, sizeof(req));
+      EXPECT_EQ(sendResult, static_cast<ssize_t>(sizeof(req)));
       if (sendResult == sizeof(req))
         ctx->clientState++;
     }
@@ -408,7 +408,7 @@ void aio_push_client_coro(void *arg)
         data[i].b = i;
       }
       sendResult = ioZmtpSend(ctx->clientSocket, data.get(), 1024*sizeof(reqStruct), zmtpMessage, afNone, 1000000);
-      EXPECT_EQ(sendResult, 1024*sizeof(reqStruct));
+      EXPECT_EQ(sendResult, static_cast<ssize_t>(1024*sizeof(reqStruct)));
       if (sendResult == 1024*sizeof(reqStruct))
         ctx->clientState++;
     }
@@ -447,8 +447,8 @@ static void aio_pull_readcb(AsyncOpStatus status, zmtpSocket *socket, zmtpUserMs
     EXPECT_EQ(status, aosSuccess);
     EXPECT_EQ(type, zmtpMessage);
     EXPECT_EQ(stream->sizeOf(), sizeof(reqStruct));
-    EXPECT_EQ(req->a, 11);
-    EXPECT_EQ(req->b, 77);
+    EXPECT_EQ(req->a, 11u);
+    EXPECT_EQ(req->b, 77u);
     if (status == aosSuccess &&
         stream->sizeOf() == sizeof(reqStruct) &&
         req->a == 11 &&
@@ -556,10 +556,10 @@ void aio_pull_accept_coro(void *arg)
         recvResult = ioZmtpRecv(socket, ctx->stream, 1024, afNone, 1000000, &msgType);
         reqStruct *req = ctx->stream.data<reqStruct>();
         EXPECT_EQ(msgType, zmtpMessage);
-        EXPECT_EQ(recvResult, sizeof(reqStruct));
+        EXPECT_EQ(recvResult, static_cast<ssize_t>(sizeof(reqStruct)));
         EXPECT_EQ(ctx->stream.sizeOf(), sizeof(reqStruct));
-        EXPECT_EQ(req->a, 11);
-        EXPECT_EQ(req->b, 77);
+        EXPECT_EQ(req->a, 11u);
+        EXPECT_EQ(req->b, 77u);
         if (msgType == zmtpMessage &&
             recvResult == sizeof(reqStruct) &&
             ctx->stream.sizeOf() == sizeof(reqStruct) &&
@@ -575,7 +575,7 @@ void aio_pull_accept_coro(void *arg)
         recvResult = ioZmtpRecv(socket, ctx->stream, 65536, afNone, 1000000, &msgType);
         reqStruct *req = ctx->stream.data<reqStruct>();
         EXPECT_EQ(msgType, zmtpMessage);
-        EXPECT_EQ(recvResult, 1024*sizeof(reqStruct));
+        EXPECT_EQ(recvResult, static_cast<ssize_t>(1024*sizeof(reqStruct)));
         EXPECT_EQ(ctx->stream.sizeOf(), 1024*sizeof(reqStruct));
         for (unsigned i = 0; i < 1024; i++) {
           EXPECT_EQ(req[i].a, i);
@@ -647,7 +647,7 @@ static void aio_req_readcb(AsyncOpStatus status, zmtpSocket *socket, zmtpUserMsg
     EXPECT_EQ(status, aosSuccess);
     EXPECT_EQ(type, zmtpMessage);
     EXPECT_EQ(stream->sizeOf(), sizeof(repStruct));
-    EXPECT_EQ(stream->data<repStruct>()->c, 88);
+    EXPECT_EQ(stream->data<repStruct>()->c, 88u);
     if (status == aosSuccess &&
         type == zmtpMessage &&
         stream->sizeOf() == sizeof(repStruct) &&
@@ -773,8 +773,8 @@ void aio_req_client_coro(void *arg)
       sendResult = ioZmtpSend(ctx->clientSocket, &req, sizeof(req), zmtpMessage, afNone, 1000000);
       recvResult = ioZmtpRecv(ctx->clientSocket, ctx->stream, 1024, afNone, 1000000, &msgType);
       repStruct *rep = ctx->stream.data<repStruct>();
-      EXPECT_EQ(sendResult, sizeof(req));
-      EXPECT_EQ(recvResult, sizeof(repStruct));
+      EXPECT_EQ(sendResult, static_cast<ssize_t>(sizeof(req)));
+      EXPECT_EQ(recvResult, static_cast<ssize_t>(sizeof(repStruct)));
       EXPECT_EQ(msgType, zmtpMessage);
       EXPECT_EQ(ctx->stream.sizeOf(), sizeof(repStruct));
       EXPECT_EQ(rep->c, req.a + req.b);
@@ -797,8 +797,8 @@ void aio_req_client_coro(void *arg)
       sendResult = ioZmtpSend(ctx->clientSocket, data.get(), 1024*sizeof(reqStruct), zmtpMessage, afNone, 1000000);
       recvResult = ioZmtpRecv(ctx->clientSocket, ctx->stream, 65536, afNone, 1000000, &msgType);
       repStruct *rep = ctx->stream.data<repStruct>();
-      EXPECT_EQ(sendResult, 1024*sizeof(reqStruct));
-      EXPECT_EQ(recvResult, 1024*sizeof(repStruct));
+      EXPECT_EQ(sendResult, static_cast<ssize_t>(1024*sizeof(reqStruct)));
+      EXPECT_EQ(recvResult, static_cast<ssize_t>(1024*sizeof(repStruct)));
       EXPECT_EQ(ctx->stream.sizeOf(), 1024*sizeof(repStruct));
       if (ctx->stream.sizeOf() == 1024*sizeof(repStruct)) {
         for (unsigned i = 0; i < 1024; i++) {
@@ -874,8 +874,8 @@ static void aio_rep_readcb(AsyncOpStatus status, zmtpSocket *socket, zmtpUserMsg
     EXPECT_EQ(status, aosSuccess);
     EXPECT_EQ(type, zmtpMessage);
     EXPECT_EQ(stream->sizeOf(), sizeof(reqStruct));
-    EXPECT_EQ(req->a, 11);
-    EXPECT_EQ(req->b, 77);
+    EXPECT_EQ(req->a, 11u);
+    EXPECT_EQ(req->b, 77u);
     if (status == aosSuccess &&
         stream->sizeOf() == sizeof(reqStruct) &&
         req->a == 11 &&
@@ -992,10 +992,10 @@ void aio_rep_accept_coro(void *arg)
         reqStruct *req = ctx->stream.data<reqStruct>();
         repStruct rep;
         EXPECT_EQ(msgType, zmtpMessage);
-        EXPECT_EQ(recvResult, sizeof(reqStruct));
+        EXPECT_EQ(recvResult, static_cast<ssize_t>(sizeof(reqStruct)));
         EXPECT_EQ(ctx->stream.sizeOf(), sizeof(reqStruct));
-        EXPECT_EQ(req->a, 11);
-        EXPECT_EQ(req->b, 77);
+        EXPECT_EQ(req->a, 11u);
+        EXPECT_EQ(req->b, 77u);
         if (msgType == zmtpMessage &&
             recvResult == sizeof(reqStruct) &&
             ctx->stream.sizeOf() == sizeof(reqStruct) &&
@@ -1003,7 +1003,7 @@ void aio_rep_accept_coro(void *arg)
             req->b == 77) {
           rep.c = req->a + req->b;
           sendResult = ioZmtpSend(socket, &rep, sizeof(rep), zmtpMessage, afNone, 1000000);
-          EXPECT_EQ(sendResult, sizeof(rep));
+          EXPECT_EQ(sendResult, static_cast<ssize_t>(sizeof(rep)));
           if (sendResult == sizeof(rep))
             ctx->serverState++;
         }
@@ -1016,7 +1016,7 @@ void aio_rep_accept_coro(void *arg)
         reqStruct *req = ctx->stream.data<reqStruct>();
         repStruct rep[1024];
         EXPECT_EQ(msgType, zmtpMessage);
-        EXPECT_EQ(recvResult, 1024*sizeof(reqStruct));
+        EXPECT_EQ(recvResult, static_cast<ssize_t>(1024*sizeof(reqStruct)));
         EXPECT_EQ(ctx->stream.sizeOf(), 1024*sizeof(reqStruct));
         for (unsigned i = 0; i < 1024; i++) {
           rep[i].c = req[i].a + req[i].b;
@@ -1033,7 +1033,7 @@ void aio_rep_accept_coro(void *arg)
             ctx->stream.sizeOf() == 1024*sizeof(reqStruct) &&
             valid) {
           sendResult = ioZmtpSend(socket, rep, sizeof(rep), zmtpMessage, afNone, 1000000);
-          EXPECT_EQ(sendResult, sizeof(rep));
+          EXPECT_EQ(sendResult, static_cast<ssize_t>(sizeof(rep)));
           if (sendResult == sizeof(rep))
             ctx->serverState++;
         }
