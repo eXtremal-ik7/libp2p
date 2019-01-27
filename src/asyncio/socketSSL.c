@@ -325,7 +325,7 @@ ssize_t aioSslRead(SSLSocket *socket,
 {
 #define MAKE_OP allocReadSSLOp(readProc, rwFinish, socket, (void*)callback, arg, buffer, size, flags, sslOpRead, usTimeout)
   if (__tag_atomic_fetch_and_add(&socket->root.tag, 1) == 0) {
-    if (!socket->root.writeQueue.head) {
+    if (!socket->root.readQueue.head) {
       size_t bytesTransferred = 0;
       asyncOpRoot *op = implSslRead(socket, buffer, size, flags, usTimeout, callback, arg, &bytesTransferred);
       if (!op) {
