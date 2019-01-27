@@ -58,6 +58,12 @@ struct asyncBase {
 #endif
 };
 
+struct ioBuffer {
+  void *ptr;
+  size_t totalSize;
+  size_t dataSize;
+  size_t offset;
+};
 
 struct aioObject {
   aioObjectRoot root;
@@ -65,11 +71,8 @@ struct aioObject {
     iodevTy hDevice;
     socketTy hSocket;
   };
-  union {
-    void *ptr;
-    int32_t i32;
-    uint32_t u32;
-  };
+
+  struct ioBuffer buffer;
 };
 
 struct asyncOp {
@@ -97,6 +100,7 @@ void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op);
 void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op);
 void processTimeoutQueue(asyncBase *base, time_t currentTime);
 
+int copyFromBuffer(void *dst, size_t *offset, struct ioBuffer *src, size_t size);
 #ifdef __cplusplus
 }
 #endif

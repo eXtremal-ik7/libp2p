@@ -572,3 +572,21 @@ void executeThreadLocalQueue()
     op = nextOp;
   }
 }
+
+int copyFromBuffer(void *dst, size_t *offset, struct ioBuffer *src, size_t size)
+{
+  size_t needRead = size - *offset;
+  size_t remaining = src->dataSize - src->offset;
+  if (needRead <= remaining) {
+    memcpy((uint8_t*)dst + *offset, (uint8_t*)src->ptr + src->offset, needRead);
+    *offset += needRead;
+    src->offset += needRead;
+    return 1;
+  } else {
+    memcpy((uint8_t*)dst + *offset, (uint8_t*)src->ptr + src->offset, remaining);
+    *offset += remaining;
+    src->offset = 0;
+    src->dataSize = 0;
+    return 0;
+  }
+}

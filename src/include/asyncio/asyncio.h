@@ -21,6 +21,8 @@ aioObject *newDeviceIo(asyncBase *base, iodevTy hDevice);
 void deleteAioObject(aioObject *object);
 asyncBase *aioGetBase(aioObject *object);
 
+void setSocketBuffer(aioObject *socket, size_t bufferSize);
+
 aioUserEvent *newUserEvent(asyncBase *base, aioEventCb callback, void *arg);
 void userEventStartTimer(aioUserEvent *event, uint64_t usTimeout, int counter);
 void userEventStopTimer(aioUserEvent *event);

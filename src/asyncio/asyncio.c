@@ -250,6 +250,13 @@ void postQuitOperation(asyncBase *base)
   base->methodImpl.postEmptyOperation(base);
 }
 
+void setSocketBuffer(aioObject *socket, size_t bufferSize)
+{
+  socket->buffer.ptr= malloc(bufferSize);
+  socket->buffer.totalSize = bufferSize;
+  socket->buffer.dataSize = 0;
+  socket->buffer.offset = 0;
+}
 
 aioUserEvent *newUserEvent(asyncBase *base, aioEventCb callback, void *arg)
 {
@@ -272,12 +279,22 @@ aioUserEvent *newUserEvent(asyncBase *base, aioEventCb callback, void *arg)
 
 aioObject *newSocketIo(asyncBase *base, socketTy hSocket)
 {
-  return base->methodImpl.newAioObject(base, ioObjectSocket, &hSocket);
+  aioObject *object = base->methodImpl.newAioObject(base, ioObjectSocket, &hSocket);
+  object->buffer.ptr = 0;
+  object->buffer.totalSize = 0;
+  object->buffer.offset = 0;
+  object->buffer.dataSize = 0;
+  return object;
 }
 
 aioObject *newDeviceIo(asyncBase *base, iodevTy hDevice)
 {
-  return base->methodImpl.newAioObject(base, ioObjectDevice, &hDevice);
+  aioObject *object = base->methodImpl.newAioObject(base, ioObjectDevice, &hDevice);
+  object->buffer.ptr = 0;
+  object->buffer.totalSize = 0;
+  object->buffer.offset = 0;
+  object->buffer.dataSize = 0;
+  return object;
 }
 
 void deleteAioObject(aioObject *object)
@@ -325,17 +342,43 @@ asyncOpRoot *implRead(aioObject *object,
                       void *arg,
                       size_t *bytesTransferred)
 {
-  size_t bytes = 0;
-  int result = object->root.type == ioObjectSocket ?
-    socketSyncRead(object->hSocket, buffer, size, flags & afWaitAll, &bytes) :
-    deviceSyncRead(object->hDevice, buffer, size, flags & afWaitAll, &bytes);
-  if (result) {
-    *bytesTransferred = bytes;
+  *bytesTransferred = 0;
+  struct ioBuffer *sb = &object->buffer;
+
+  if (copyFromBuffer(buffer, bytesTransferred, sb, size))
+    return 0;
+
+  if (size < sb->totalSize) {
+    size_t bytes;
+    while (*bytesTransferred <= size) {
+      int result = object->root.type == ioObjectSocket ?
+        socketSyncRead(object->hSocket, sb->ptr, sb->totalSize, 0, &bytes) :
+        deviceSyncRead(object->hDevice, sb->ptr, sb->totalSize, 0, &bytes);
+      if (result) {
+        sb->dataSize = bytes;
+        if (copyFromBuffer(buffer, bytesTransferred, sb, size) || !(flags & afWaitAll))
+          break;
+      } else {
+        asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)callback, arg, flags|afRunning, actRead, usTimeout, buffer, size);
+        op->bytesTransferred = *bytesTransferred;
+        return &op->root;
+      }
+    }
+
     return 0;
   } else {
-    asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)callback, arg, flags|afRunning, actRead, usTimeout, buffer, size);
-    op->bytesTransferred = bytes;
-    return &op->root;
+    size_t bytes = 0;
+    int result = object->root.type == ioObjectSocket ?
+      socketSyncRead(object->hSocket, (uint8_t*)buffer+*bytesTransferred, size-*bytesTransferred, flags & afWaitAll, &bytes) :
+      deviceSyncRead(object->hDevice, (uint8_t*)buffer+*bytesTransferred, size-*bytesTransferred, flags & afWaitAll, &bytes);
+    *bytesTransferred += bytes;
+    if (result) {
+      return 0;
+    } else {
+      asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)callback, arg, flags|afRunning, actRead, usTimeout, buffer, size);
+      op->bytesTransferred = *bytesTransferred;
+      return &op->root;
+    }
   }
 }
 
