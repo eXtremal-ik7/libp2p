@@ -85,7 +85,7 @@ struct zmtpSocket {
   aioObject *plainSocket;
   zmtpSocketTy type;
   bool needSendMore;
-  uint8_t buffer[128];
+  uint8_t buffer[256];
 };
 
 struct zmtpOp {
@@ -461,29 +461,24 @@ static AsyncOpStatus startZmtpRecv(asyncOpRoot *opptr)
       }
       case stRecvReadType : {
         op->stateRw = stRecvReadSize;
-        childOp = implRead(socket->plainSocket, socket->buffer, 1, afNone, 0, resumeRwCb, opptr, &bytes);
+        childOp = implRead(socket->plainSocket, socket->buffer, 2, afNone, 0, resumeRwCb, opptr, &bytes);
         break;
       }
 
       case stRecvReadSize : {
         op->stateRw = stRecvReadData;
         op->type = static_cast<zmtpMsgTy>(socket->buffer[0]);
-        if (!(op->type & zmtpMsgFlagLong)) {
-          childOp = implRead(socket->plainSocket, socket->buffer, 1, afNone, 0, resumeRwCb, opptr, &bytes);
-        } else {
-          childOp = implRead(socket->plainSocket, socket->buffer, 8, afWaitAll, 0, resumeRwCb, opptr, &bytes);
-        }
-
+        if (op->type & zmtpMsgFlagLong)
+          childOp = implRead(socket->plainSocket, socket->buffer+2, 7, afNone, 0, resumeRwCb, opptr, &bytes);
         break;
       }
 
       case stRecvReadData : {
         op->stateRw = (op->type & zmtpMsgFlagMore) ? stRecvReadType : stFinished;
-        if (!(op->type & zmtpMsgFlagLong)) {
-          op->transferred = static_cast<size_t>(socket->buffer[0]);
-        } else {
-          op->transferred = static_cast<size_t>(xntoh<uint64_t>(reinterpret_cast<uint64_t*>(socket->buffer)[0]));
-        }
+        if (!(op->type & zmtpMsgFlagLong))
+          op->transferred = static_cast<size_t>(socket->buffer[1]);
+        else
+          op->transferred = static_cast<size_t>(xntoh<uint64_t>(reinterpret_cast<uint64_t*>(socket->buffer+1)[0]));
 
         if (op->transferred <= op->size)
           childOp = implRead(socket->plainSocket, op->stream ? op->stream->alloc(op->transferred) : op->data, op->transferred, afWaitAll, 0, resumeRwCb, opptr, &bytes);
@@ -518,25 +513,24 @@ static asyncOpRoot *implZmtpRecvStream(zmtpSocket *socket, zmtpStream &msg, size
   bool finish = false;
   msg.reset();
   while (!finish) {
-    if ( (childOp = implRead(socket->plainSocket, socket->buffer, 1, afNone, 0, resumeRwCb, nullptr, &bytes)) ) {
+    if ( (childOp = implRead(socket->plainSocket, socket->buffer, 2, afNone, 0, resumeRwCb, nullptr, &bytes)) ) {
       state = stRecvReadSize;
       break;
     }
 
     type = static_cast<zmtpMsgTy>(socket->buffer[0]);
-    if (!(type & zmtpMsgFlagLong))
-      childOp = implRead(socket->plainSocket, socket->buffer, 1, afNone, 0, resumeRwCb, nullptr, &bytes);
-    else
-      childOp = implRead(socket->plainSocket, socket->buffer, 8, afWaitAll, 0, resumeRwCb, nullptr, &bytes);
-    if (childOp) {
-      state = stRecvReadData;
-      break;
+    if (type & zmtpMsgFlagLong) {
+      childOp = implRead(socket->plainSocket, socket->buffer+2, 7, afNone, 0, resumeRwCb, nullptr, &bytes);
+      if (childOp) {
+        state = stRecvReadData;
+        break;
+      }
     }
 
     if (!(type & zmtpMsgFlagLong))
-      transferred = static_cast<size_t>(socket->buffer[0]);
+      transferred = static_cast<size_t>(socket->buffer[1]);
     else
-      transferred = static_cast<size_t>(xntoh<uint64_t>(reinterpret_cast<uint64_t*>(socket->buffer)[0]));
+      transferred = static_cast<size_t>(xntoh<uint64_t>(reinterpret_cast<uint64_t*>(socket->buffer+1)[0]));
 
     if (transferred <= limit) {
       if ( (childOp = implRead(socket->plainSocket, msg.alloc(transferred), transferred, afWaitAll, 0, resumeRwCb, nullptr, &bytes)) ) {
@@ -574,15 +568,16 @@ static AsyncOpStatus startZmtpSend(asyncOpRoot *opptr)
   zmtpSocket *socket = reinterpret_cast<zmtpSocket*>(opptr->object);
   asyncOpRoot *childOp = nullptr;
   size_t bytes;
+  unsigned offset = 0;
   while (!childOp) {
     switch (op->stateRw) {
       case stInitialize : {
         op->stateRw = stWriteSize;
         if (!(op->type & zmtpMsgFlagCommand) &&
-            (socket->type == zmtpSocketREQ || socket->type == zmtpSocketREP) &&
-            !socket->needSendMore) {
-          uint8_t X[2] = {zmtpMsgFlagMore, 0};
-          childOp = implWrite(socket->plainSocket, X, 2, afWaitAll, 0, resumeRwCb, opptr, &bytes);
+            (socket->type == zmtpSocketREQ || socket->type == zmtpSocketREP) && !socket->needSendMore) {
+          socket->buffer[0] = zmtpMsgFlagMore;
+          socket->buffer[1] = 0;
+          offset = 2;
         }
 
         socket->needSendMore = (op->type & zmtpMsgFlagMore);
@@ -591,15 +586,22 @@ static AsyncOpStatus startZmtpSend(asyncOpRoot *opptr)
       case stWriteSize : {
         op->stateRw = stWriteData;
         if (!(op->type & zmtpMsgFlagLong)) {
-          uint8_t X[2];
-          X[0] = static_cast<uint8_t>(op->type);
-          X[1] = static_cast<uint8_t>(op->size);
-          childOp = implWrite(socket->plainSocket, X, 2, afWaitAll, 0, resumeRwCb, opptr, &bytes);
+          socket->buffer[offset] = static_cast<uint8_t>(op->type);
+          socket->buffer[offset+1] = static_cast<uint8_t>(op->size);
+          offset += 2;
         } else {
-          uint8_t X[16];
-          X[0] = static_cast<uint8_t>(op->type);
-          *reinterpret_cast<uint64_t*>(&X[1]) = xhton<uint64_t>(op->size);
-          childOp = implWrite(socket->plainSocket, X, 9, afWaitAll, 0, resumeRwCb, opptr, &bytes);
+          socket->buffer[offset] = static_cast<uint8_t>(op->type);
+          reinterpret_cast<uint64_t*>(socket->buffer+offset+1)[0] = xhton<uint64_t>(op->size);
+          offset += 9;
+        }
+
+        if (op->size <= (sizeof(socket->buffer) - offset)) {
+          op->stateRw = stFinished;
+          memcpy(socket->buffer+offset, op->data, op->size);
+          childOp = implWrite(socket->plainSocket, socket->buffer, op->size+offset, afWaitAll, 0, resumeRwCb, opptr, &bytes);
+        } else {
+          op->stateRw = stWriteData;
+          childOp = implWrite(socket->plainSocket, socket->buffer, offset, afWaitAll, 0, resumeRwCb, opptr, &bytes);
         }
 
         break;
@@ -621,6 +623,73 @@ static AsyncOpStatus startZmtpSend(asyncOpRoot *opptr)
 
   opStart(childOp);
   return aosPending;
+}
+
+asyncOpRoot *implZmtpSend(zmtpSocket *socket, void *data, size_t size, zmtpUserMsgTy type, AsyncFlags flags, uint64_t timeout, zmtpSendCb callback, void *arg, size_t *bytesTransferred)
+{
+  asyncOpRoot *childOp = nullptr;
+  size_t bytes;
+  zmtpOpState state = stInitialize;
+  unsigned offset = 0;
+  zmtpMsgTy msgType;
+
+  switch (type) {
+    case zmtpCommand :
+      msgType = (size < 256) ? zmtpMsgFlagCommand : zmtpMsgFlagCommand | zmtpMsgFlagLong;
+      break;
+    case zmtpMessagePart :
+      msgType = (size < 256) ? zmtpMsgFlagMore : zmtpMsgFlagMore | zmtpMsgFlagLong;
+      break;
+    case zmtpMessage :
+    default :
+      msgType = (size < 256) ? zmtpMsgFlagNone : zmtpMsgFlagLong;
+      break;
+  }
+
+  if (!(msgType & zmtpMsgFlagCommand) &&
+      (socket->type == zmtpSocketREQ || socket->type == zmtpSocketREP) && !socket->needSendMore) {
+    socket->buffer[0] = zmtpMsgFlagMore;
+    socket->buffer[1] = 0;
+    offset = 2;
+  }
+
+  socket->needSendMore = (msgType & zmtpMsgFlagMore);
+
+  if (!(msgType & zmtpMsgFlagLong)) {
+    socket->buffer[offset] = static_cast<uint8_t>(msgType);
+    socket->buffer[offset+1] = static_cast<uint8_t>(size);
+    offset += 2;
+  } else {
+    socket->buffer[offset] = static_cast<uint8_t>(msgType);
+    reinterpret_cast<uint64_t*>(socket->buffer+offset+1)[0] = xhton<uint64_t>(size);
+    offset += 9;
+  }
+
+  if (size <= (sizeof(socket->buffer) - offset)) {
+    memcpy(socket->buffer+offset, data, size);
+    childOp = implWrite(socket->plainSocket, socket->buffer, size+offset, afWaitAll, 0, resumeRwCb, nullptr, &bytes);
+    state = stFinished;
+  } else {
+    childOp = implWrite(socket->plainSocket, socket->buffer, offset, afWaitAll, 0, resumeRwCb, nullptr, &bytes);
+    if (!childOp) {
+      childOp = implWrite(socket->plainSocket, data, size, afWaitAll, 0, resumeRwCb, nullptr, &bytes);
+      state = stFinished;
+    } else {
+      state = stWriteData;
+    }
+  }
+
+  if (childOp) {
+    zmtpOp *op = initWriteOp(startZmtpSend, sendFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpConnect, data, size, type);
+    op->stateRw = state;
+    op->type = msgType;
+    childOp->arg = op;
+    opStart(childOp);
+    return &op->root;
+  }
+
+  *bytesTransferred = size;
+  return nullptr;
 }
 
 void zmtpSocketDestructor(aioObjectRoot *object)
@@ -712,10 +781,51 @@ ssize_t aioZmtpRecv(zmtpSocket *socket, zmtpStream &msg, size_t limit, AsyncFlag
 
 ssize_t aioZmtpSend(zmtpSocket *socket, void *data, size_t size, zmtpUserMsgTy type, AsyncFlags flags, uint64_t timeout, zmtpSendCb callback, void *arg)
 {
-  zmtpOp *op =
-    initWriteOp(startZmtpSend, sendFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpConnect, data, size, type);
-  opStart(&op->root);
-  return -aosPending;
+#define MAKE_OP initWriteOp(startZmtpSend, sendFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpConnect, data, size, type)
+  if (__tag_atomic_fetch_and_add(&socket->root.tag, 1) == 0) {
+    if (!socket->root.readQueue.head) {
+      size_t bytesTransferred = 0;
+      asyncOpRoot *op = implZmtpSend(socket, data, size, type, flags, timeout, callback, arg, &bytesTransferred);
+      if (!op) {
+        if (flags & afSerialized)
+          callback(aosSuccess, socket, arg);
+
+        tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
+        if (tag)
+          socket->root.base->methodImpl.combiner(&socket->root, tag, nullptr, aaNone);
+
+        if (!(flags & afSerialized)) {
+          if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == nullptr || flags & afActiveOnce)) {
+            return static_cast<ssize_t>(bytesTransferred);
+          } else {
+            zmtpOp *op = MAKE_OP;
+            op->transferred = bytesTransferred;
+            opForceStatus(&op->root, aosSuccess);
+            addToThreadLocalQueue(&op->root);
+          }
+        }
+      } else {
+        if (opGetStatus(op) == aosPending) {
+          socket->root.base->methodImpl.combiner(&socket->root, 1, op, aaStart);
+        } else {
+          tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
+          if (tag)
+            socket->root.base->methodImpl.combiner(&socket->root, tag, nullptr, aaNone);
+          addToThreadLocalQueue(op);
+        }
+      }
+    } else {
+      eqPushBack(&socket->root.readQueue, &MAKE_OP->root);
+      tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
+      if (tag)
+        socket->root.base->methodImpl.combiner(&socket->root, tag, nullptr, aaNone);
+    }
+  } else {
+    combinerAddAction(&socket->root, &MAKE_OP->root, aaStart);
+  }
+
+  return -(ssize_t)aosPending;
+#undef MAKE_OP
 }
 
 int ioZmtpAccept(zmtpSocket *socket, AsyncFlags flags, uint64_t timeout)
@@ -794,11 +904,49 @@ ssize_t ioZmtpRecv(zmtpSocket *socket, zmtpStream &msg, size_t limit, AsyncFlags
 
 ssize_t ioZmtpSend(zmtpSocket *socket, void *data, size_t size, zmtpUserMsgTy type, AsyncFlags flags, uint64_t timeout)
 {
+#define MAKE_OP initWriteOp(startZmtpSend, sendFinish, socket, flags, timeout, reinterpret_cast<void*>(coroSendCb), &r, zmtpOpConnect, data, size, type)
   combinerCallArgs ccArgs;
   coroReturnStruct r = {coroutineCurrent(), aosUnknown, zmtpUnknown};
-  zmtpOp *op =
-    initWriteOp(startZmtpSend, sendFinish, socket, flags, timeout, reinterpret_cast<void*>(coroSendCb), &r, zmtpOpConnect, data, size, type);
-  combinerCallDelayed(&ccArgs, &socket->root, 1, &op->root, aaStart, 1);
+
+  if (__tag_atomic_fetch_and_add(&socket->root.tag, 1) == 0) {
+    size_t bytesTransferred = 0;
+    zmtpMsgTy msgType = zmtpMsgFlagNone;
+    if (!socket->root.readQueue.head) {
+      asyncOpRoot *op = implZmtpSend(socket, data, size, type, flags, timeout, coroSendCb, &r, &bytesTransferred);
+      if (!op) {
+        tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
+        if (tag)
+          combinerCallDelayed(&ccArgs, &socket->root, tag, nullptr, aaNone, 0);
+        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && !tag) {
+          return static_cast<ssize_t>(bytesTransferred);
+        } else {
+          zmtpOp *op = MAKE_OP;
+          op->type = msgType;
+          op->transferred = bytesTransferred;
+          opForceStatus(&op->root, aosSuccess);
+          addToThreadLocalQueue(&op->root);
+        }
+      } else {
+        if (opGetStatus(op) == aosPending) {
+          combinerCallDelayed(&ccArgs, &socket->root, 1, op, aaStart, 0);
+        } else {
+          tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
+          if (tag)
+            combinerCallDelayed(&ccArgs, &socket->root, tag, nullptr, aaNone, 0);
+          addToThreadLocalQueue(op);
+        }
+      }
+    } else {
+      eqPushBack(&socket->root.readQueue, &MAKE_OP->root);
+      tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
+      if (tag)
+        combinerCallDelayed(&ccArgs, &socket->root, tag, nullptr, aaNone, 0);
+    }
+  } else {
+    combinerAddAction(&socket->root, &MAKE_OP->root, aaStart);
+  }
+
   coroutineYield();
   return r.status == aosSuccess ? static_cast<ssize_t>(size) : -r.status;
+#undef MAKE_OP
 }

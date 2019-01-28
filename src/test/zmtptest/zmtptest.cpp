@@ -30,9 +30,9 @@ enum ReceiverTy {
 
 static const char *SenderTyNames[] = {
   "ZMQ",
-  "Async",
-  "Coroutine",
-  "RAW"
+  "Async(NO BATCH!)",
+  "Coroutine(NO BATCH!)",
+  "RAW(NO BATCH!)"
 };
 
 static const char *ReceiverTyNames[] = {
@@ -148,7 +148,7 @@ static void senderAsyncSendCb(AsyncOpStatus status, zmtpSocket *socket, void *ar
     }
 
     for (;;) {
-      ssize_t result = aioZmtpSend(socket, ctx->data.get(), gPacketSize, zmtpMessage, afNone, 1000000, senderAsyncSendCb, ctx);
+      ssize_t result = aioZmtpSend(socket, ctx->data.get(), gPacketSize, zmtpMessage, afActiveOnce, 1000000, senderAsyncSendCb, ctx);
       if (result == -aosPending) {
         break;
       } else {
