@@ -511,6 +511,11 @@ void combinerCall(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActi
     combinerAddAction(object, op, actionType);
 }
 
+void combinerCallWithoutLock(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy action)
+{
+  object->base->methodImpl.combiner(object, tag, op, action);
+}
+
 static void combinerCallDelayedCb(void *arg)
 {
   combinerCallArgs *ccArgs = (combinerCallArgs*)arg;

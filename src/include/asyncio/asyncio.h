@@ -1,11 +1,11 @@
+#include "asyncio/api.h"
+#include <stddef.h>
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include "asyncio/api.h"
-#include <stddef.h>
-#include <stdint.h>
-  
 typedef void aioEventCb(aioUserEvent*, void*);
 typedef void aioConnectCb(AsyncOpStatus, aioObject*, void*);
 typedef void aioAcceptCb(AsyncOpStatus, aioObject*, HostAddress, socketTy, void*);

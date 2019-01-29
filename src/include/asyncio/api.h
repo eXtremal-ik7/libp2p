@@ -226,6 +226,7 @@ void cancelOperationList(List *list, List *finished, AsyncOpStatus status);
 
 void combinerAddAction(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy actionType);
 void combinerCall(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType);
+void combinerCallWithoutLock(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy action);
 
 typedef struct combinerCallArgs {
   aioObjectRoot *object;
@@ -258,6 +259,115 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
                              uint64_t timeout);
 
 #ifdef __cplusplus
+}
+#endif
+
+#ifdef __cplusplus
+#include "atomic.h"
+#include "asyncio/coroutine.h"
+
+template<typename f1, typename f2, typename f3, typename f4, typename f5>
+static inline void aioMethod(f1 createProc,
+                             f2 implCallProc,
+                             f3 callbackProc,
+                             f4 makeResultProc,
+                             f5 initOpProc,
+                             aioObjectRoot *object,
+                             AsyncFlags flags,
+                             void *callback,
+                             int opCode)
+{
+  if (__tag_atomic_fetch_and_add(&object->tag, 1) == 0) {
+    List &list = !(opCode & OPCODE_WRITE) ? object->readQueue : object->writeQueue;
+    if (!list.head) {
+      asyncOpRoot *op = implCallProc();
+      if (!op) {
+        if (flags & afSerialized)
+          callbackProc();
+
+        tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
+        if (tag)
+          combinerCallWithoutLock(object, tag, nullptr, aaNone);
+
+        if (!(flags & afSerialized)) {
+          if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == nullptr || flags & afActiveOnce)) {
+            makeResultProc();
+          } else {
+            asyncOpRoot *op = createProc();
+            initOpProc(op);
+            opForceStatus(op, aosSuccess);
+            addToThreadLocalQueue(op);
+          }
+        }
+      } else {
+        if (opGetStatus(op) == aosPending) {
+          combinerCallWithoutLock(object, 1, op, aaStart);
+        } else {
+          tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
+          if (tag)
+            combinerCallWithoutLock(object, tag, nullptr, aaNone);
+          addToThreadLocalQueue(op);
+        }
+      }
+    } else {
+      eqPushBack(&list, createProc());
+      tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
+      if (tag)
+        combinerCallWithoutLock(object, tag, nullptr, aaNone);
+    }
+  } else {
+    combinerAddAction(object, createProc(), aaStart);
+  }
+}
+
+template<typename f1, typename f2, typename f3>
+static inline bool ioMethod(f1 createProc,
+                            f2 implCallProc,
+                            f3 initOpProc,
+                            combinerCallArgs *ccArgs,
+                            aioObjectRoot *object,
+                            int opCode)
+{
+  bool finished = false;
+  if (__tag_atomic_fetch_and_add(&object->tag, 1) == 0) {
+    List &list = !(opCode & OPCODE_WRITE) ? object->readQueue : object->writeQueue;
+    if (!list.head) {
+      asyncOpRoot *op = implCallProc();
+      if (!op) {
+        tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
+        if (tag)
+          combinerCallDelayed(ccArgs, object, tag, nullptr, aaNone, 0);
+        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && !tag) {
+          finished = true;
+        } else {
+          asyncOpRoot *op = createProc();
+          initOpProc(op);
+          opForceStatus(op, aosSuccess);
+          addToThreadLocalQueue(op);
+        }
+      } else {
+        if (opGetStatus(op) == aosPending) {
+          combinerCallDelayed(ccArgs, object, 1, op, aaStart, 0);
+        } else {
+          tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
+          if (tag)
+            combinerCallDelayed(ccArgs, object, tag, nullptr, aaNone, 0);
+          addToThreadLocalQueue(op);
+        }
+      }
+    } else {
+      eqPushBack(&list, createProc());
+      tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
+      if (tag)
+        combinerCallDelayed(ccArgs, object, tag, nullptr, aaNone, 0);
+    }
+  } else {
+    combinerAddAction(object, createProc(), aaStart);
+  }
+
+  if (!finished)
+    coroutineYield();
+  return finished;
 }
 #endif
 

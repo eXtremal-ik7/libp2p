@@ -1,3 +1,6 @@
+#ifndef __ATOMIC_H_
+#define __ATOMIC_H_
+
 #include "asyncio/asyncioTypes.h"
 #include "macro.h"
 
@@ -83,3 +86,4 @@ static inline void __spinlock_release(volatile unsigned *lock)
 }
 
 __NO_UNUSED_FUNCTION_END
+#endif //__ATOMIC_H_

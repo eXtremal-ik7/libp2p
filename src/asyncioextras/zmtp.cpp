@@ -1,8 +1,5 @@
 #include "asyncioextras/zmtp.h"
 #include "asyncio/coroutine.h"
-#include "atomic.h"
-// TEMPORARY
-#include "../asyncio/asyncioImpl.h"
 
 static const char *poolId = "zmtp";
 static const char *timerPoolId = "zmtpTimer";
@@ -45,8 +42,7 @@ enum zmtpOpTy {
   zmtpOpAccept = OPCODE_READ,
   zmtpOpRecv,
   zmtpOpConnect = OPCODE_WRITE,
-  zmtpOpSendCommand,
-  zmtpOpSendMessage
+  zmtpOpSend
 };
 
 enum zmtpOpState {
@@ -80,6 +76,7 @@ enum zmtpOpState {
   stFinished
 };
 
+__NO_PADDING_BEGIN
 struct zmtpSocket {
   aioObjectRoot root;
   aioObject *plainSocket;
@@ -105,6 +102,7 @@ struct coroReturnStruct {
   AsyncOpStatus status;
   zmtpUserMsgTy type;
 };
+__NO_PADDING_END
 
 static AsyncOpStatus startZmtpRecv(asyncOpRoot *opptr);
 
@@ -730,102 +728,38 @@ void aioZmtpConnect(zmtpSocket *socket, const HostAddress *address, AsyncFlags f
 
 ssize_t aioZmtpRecv(zmtpSocket *socket, zmtpStream &msg, size_t limit, AsyncFlags flags, uint64_t timeout, zmtpRecvCb callback, void *arg)
 {
-#define MAKE_OP initReadOp(startZmtpRecv, recvFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpRecv, nullptr, &msg, limit)
-  if (__tag_atomic_fetch_and_add(&socket->root.tag, 1) == 0) {
-    if (!socket->root.readQueue.head) {
-      size_t bytesTransferred = 0;
-      zmtpMsgTy type;
-      asyncOpRoot *op = implZmtpRecvStream(socket, msg, limit, flags, timeout, callback, arg, &bytesTransferred, &type);
-      if (!op) {
-        if (flags & afSerialized)
-          callback(aosSuccess, socket, (type & zmtpMsgFlagCommand) ? zmtpCommand : zmtpMessage, &msg, arg);
-
-        tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
-        if (tag)
-          socket->root.base->methodImpl.combiner(&socket->root, tag, nullptr, aaNone);
-
-        if (!(flags & afSerialized)) {
-          if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == nullptr || flags & afActiveOnce)) {
-            return static_cast<ssize_t>(bytesTransferred);
-          } else {
-            zmtpOp *op = MAKE_OP;
-            op->type = type;
-            op->transferred = bytesTransferred;
-            opForceStatus(&op->root, aosSuccess);
-            addToThreadLocalQueue(&op->root);
-          }
-        }
-      } else {
-        if (opGetStatus(op) == aosPending) {
-          socket->root.base->methodImpl.combiner(&socket->root, 1, op, aaStart);
-        } else {
-          tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
-          if (tag)
-            socket->root.base->methodImpl.combiner(&socket->root, tag, nullptr, aaNone);
-          addToThreadLocalQueue(op);
-        }
-      }
-    } else {
-      eqPushBack(&socket->root.readQueue, &MAKE_OP->root);
-      tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
-      if (tag)
-        socket->root.base->methodImpl.combiner(&socket->root, tag, nullptr, aaNone);
-    }
-  } else {
-    combinerAddAction(&socket->root, &MAKE_OP->root, aaStart);
-  }
-
-  return -(ssize_t)aosPending;
-#undef MAKE_OP
+  ssize_t result = -aosPending;
+  size_t bytesTransferred;
+  zmtpMsgTy type = zmtpMsgFlagNone;
+  aioMethod([=, &msg]() { return &initReadOp(startZmtpRecv, recvFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpRecv, nullptr, &msg, limit)->root; },
+            [=, &msg, &bytesTransferred, &type]() { return implZmtpRecvStream(socket, msg, limit, flags, timeout, callback, arg, &bytesTransferred, &type); },
+            [=, &msg]() { callback(aosSuccess, socket, (type & zmtpMsgFlagCommand) ? zmtpCommand : zmtpMessage, &msg, arg); },
+            [&bytesTransferred, &result]() { result = static_cast<ssize_t>(bytesTransferred); },
+            [&bytesTransferred, &type](asyncOpRoot *op) {
+              reinterpret_cast<zmtpOp*>(op)->type = type;
+              reinterpret_cast<zmtpOp*>(op)->transferred = bytesTransferred;
+            },
+            &socket->root,
+            flags,
+            reinterpret_cast<void*>(callback),
+            zmtpOpRecv);
+  return result;
 }
 
 ssize_t aioZmtpSend(zmtpSocket *socket, void *data, size_t size, zmtpUserMsgTy type, AsyncFlags flags, uint64_t timeout, zmtpSendCb callback, void *arg)
 {
-#define MAKE_OP initWriteOp(startZmtpSend, sendFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpConnect, data, size, type)
-  if (__tag_atomic_fetch_and_add(&socket->root.tag, 1) == 0) {
-    if (!socket->root.readQueue.head) {
-      size_t bytesTransferred = 0;
-      asyncOpRoot *op = implZmtpSend(socket, data, size, type, flags, timeout, callback, arg, &bytesTransferred);
-      if (!op) {
-        if (flags & afSerialized)
-          callback(aosSuccess, socket, arg);
-
-        tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
-        if (tag)
-          socket->root.base->methodImpl.combiner(&socket->root, tag, nullptr, aaNone);
-
-        if (!(flags & afSerialized)) {
-          if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == nullptr || flags & afActiveOnce)) {
-            return static_cast<ssize_t>(bytesTransferred);
-          } else {
-            zmtpOp *op = MAKE_OP;
-            op->transferred = bytesTransferred;
-            opForceStatus(&op->root, aosSuccess);
-            addToThreadLocalQueue(&op->root);
-          }
-        }
-      } else {
-        if (opGetStatus(op) == aosPending) {
-          socket->root.base->methodImpl.combiner(&socket->root, 1, op, aaStart);
-        } else {
-          tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
-          if (tag)
-            socket->root.base->methodImpl.combiner(&socket->root, tag, nullptr, aaNone);
-          addToThreadLocalQueue(op);
-        }
-      }
-    } else {
-      eqPushBack(&socket->root.readQueue, &MAKE_OP->root);
-      tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
-      if (tag)
-        socket->root.base->methodImpl.combiner(&socket->root, tag, nullptr, aaNone);
-    }
-  } else {
-    combinerAddAction(&socket->root, &MAKE_OP->root, aaStart);
-  }
-
-  return -(ssize_t)aosPending;
-#undef MAKE_OP
+  ssize_t result = -aosPending;
+  size_t bytesTransferred;
+  aioMethod([=]() { return &initWriteOp(startZmtpSend, sendFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpConnect, data, size, type)->root; },
+            [=, &bytesTransferred]() { return implZmtpSend(socket, data, size, type, flags, timeout, callback, arg, &bytesTransferred); },
+            [=]() { callback(aosSuccess, socket, arg); },
+            [&bytesTransferred, &result]() { result = static_cast<ssize_t>(bytesTransferred); },
+            [&bytesTransferred](asyncOpRoot *op) { reinterpret_cast<zmtpOp*>(op)->transferred = bytesTransferred; },
+            &socket->root,
+            flags,
+            reinterpret_cast<void*>(callback),
+            zmtpOpSend);
+  return result;
 }
 
 int ioZmtpAccept(zmtpSocket *socket, AsyncFlags flags, uint64_t timeout)
@@ -853,100 +787,43 @@ int ioZmtpConnect(zmtpSocket *socket, const HostAddress *address, AsyncFlags fla
 
 ssize_t ioZmtpRecv(zmtpSocket *socket, zmtpStream &msg, size_t limit, AsyncFlags flags, uint64_t timeout, zmtpUserMsgTy *type)
 {
-#define MAKE_OP initReadOp(startZmtpRecv, recvFinish, socket, flags, timeout, reinterpret_cast<void*>(coroRecvCb), &r, zmtpOpRecv, nullptr, &msg, limit)
+  zmtpMsgTy msgType = zmtpMsgFlagNone;
+  size_t bytesTransferred;
   combinerCallArgs ccArgs;
-  coroReturnStruct r = {coroutineCurrent(), aosUnknown, zmtpUnknown};
-
-  if (__tag_atomic_fetch_and_add(&socket->root.tag, 1) == 0) {
-    size_t bytesTransferred = 0;
-    zmtpMsgTy msgType = zmtpMsgFlagNone;
-    if (!socket->root.readQueue.head) {
-      asyncOpRoot *op = implZmtpRecvStream(socket, msg, limit, flags, timeout, coroRecvCb, &r, &bytesTransferred, &msgType);
-      if (!op) {
-        tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
-        if (tag)
-          combinerCallDelayed(&ccArgs, &socket->root, tag, nullptr, aaNone, 0);
-        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && !tag) {
-          *type = (msgType & zmtpMsgFlagCommand) ? zmtpCommand : zmtpMessage;
-          return static_cast<ssize_t>(bytesTransferred);
-        } else {
-          zmtpOp *op = MAKE_OP;
-          op->type = msgType;
-          op->transferred = bytesTransferred;
-          opForceStatus(&op->root, aosSuccess);
-          addToThreadLocalQueue(&op->root);
-        }
-      } else {
-        if (opGetStatus(op) == aosPending) {
-          combinerCallDelayed(&ccArgs, &socket->root, 1, op, aaStart, 0);
-        } else {
-          tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
-          if (tag)
-            combinerCallDelayed(&ccArgs, &socket->root, tag, nullptr, aaNone, 0);
-          addToThreadLocalQueue(op);
-        }
-      }
-    } else {
-      eqPushBack(&socket->root.readQueue, &MAKE_OP->root);
-      tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
-      if (tag)
-        combinerCallDelayed(&ccArgs, &socket->root, tag, nullptr, aaNone, 0);
-    }
+  coroReturnStruct r = {coroutineCurrent(), aosSuccess, zmtpUnknown};
+  bool finished =
+    ioMethod([=, &r, &msg]() { return &initReadOp(startZmtpRecv, recvFinish, socket, flags, timeout, reinterpret_cast<void*>(coroRecvCb), &r, zmtpOpRecv, nullptr, &msg, limit)->root; },
+             [=, &r, &msg, &msgType, &bytesTransferred]() { return implZmtpRecvStream(socket, msg, limit, flags, timeout, coroRecvCb, &r, &bytesTransferred, &msgType); },
+             [&bytesTransferred, &msgType](asyncOpRoot *op) {
+               reinterpret_cast<zmtpOp*>(op)->type = msgType;
+               reinterpret_cast<zmtpOp*>(op)->transferred = bytesTransferred;
+             },
+             &ccArgs,
+             &socket->root,
+             zmtpOpSend);
+  if (finished) {
+    *type = (msgType & zmtpMsgFlagCommand) ? zmtpCommand : zmtpMessage;
+    return static_cast<ssize_t>(bytesTransferred);
   } else {
-    combinerAddAction(&socket->root, &MAKE_OP->root, aaStart);
+    *type = r.type;
+    return (r.status == aosSuccess) ? static_cast<ssize_t>(msg.sizeOf()) : -r.status;
   }
-
-  coroutineYield();
-  *type = r.type;
-  return r.status == aosSuccess ? static_cast<ssize_t>(msg.sizeOf()) : -r.status;
-#undef MAKE_OP
 }
 
 ssize_t ioZmtpSend(zmtpSocket *socket, void *data, size_t size, zmtpUserMsgTy type, AsyncFlags flags, uint64_t timeout)
 {
-#define MAKE_OP initWriteOp(startZmtpSend, sendFinish, socket, flags, timeout, reinterpret_cast<void*>(coroSendCb), &r, zmtpOpConnect, data, size, type)
+  size_t bytesTransferred;
   combinerCallArgs ccArgs;
   coroReturnStruct r = {coroutineCurrent(), aosUnknown, zmtpUnknown};
-
-  if (__tag_atomic_fetch_and_add(&socket->root.tag, 1) == 0) {
-    size_t bytesTransferred = 0;
-    zmtpMsgTy msgType = zmtpMsgFlagNone;
-    if (!socket->root.readQueue.head) {
-      asyncOpRoot *op = implZmtpSend(socket, data, size, type, flags, timeout, coroSendCb, &r, &bytesTransferred);
-      if (!op) {
-        tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
-        if (tag)
-          combinerCallDelayed(&ccArgs, &socket->root, tag, nullptr, aaNone, 0);
-        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && !tag) {
-          return static_cast<ssize_t>(bytesTransferred);
-        } else {
-          zmtpOp *op = MAKE_OP;
-          op->type = msgType;
-          op->transferred = bytesTransferred;
-          opForceStatus(&op->root, aosSuccess);
-          addToThreadLocalQueue(&op->root);
-        }
-      } else {
-        if (opGetStatus(op) == aosPending) {
-          combinerCallDelayed(&ccArgs, &socket->root, 1, op, aaStart, 0);
-        } else {
-          tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
-          if (tag)
-            combinerCallDelayed(&ccArgs, &socket->root, tag, nullptr, aaNone, 0);
-          addToThreadLocalQueue(op);
-        }
-      }
-    } else {
-      eqPushBack(&socket->root.readQueue, &MAKE_OP->root);
-      tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, static_cast<tag_t>(0) - 1) - 1;
-      if (tag)
-        combinerCallDelayed(&ccArgs, &socket->root, tag, nullptr, aaNone, 0);
-    }
-  } else {
-    combinerAddAction(&socket->root, &MAKE_OP->root, aaStart);
-  }
-
-  coroutineYield();
-  return r.status == aosSuccess ? static_cast<ssize_t>(size) : -r.status;
-#undef MAKE_OP
+  bool finished =
+    ioMethod([=, &r]() { return &initWriteOp(startZmtpSend, sendFinish, socket, flags, timeout, reinterpret_cast<void*>(coroSendCb), &r, zmtpOpConnect, data, size, type)->root; },
+             [=, &r, &bytesTransferred]() { return implZmtpSend(socket, data, size, type, flags, timeout, coroSendCb, &r, &bytesTransferred); },
+             [&bytesTransferred](asyncOpRoot *op) { reinterpret_cast<zmtpOp*>(op)->transferred = bytesTransferred; },
+             &ccArgs,
+             &socket->root,
+             zmtpOpSend);
+  if (finished)
+    return static_cast<ssize_t>(bytesTransferred);
+  else
+    return (r.status == aosSuccess) ? static_cast<ssize_t>(bytesTransferred) : -r.status;
 }

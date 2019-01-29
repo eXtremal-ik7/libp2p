@@ -41,6 +41,7 @@ static const char *ReceiverTyNames[] = {
   "Coroutine"
 };
 
+__NO_PADDING_BEGIN
 struct Configuration {
   uint16_t port;
   unsigned packetSize;
@@ -73,6 +74,7 @@ struct ReceiverContext {
   uint64_t counter;
   ReceiverContext(Configuration *cfgArg) : cfg(cfgArg), received(0), milliSecondsElapsed(0) {}
 };
+__NO_PADDING_END
 
 void senderZMQ(SenderContext *ctx)
 {
@@ -445,7 +447,7 @@ static void receiverAsyncZmtpAcceptCb(AsyncOpStatus status, zmtpSocket *socket, 
   }
 }
 
-static void receiverAsyncAcceptCb(AsyncOpStatus status, aioObject *listener, HostAddress client, socketTy acceptSocket, void *arg)
+static void receiverAsyncAcceptCb(AsyncOpStatus status, aioObject*, HostAddress, socketTy acceptSocket, void *arg)
 {
   auto ctx = static_cast<ReceiverContext*>(arg);
   if (status == aosSuccess) {

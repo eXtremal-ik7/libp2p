@@ -103,4 +103,5 @@ void processTimeoutQueue(asyncBase *base, time_t currentTime);
 int copyFromBuffer(void *dst, size_t *offset, struct ioBuffer *src, size_t size);
 #ifdef __cplusplus
 }
+
 #endif
