@@ -22,15 +22,6 @@ struct zmtpContext {
 };
 __NO_PADDING_END
 
-struct reqStruct {
-  uint64_t a;
-  uint64_t b;
-};
-
-struct repStruct {
-  uint64_t c;
-};
-
 static bool waitClient(zmtpContext *ctx)
 {
   for (unsigned i = 0; i < 5000; i++) {

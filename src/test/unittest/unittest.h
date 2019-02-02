@@ -10,15 +10,25 @@ __NO_PADDING_BEGIN
 struct TestContext {
   aioObject *serverSocket;
   aioObject *clientSocket;
-  uint8_t clientBuffer[128];
+  uint8_t clientBuffer[65536];
   uint8_t serverBuffer[128];
   p2pStream serverStream;
   asyncBase *base;
-  int state;
-  int state2;
+  int serverState;
+  int clientState;
   bool success;
-  TestContext(asyncBase *baseArg) : base(baseArg), state(0), state2(0), success(false) {}
+  TestContext(asyncBase *baseArg) : base(baseArg), serverState(0), clientState(0), success(false) {}
 };
+
+struct reqStruct {
+  uint64_t a;
+  uint64_t b;
+};
+
+struct repStruct {
+  uint64_t c;
+};
+
 __NO_PADDING_END
 
 

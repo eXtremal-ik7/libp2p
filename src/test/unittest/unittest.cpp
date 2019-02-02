@@ -94,7 +94,7 @@ void test_connect_accept_readcb(AsyncOpStatus status, aioObject *socket, size_t 
   TestContext *ctx = static_cast<TestContext*>(arg);
   EXPECT_EQ(status, aosDisconnected);
   if (status == aosDisconnected) {
-    if (ctx->state == 1)
+    if (ctx->serverState == 1)
       ctx->success = true;
   }
   
@@ -120,7 +120,7 @@ void test_connect_accept_connectcb(AsyncOpStatus status, aioObject *object, void
   EXPECT_EQ(status, aosSuccess);
   TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosSuccess)
-    ctx->state = 1;
+    ctx->serverState = 1;
   deleteAioObject(object);
 }
 
@@ -142,8 +142,8 @@ void test_tcp_rw_client_read(AsyncOpStatus status, aioObject *socket, size_t tra
   TestContext *ctx = static_cast<TestContext*>(arg);
   EXPECT_EQ(status, aosSuccess);
   EXPECT_EQ(transferred, 7u);
-  EXPECT_EQ(ctx->state, 1);
-  if (status == aosSuccess && transferred == 7 && ctx->state == 1) {
+  EXPECT_EQ(ctx->serverState, 1);
+  if (status == aosSuccess && transferred == 7 && ctx->serverState == 1) {
     EXPECT_STREQ(reinterpret_cast<const char*>(ctx->clientBuffer), "234567");
     ctx->success = strcmp(reinterpret_cast<const char*>(ctx->clientBuffer), "234567") == 0;
   } 
@@ -156,7 +156,7 @@ void test_tcp_rw_connectcb(AsyncOpStatus status, aioObject *object, void *arg)
   TestContext *ctx = static_cast<TestContext*>(arg);
   EXPECT_EQ(status, aosSuccess);
   if (status == aosSuccess) {
-    ctx->state = 1;
+    ctx->serverState = 1;
     aioWrite(object, "123456", 7, afWaitAll, 0, nullptr, nullptr);
     aioRead(object, ctx->clientBuffer, 7, afWaitAll, 333000, test_tcp_rw_client_read, ctx);
   } else {
@@ -212,13 +212,13 @@ void test_udp_rw_client_readcb(AsyncOpStatus status, aioObject *socket, HostAddr
   TestContext *ctx = static_cast<TestContext*>(arg);
   EXPECT_EQ(status, aosSuccess);
   EXPECT_EQ(transferred, 7u);
-  EXPECT_EQ(ctx->state, 1);
+  EXPECT_EQ(ctx->serverState, 1);
   if (status == aosSuccess &&
       transferred == 7 &&
-      ctx->state == 1) {
+      ctx->serverState == 1) {
     EXPECT_STREQ(reinterpret_cast<const char*>(ctx->clientBuffer), "234567");
     if (strcmp(reinterpret_cast<const char*>(ctx->clientBuffer), "234567") == 0)
-      ctx->state++;
+      ctx->serverState++;
   } 
 
   deleteAioObject(socket);
@@ -229,14 +229,14 @@ void test_udp_rw_server_readcb(AsyncOpStatus status, aioObject *socket, HostAddr
 {
   TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosSuccess) {
-    ctx->state++;
+    ctx->serverState++;
     for (size_t i = 0; i < transferred-1; i++)
       ctx->serverBuffer[i]++;
     aioWriteMsg(socket, &address, ctx->serverBuffer, transferred, afNone, 0, nullptr, nullptr);
     aioReadMsg(socket, ctx->serverBuffer, sizeof(ctx->serverBuffer), afNone, 1000000, test_udp_rw_server_readcb, ctx);
   } else {
     if (status == aosCanceled)
-      ctx->success = (ctx->state == 2);
+      ctx->success = (ctx->serverState == 2);
     postQuitOperation(ctx->base);
   }
 }
@@ -267,8 +267,8 @@ void test_timeout_readcb(AsyncOpStatus status, aioObject *socket, HostAddress ad
   TestContext *ctx = static_cast<TestContext*>(arg);
   EXPECT_EQ(status, aosTimeout);
   if (status == aosTimeout) {
-    ctx->state++;
-    if (ctx->state == 4) {
+    ctx->serverState++;
+    if (ctx->serverState == 4) {
       ctx->success = true;
       postQuitOperation(ctx->base);
     }
@@ -304,8 +304,8 @@ void test_delete_object_readcb(AsyncOpStatus status, aioObject *socket, HostAddr
   TestContext *ctx = static_cast<TestContext*>(arg);
   EXPECT_EQ(status, aosCanceled);
   if (status == aosCanceled) {
-    ctx->state++;
-    if (ctx->state == 1000) {
+    ctx->serverState++;
+    if (ctx->serverState == 1000) {
       ctx->success = true;
       postQuitOperation(ctx->base);
     }
@@ -333,7 +333,7 @@ TEST(basic, test_delete_object)
 void test_userevent_cb(aioUserEvent *event, void *arg)
 {
   TestContext *ctx = static_cast<TestContext*>(arg);
-  unsigned value = __uint_atomic_fetch_and_add(reinterpret_cast<unsigned*>(&ctx->state), 1);
+  unsigned value = __uint_atomic_fetch_and_add(reinterpret_cast<unsigned*>(&ctx->serverState), 1);
 
   if (value == 256) {
     userEventActivate(event);
@@ -425,10 +425,10 @@ void p2pproto_ca_read(AsyncOpStatus status, p2pConnection *connection, p2pHeader
   __UNUSED(header);
   __UNUSED(data);
   TestContext *ctx = static_cast<TestContext*>(arg);
-  if (ctx->state2 == 2) {
+  if (ctx->clientState == 2) {
     EXPECT_EQ(status, aosDisconnected);
     if (status == aosDisconnected)
-      ctx->state = 3;
+      ctx->serverState = 3;
   }
   p2pConnectionDelete(connection);
   postQuitOperation(ctx->base);
@@ -438,21 +438,21 @@ p2pErrorTy p2pproto_ca_check(AsyncOpStatus status, p2pConnection *connection, p2
 {
   TestContext *ctx = static_cast<TestContext*>(arg);
   if (data) {
-    EXPECT_EQ(ctx->state, 0);
+    EXPECT_EQ(ctx->serverState, 0);
     EXPECT_STREQ(data->login, "p2pproto_ca_login");
     EXPECT_STREQ(data->password, "p2pproto_ca_password");
     EXPECT_STREQ(data->application, "p2pproto_ca_application");
-    if (ctx->state == 0 &&
+    if (ctx->serverState == 0 &&
         strcmp(data->login, "p2pproto_ca_login") == 0 &&
         strcmp(data->password, "p2pproto_ca_password") == 0 &&
         strcmp(data->application, "p2pproto_ca_application") == 0)
-      ctx->state = 1;
+      ctx->serverState = 1;
   } else {
     EXPECT_EQ(status, aosSuccess);
-    EXPECT_EQ(ctx->state, 1);
+    EXPECT_EQ(ctx->serverState, 1);
     if (status == aosSuccess &&
-        ctx->state == 1)
-      ctx->state = 2;
+        ctx->serverState == 1)
+      ctx->serverState = 2;
     aiop2pRecv(connection, ctx->serverBuffer, 128, 1000000, p2pproto_ca_read, ctx);
   }
 
@@ -476,7 +476,7 @@ void p2pproto_ca_connect(AsyncOpStatus status, p2pConnection *connection, void *
   TestContext *ctx = static_cast<TestContext*>(arg);
   EXPECT_EQ(status, aosSuccess);
   if (status == aosSuccess)
-    ctx->state2 = 1;
+    ctx->clientState = 1;
   p2pConnectionDelete(connection);
 }
 
@@ -500,16 +500,15 @@ TEST(p2pproto, connect_accept)
   aiop2pConnect(connection, &address, &data, 1000000, p2pproto_ca_connect, &context);
   asyncLoop(gBase);
   deleteAioObject(context.serverSocket);
-  ASSERT_EQ(context.state, 2);
-  ASSERT_EQ(context.state2, 1);
+  ASSERT_EQ(context.serverState, 2);
+  ASSERT_EQ(context.clientState, 1);
 }
 
 void p2pproto_rw_serverread(AsyncOpStatus status, p2pConnection *connection, p2pHeader header, p2pStream *stream, void *arg)
 {
   bool end = true;
   TestContext *ctx = static_cast<TestContext*>(arg);
-  ctx->state++;
-  if (ctx->state == 3 ) {
+  if (ctx->serverState == 2 ) {
     EXPECT_EQ(status, aosSuccess);
     EXPECT_EQ(header.id, 222u);
     EXPECT_EQ(header.type, p2pMsgRequest);
@@ -520,14 +519,60 @@ void p2pproto_rw_serverread(AsyncOpStatus status, p2pConnection *connection, p2p
         header.type == p2pMsgRequest &&
         strcmp(static_cast<const char*>(stream->data()), "msg1") == 0) {
       aiop2pSend(connection, "msg2", p2pHeader(222, p2pMsgResponse, 5), 1000000, nullptr, nullptr);
+      aiop2pRecvStream(connection, ctx->serverStream, 65536, 1000000, p2pproto_rw_serverread, ctx);
+      end = false;
+      ctx->serverState = 3;
+    }
+  } else if (ctx->serverState == 3) {
+    bool valid = true;
+    repStruct rep[1024];
+    reqStruct *req = stream->data<reqStruct>();
+    EXPECT_EQ(status, aosSuccess);
+    EXPECT_EQ(header.id, 223u);
+    EXPECT_EQ(header.type, p2pMsgRequest);
+    EXPECT_EQ(header.size, 1024*sizeof(reqStruct));
+    if (stream->sizeOf() == 1024*sizeof(reqStruct)) {
+      for (unsigned i = 0; i < 1024; i++) {
+        rep[i].c = req[i].a + req[i].b;
+        EXPECT_EQ(req[i].a, i);
+        EXPECT_EQ(req[i].b, i);
+        if (req[i].a != i || req[i].b != i) {
+          valid = false;
+          break;
+        }
+      }
+    } else {
+      valid = false;
+    }
+
+    if (status == aosSuccess && valid) {
+      ctx->serverState = 4;
+      aiop2pSend(connection, rep, p2pHeader(header.id, p2pMsgResponse, 1024*sizeof(repStruct)), 1000000, nullptr, ctx);
       aiop2pRecvStream(connection, ctx->serverStream, 4096, 1000000, p2pproto_rw_serverread, ctx);
       end = false;
-      ctx->state = 4;
     }
-  } else if (ctx->state == 4) {
+  } else if (ctx->serverState == 4) {
+    EXPECT_EQ(status, aosSuccess);
+    EXPECT_EQ(header.id, 224u);
+    EXPECT_EQ(header.type, p2pMsgRequest);
+    EXPECT_EQ(header.size, sizeof(reqStruct));
+    EXPECT_EQ(ctx->serverStream.sizeOf(), sizeof(reqStruct));
+    if (status == aosSuccess &&
+        header.id == 224u &&
+        header.type == p2pMsgRequest &&
+        ctx->serverStream.sizeOf() == sizeof(reqStruct)) {
+      ctx->serverState = 5;
+      repStruct rep;
+      reqStruct *req = stream->data<reqStruct>();
+      rep.c = req->a + req->b;
+      aiop2pSend(connection, &rep, p2pHeader(header.id, p2pMsgResponse, sizeof(repStruct)), 1000000, nullptr, ctx);
+      aiop2pRecvStream(connection, ctx->serverStream, 4096, 1000000, p2pproto_rw_serverread, ctx);
+      end = false;
+    }
+  } else if (ctx->serverState == 5) {
     EXPECT_EQ(status, aosDisconnected);
     if (status == aosDisconnected)
-      ctx->state = 5;
+      ctx->serverState = 6;
   }
 
   if (end) {
@@ -538,42 +583,93 @@ void p2pproto_rw_serverread(AsyncOpStatus status, p2pConnection *connection, p2p
 
 void p2pproto_rw_clientread(AsyncOpStatus status, p2pConnection *connection, p2pHeader header, void *data, void *arg)
 {
+  bool end = true;
   TestContext *ctx = static_cast<TestContext*>(arg);
-  EXPECT_EQ(status, aosSuccess);
-  if (ctx->state2 == 1 && status == aosSuccess) {
+  if (ctx->clientState == 1) {
+    EXPECT_EQ(status, aosSuccess);
     EXPECT_EQ(header.id, 222u);
     EXPECT_EQ(header.type, p2pMsgResponse);
     EXPECT_EQ(header.size, 5u);
     EXPECT_STREQ(static_cast<const char*>(data), "msg2");
-    if (header.id == 222u &&
+    if (status == aosSuccess &&
+        header.id == 222u &&
         header.type == p2pMsgResponse &&
         header.size == 5u &&
-        strcmp(static_cast<const char*>(data), "msg2") == 0)
-      ctx->state2 = 2;
+        strcmp(static_cast<const char*>(data), "msg2") == 0) {
+      ctx->clientState = 2;
+
+      // Send long message
+      auto data = std::unique_ptr<reqStruct[]>(new reqStruct[1024]);
+      for (unsigned i = 0; i < 1024; i++) {
+        data[i].a = i;
+        data[i].b = i;
+      }
+
+      aiop2pSend(connection, data.get(), p2pHeader(223, p2pMsgRequest, 1024*sizeof(reqStruct)), 1000000, nullptr, nullptr);
+      aiop2pRecv(connection, ctx->clientBuffer, 65536, 1000000, p2pproto_rw_clientread, ctx);
+      end = false;
+    }
+  } else if (ctx->clientState == 2) {
+    bool valid = true;
+    EXPECT_EQ(status, aosSuccess);
+    EXPECT_EQ(header.id, 223u);
+    EXPECT_EQ(header.type, p2pMsgResponse);
+    EXPECT_EQ(header.size, 1024*sizeof(repStruct));
+    if (header.id == 223u &&
+        header.type == p2pMsgResponse &&
+        header.size == 1024*sizeof(repStruct)) {
+      repStruct *rep = static_cast<repStruct*>(data);
+      for (unsigned i = 0; i < 1024; i++) {
+        EXPECT_EQ(rep[i].c, i+i);
+        if (rep[i].c != i+i) {
+          valid = false;
+          break;
+        }
+      }
+    } else {
+      valid = false;
+    }
+
+    if (status == aosSuccess && valid) {
+      // send message and receive to buffer with small limit
+      reqStruct req;
+      req.a = 11;
+      req.b = 77;
+      aiop2pSend(connection, &req, p2pHeader(224, p2pMsgRequest, sizeof(reqStruct)), 1000000, nullptr, nullptr);
+      aiop2pRecv(connection, ctx->clientBuffer, 4, 1000000, p2pproto_rw_clientread, ctx);
+      ctx->clientState = 3;
+      end = false;
+    }
+  } else if (ctx->clientState == 3) {
+    EXPECT_EQ(status, aosBufferTooSmall);
+    if (status == aosBufferTooSmall)
+      ctx->clientState = 4;
   }
 
-  p2pConnectionDelete(connection);
+  if (end) {
+    p2pConnectionDelete(connection);
+  }
 }
 
 p2pErrorTy p2pproto_rw_check(AsyncOpStatus status, p2pConnection *connection, p2pConnectData *data, void *arg)
 {
   TestContext *ctx = static_cast<TestContext*>(arg);
   if (data) {
-    EXPECT_EQ(ctx->state, 0);
+    EXPECT_EQ(ctx->serverState, 0);
     EXPECT_STREQ(data->login, "p2pproto_rw_login");
     EXPECT_STREQ(data->password, "p2pproto_rw_password");
     EXPECT_STREQ(data->application, "p2pproto_rw_application");
-    if (ctx->state == 0 &&
+    if (ctx->serverState == 0 &&
         strcmp(data->login, "p2pproto_rw_login") == 0 &&
         strcmp(data->password, "p2pproto_rw_password") == 0 &&
         strcmp(data->application, "p2pproto_rw_application") == 0)
-      ctx->state = 1;
+      ctx->serverState = 1;
   } else {
     EXPECT_EQ(status, aosSuccess);
-    EXPECT_EQ(ctx->state, 1);
+    EXPECT_EQ(ctx->serverState, 1);
     if (status == aosSuccess &&
-        ctx->state == 1)
-      ctx->state = 2;
+        ctx->serverState == 1)
+      ctx->serverState = 2;
     aiop2pRecvStream(connection, ctx->serverStream, 128, 1000000, p2pproto_rw_serverread, ctx);
   }
 
@@ -597,7 +693,7 @@ void p2pproto_rw_connect(AsyncOpStatus status, p2pConnection *connection, void *
   TestContext *ctx = static_cast<TestContext*>(arg);
   EXPECT_EQ(status, aosSuccess);
   if (status == aosSuccess) {
-    ctx->state2 = 1;
+    ctx->clientState = 1;
     aiop2pSend(connection, "msg1", p2pHeader(222, p2pMsgRequest, 5), 1000000, nullptr, nullptr);
     aiop2pRecv(connection, ctx->clientBuffer, 128, 1000000, p2pproto_rw_clientread, ctx);
   } else {
@@ -626,8 +722,8 @@ TEST(p2pproto, read_write)
   aiop2pConnect(connection, &address, &data, 1000000, p2pproto_rw_connect, &context);
   asyncLoop(gBase);
   deleteAioObject(context.serverSocket);
-  ASSERT_EQ(context.state, 5);
-  ASSERT_EQ(context.state2, 2);
+  ASSERT_EQ(context.serverState, 6);
+  ASSERT_EQ(context.clientState, 4);
 }
 
 p2pErrorTy p2pproto_coro_ca_check(AsyncOpStatus status, p2pConnection *connection, p2pConnectData *data, void *arg)
@@ -635,15 +731,15 @@ p2pErrorTy p2pproto_coro_ca_check(AsyncOpStatus status, p2pConnection *connectio
   __UNUSED(connection);
   TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosPending && data) {
-    EXPECT_EQ(ctx->state, 0);
+    EXPECT_EQ(ctx->serverState, 0);
     EXPECT_STREQ(data->login, "p2pproto_coro_ca_login");
     EXPECT_STREQ(data->password, "p2pproto_coro_ca_password");
     EXPECT_STREQ(data->application, "p2pproto_coro_ca_application");
-    if (ctx->state == 0 &&
+    if (ctx->serverState == 0 &&
         strcmp(data->login, "p2pproto_coro_ca_login") == 0 &&
         strcmp(data->password, "p2pproto_coro_ca_password") == 0 &&
         strcmp(data->application, "p2pproto_coro_ca_application") == 0)
-      ctx->state = 1;
+      ctx->serverState = 1;
   }
 
   return p2pOk;
@@ -662,11 +758,11 @@ void p2pproto_coro_ca_listener(void *arg)
     if (acceptResult == 0) {
       ssize_t recvResult;
       p2pHeader header;
-      EXPECT_EQ(ctx->state, 1);
+      EXPECT_EQ(ctx->serverState, 1);
       recvResult = iop2pRecv(connection, ctx->serverBuffer, 128, &header, 3000000);
       EXPECT_EQ(recvResult, -aosDisconnected);
       if (recvResult == -aosDisconnected)
-        ctx->state = 2;
+        ctx->serverState = 2;
       p2pConnectionDelete(connection);
       postQuitOperation(ctx->base);
     }
@@ -688,7 +784,7 @@ void p2pproto_coro_ca_client(void *arg)
   int connectResult = iop2pConnect(connection, &address, 1000000, &data);
   EXPECT_EQ(connectResult, 0);
   if (connectResult == 0)
-    ctx->state2 = 1;
+    ctx->clientState = 1;
   p2pConnectionDelete(connection);
 }
 
@@ -705,8 +801,8 @@ TEST(p2pproto, coro_connect_accept)
   coroutineCall(clientCoro);
   asyncLoop(gBase);
   deleteAioObject(context.serverSocket);
-  ASSERT_EQ(context.state, 2);
-  ASSERT_EQ(context.state2, 1);
+  ASSERT_EQ(context.serverState, 2);
+  ASSERT_EQ(context.clientState, 1);
 }
 
 p2pErrorTy p2pproto_coro_rw_check(AsyncOpStatus status, p2pConnection *connection, p2pConnectData *data, void *arg)
@@ -714,15 +810,15 @@ p2pErrorTy p2pproto_coro_rw_check(AsyncOpStatus status, p2pConnection *connectio
   __UNUSED(connection);
   TestContext *ctx = static_cast<TestContext*>(arg);
   if (status == aosPending && data) {
-    EXPECT_EQ(ctx->state, 0);
+    EXPECT_EQ(ctx->serverState, 0);
     EXPECT_STREQ(data->login, "p2pproto_coro_rw_login");
     EXPECT_STREQ(data->password, "p2pproto_coro_rw_password");
     EXPECT_STREQ(data->application, "p2pproto_coro_rw_application");
-    if (ctx->state == 0 &&
+    if (ctx->serverState == 0 &&
         strcmp(data->login, "p2pproto_coro_rw_login") == 0 &&
         strcmp(data->password, "p2pproto_coro_rw_password") == 0 &&
         strcmp(data->application, "p2pproto_coro_rw_application") == 0)
-      ctx->state = 1;
+      ctx->serverState = 1;
   }
 
   return p2pOk;
@@ -742,31 +838,89 @@ void p2pproto_coro_rw_listener(void *arg)
     if (acceptResult == 0) {
       ssize_t recvResult;
       ssize_t sendResult;
-      ctx->state = 2;
+      ctx->serverState = 1;
       p2pStream stream;
       p2pHeader header;
-      recvResult = iop2pRecvStream(connection, stream, 4096, &header, 1000000);
-      EXPECT_EQ(recvResult, 5);
-      EXPECT_EQ(header.id, 333u);
-      EXPECT_EQ(header.type, p2pMsgRequest);
-      EXPECT_EQ(header.size, 5u);
-      EXPECT_STREQ(static_cast<char*>(stream.data()), "msg1");
-      if (recvResult == 5 &&
-          header.id == 333u &&
-          header.type == p2pMsgRequest &&
-          header.size == 5u &&
-          strcmp(static_cast<char*>(stream.data()), "msg1") == 0) {
-        ctx->state = 3;
-        sendResult = iop2pSend(connection, "msg2", 333, p2pMsgResponse, 5, 1000000);
+
+      {
+        // Short message
+        recvResult = iop2pRecvStream(connection, stream, 4096, &header, 1000000);
+        sendResult = iop2pSend(connection, "msg2", header.id, p2pMsgResponse, 5, 1000000);
+        EXPECT_EQ(recvResult, 5);
+        EXPECT_EQ(header.id, 333u);
+        EXPECT_EQ(header.type, p2pMsgRequest);
+        EXPECT_EQ(header.size, 5u);
+        EXPECT_STREQ(static_cast<char*>(stream.data()), "msg1");
         EXPECT_EQ(sendResult, 5);
-        if (sendResult == 5) {
-          ctx->state = 4;
-          recvResult = iop2pRecvStream(connection, stream, 4096, &header, 1000000);
-          EXPECT_EQ(recvResult, -aosDisconnected);
-          if (recvResult == -aosDisconnected) {
-            ctx->state = 5;
-          }
+        if (recvResult == 5 &&
+            header.id == 333u &&
+            header.type == p2pMsgRequest &&
+            header.size == 5u &&
+            strcmp(static_cast<char*>(stream.data()), "msg1") == 0 &&
+            sendResult == 5) {
+          ctx->serverState++;
         }
+      }
+
+      {
+        // Long message
+        bool valid = true;
+        recvResult = iop2pRecvStream(connection, stream, 65536, &header, 1000000);
+        reqStruct *req = stream.data<reqStruct>();
+        repStruct rep[1024];
+        EXPECT_EQ(header.id, 334u);
+        EXPECT_EQ(header.type, p2pMsgRequest);
+        EXPECT_EQ(recvResult, static_cast<ssize_t>(1024*sizeof(reqStruct)));
+        EXPECT_EQ(stream.sizeOf(), 1024*sizeof(reqStruct));
+        if (header.id == 334u &&
+            header.type == p2pMsgRequest &&
+            stream.sizeOf() == 1024*sizeof(reqStruct)) {
+          for (unsigned i = 0; i < 1024; i++) {
+            rep[i].c = req[i].a + req[i].b;
+            EXPECT_EQ(req[i].a, i);
+            EXPECT_EQ(req[i].b, i);
+            if (req[i].a != i || req[i].b != i) {
+              valid = false;
+              break;
+            }
+          }
+        } else {
+          valid = false;
+        }
+
+        if (valid) {
+          sendResult = iop2pSend(connection, rep, header.id, p2pMsgResponse, sizeof(rep), 1000000);
+          EXPECT_EQ(sendResult, static_cast<ssize_t>(sizeof(rep)));
+          if (sendResult == sizeof(rep))
+            ctx->serverState++;
+        }
+      }
+
+      {
+        // Small limit
+        recvResult = iop2pRecvStream(connection, stream, 4096, &header, 1000000);
+        reqStruct *req = stream.data<reqStruct>();
+        repStruct rep;
+        EXPECT_EQ(header.id, 335u);
+        EXPECT_EQ(header.type, p2pMsgRequest);
+        EXPECT_EQ(recvResult, sizeof(reqStruct));
+        EXPECT_EQ(header.size, sizeof(reqStruct));
+        if (header.id == 335u &&
+            header.type == p2pMsgRequest &&
+            recvResult == sizeof(reqStruct)) {
+          rep.c = req->a + req->b;
+          sendResult = iop2pSend(connection, &rep, header.id, p2pMsgResponse, sizeof(rep), 1000000);
+          EXPECT_EQ(sendResult, sizeof(rep));
+          if (sendResult == sizeof(rep))
+            ctx->serverState++;
+        }
+      }
+
+      {
+        recvResult = iop2pRecvStream(connection, stream, 4096, &header, 1000000);
+        EXPECT_EQ(recvResult, -aosDisconnected);
+        if (recvResult == -aosDisconnected)
+          ctx->serverState++;
       }
     }
 
@@ -791,26 +945,75 @@ void p2pproto_coro_rw_client(void *arg)
   int connectResult = iop2pConnect(connection, &address, 1000000, &data);
   EXPECT_EQ(connectResult, 0);
   if (connectResult == 0) {
+    p2pHeader header;
     ssize_t recvResult;
     ssize_t sendResult;
-    ctx->state2 = 1;
-    sendResult = iop2pSend(connection, "msg1", 333, p2pMsgRequest, 5, 1000000);
-    EXPECT_EQ(sendResult, 5);
-    if (sendResult == 5) {
-      p2pHeader header;
-      ctx->state2 = 2;
+    ctx->clientState = 1;
+
+    // short message
+    {
+      sendResult = iop2pSend(connection, "msg1", 333, p2pMsgRequest, 5, 1000000);
       recvResult = iop2pRecv(connection, ctx->clientBuffer, 128, &header, 1000000);
+      EXPECT_EQ(sendResult, 5);
       EXPECT_EQ(recvResult, 5);
       EXPECT_EQ(header.id, 333u);
       EXPECT_EQ(header.type, p2pMsgResponse);
       EXPECT_EQ(header.size, 5u);
       EXPECT_STREQ(reinterpret_cast<const char*>(ctx->clientBuffer), "msg2");
-      if (recvResult == 5 &&
+      if (sendResult == 5 &&
+          recvResult == 5 &&
           header.id == 333 &&
           header.type == p2pMsgResponse &&
           header.size == 5 &&
           strcmp(reinterpret_cast<const char*>(ctx->clientBuffer), "msg2") == 0)
-        ctx->state2 = 3;
+        ctx->clientState++;
+    }
+
+    // long message
+    {
+      // long message
+      bool valid = true;
+      auto data = std::unique_ptr<reqStruct[]>(new reqStruct[1024]);
+      for (unsigned i = 0; i < 1024; i++) {
+        data[i].a = i;
+        data[i].b = i;
+      }
+      sendResult = iop2pSend(connection, data.get(), 334, p2pMsgRequest, 1024*sizeof(reqStruct), 1000000);
+      recvResult = iop2pRecv(connection, ctx->clientBuffer, 65536, &header, 1000000);
+      repStruct *rep = reinterpret_cast<repStruct*>(ctx->clientBuffer);
+      EXPECT_EQ(header.id, 334u);
+      EXPECT_EQ(header.type, p2pMsgResponse);
+      EXPECT_EQ(sendResult, static_cast<ssize_t>(1024*sizeof(reqStruct)));
+      EXPECT_EQ(recvResult, static_cast<ssize_t>(1024*sizeof(repStruct)));
+      if (header.id == 334u &&
+          header.type == p2pMsgResponse &&
+          recvResult == 1024*sizeof(repStruct)) {
+        for (unsigned i = 0; i < 1024; i++) {
+          EXPECT_EQ(rep[i].c, i+i);
+          if (rep[i].c != i+i) {
+            valid = false;
+            break;
+          }
+        }
+      } else {
+        valid = false;
+      }
+
+      if (valid)
+        ctx->clientState++;
+    }
+
+    // limit check
+    {
+      // limit check
+      reqStruct req;
+      req.a = 99;
+      req.b = 99;
+      iop2pSend(connection, &req, 335, p2pMsgRequest, sizeof(req), 1000000);
+      recvResult = iop2pRecv(connection, ctx->clientBuffer, 4, &header, 1000000);
+      EXPECT_EQ(recvResult, -aosBufferTooSmall);
+      if (recvResult == -aosBufferTooSmall)
+        ctx->clientState++;
     }
   }
 
@@ -830,8 +1033,8 @@ TEST(p2pproto, coro_read_write)
   coroutineCall(clientCoro);
   asyncLoop(gBase);
   deleteAioObject(context.serverSocket);
-  ASSERT_EQ(context.state, 5);
-  ASSERT_EQ(context.state2, 3);
+  ASSERT_EQ(context.serverState, 5);
+  ASSERT_EQ(context.clientState, 4);
 }
 
 int main(int argc, char **argv)
