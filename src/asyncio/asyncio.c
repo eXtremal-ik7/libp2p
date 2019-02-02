@@ -382,6 +382,13 @@ asyncOpRoot *implRead(aioObject *object,
   }
 }
 
+void implReadModify(asyncOpRoot *opptr, void *buffer, size_t size)
+{
+  asyncOp *op = (asyncOp*)opptr;
+  op->buffer = buffer;
+  op->transactionSize = size;
+}
+
 asyncOpRoot *implWrite(aioObject *object,
                        const void *buffer,
                        size_t size,

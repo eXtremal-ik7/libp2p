@@ -15,6 +15,7 @@ aioObject *startTCPServer(asyncBase *base, aioAcceptCb callback, void *arg, uint
   address.ipv4 = INADDR_ANY;
   address.port = htons(port);  
   socketTy acceptSocket = socketCreate(AF_INET, SOCK_STREAM, IPPROTO_TCP, 1);
+  socketReuseAddr(acceptSocket);
   if (socketBind(acceptSocket, &address) != 0) {
     std::this_thread::sleep_for(std::chrono::seconds(1));
     if (socketBind(acceptSocket, &address) != 0)

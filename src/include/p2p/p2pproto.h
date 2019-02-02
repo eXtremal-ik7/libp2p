@@ -38,7 +38,7 @@ struct p2pOp {
   uint32_t bufferSize;
 
   HostAddress address;
-  p2pHeader header;  
+  p2pHeader header;
   p2pConnectData connectMsg;
 };
 

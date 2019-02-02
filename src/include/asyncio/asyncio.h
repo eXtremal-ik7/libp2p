@@ -47,6 +47,8 @@ asyncOpRoot *implWrite(aioObject *object,
                        void *arg,
                        size_t *bytesTransferred);
 
+void implReadModify(asyncOpRoot *op, void *buffer, size_t size);
+
 void aioConnect(aioObject *object,
                 const HostAddress *address,
                 uint64_t usTimeout,
