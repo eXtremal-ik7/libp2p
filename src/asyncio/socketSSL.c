@@ -235,7 +235,11 @@ SSLSocket *sslSocketNew(asyncBase *base)
 {
   SSLSocket *S = (SSLSocket*)malloc(sizeof(SSLSocket));
   initObjectRoot(&S->root, base, ioObjectUserDefined, sslSocketDestructor);
+#ifdef DEPRECATEDIN_1_1_0
+  S->sslContext = SSL_CTX_new (TLS_client_method());
+#else
   S->sslContext = SSL_CTX_new (TLSv1_1_client_method());
+#endif
   S->ssl = SSL_new(S->sslContext);  
   S->bioIn = BIO_new(BIO_s_mem());
   S->bioOut = BIO_new(BIO_s_mem());  
@@ -326,7 +330,7 @@ ssize_t aioSslRead(SSLSocket *socket,
 #define MAKE_OP allocReadSSLOp(readProc, rwFinish, socket, (void*)callback, arg, buffer, size, flags, sslOpRead, usTimeout)
   if (__tag_atomic_fetch_and_add(&socket->root.tag, 1) == 0) {
     if (!socket->root.readQueue.head) {
-      size_t bytesTransferred = 0;
+      size_t bytesTransferred;
       asyncOpRoot *op = implSslRead(socket, buffer, size, flags, usTimeout, callback, arg, &bytesTransferred);
       if (!op) {
         if (flags & afSerialized)
@@ -334,7 +338,7 @@ ssize_t aioSslRead(SSLSocket *socket,
 
         tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
         if (tag)
-          socket->root.base->methodImpl.combiner(&socket->root, tag, 0, aaNone);
+          combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
 
         if (!(flags & afSerialized)) {
           if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
@@ -347,10 +351,20 @@ ssize_t aioSslRead(SSLSocket *socket,
           }
         }
       } else {
-        socket->root.base->methodImpl.combiner(&socket->root, 1, op, aaStart);
+        if (opGetStatus(op) == aosPending) {
+          combinerCallWithoutLock(&socket->root, 1, op, aaStart);
+        } else {
+          tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
+          if (tag)
+            combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
+          addToThreadLocalQueue(op);
+        }
       }
     } else {
-      eqPushBack(&socket->root.writeQueue, &MAKE_OP->root);
+      eqPushBack(&socket->root.readQueue, &MAKE_OP->root);
+      tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
+      if (tag)
+        combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
     }
   } else {
     combinerAddAction(&socket->root, &MAKE_OP->root, aaStart);
@@ -428,7 +442,7 @@ ssize_t aioSslWrite(SSLSocket *socket,
 
         tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
         if (tag)
-          socket->root.base->methodImpl.combiner(&socket->root, tag, 0, aaNone);
+          combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
 
         if (!(flags & afSerialized)) {
           if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
@@ -441,10 +455,20 @@ ssize_t aioSslWrite(SSLSocket *socket,
           }
         }
       } else {
-        socket->root.base->methodImpl.combiner(&socket->root, 1, op, aaStart);
+        if (opGetStatus(op) == aosPending) {
+          combinerCallWithoutLock(&socket->root, 1, op, aaStart);
+        } else {
+          tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
+          if (tag)
+            combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
+          addToThreadLocalQueue(op);
+        }
       }
     } else {
       eqPushBack(&socket->root.writeQueue, &MAKE_OP->root);
+      tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
+      if (tag)
+        combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
     }
   } else {
     combinerAddAction(&socket->root, &MAKE_OP->root, aaStart);
@@ -468,20 +492,92 @@ int ioSslConnect(SSLSocket *socket, const HostAddress *address, uint64_t usTimeo
 
 ssize_t ioSslRead(SSLSocket *socket, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
+#define MAKE_OP allocReadSSLOp(readProc, rwFinish, socket, (void*)coroutineCb, &r, buffer, size, flags, sslOpRead, usTimeout)
   combinerCallArgs ccArgs;
   coroReturnStruct r = {coroutineCurrent(), aosPending, 0};
-  SSLOp *op = allocReadSSLOp(readProc, rwFinish, socket, (void*)coroutineCb, &r, buffer, size, flags, sslOpRead, usTimeout);
-  combinerCallDelayed(&ccArgs, &socket->root, 1, &op->root, aaStart, 1);
+
+  if (__tag_atomic_fetch_and_add(&socket->root.tag, 1) == 0) {
+    if (!socket->root.readQueue.head) {
+      size_t bytesTransferred;
+      asyncOpRoot *op = implSslRead(socket, buffer, size, flags, usTimeout, coroutineCb, &r, &bytesTransferred);
+      if (!op) {
+        tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
+        if (tag)
+          combinerCallDelayed(&ccArgs, &socket->root, tag, 0, aaNone, 0);
+        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && !tag) {
+          return (ssize_t)bytesTransferred;
+        } else {
+          SSLOp *op = MAKE_OP;
+          op->bytesTransferred = bytesTransferred;
+          opForceStatus(&op->root, aosSuccess);
+          addToThreadLocalQueue(&op->root);
+        }
+      } else {
+        if (opGetStatus(op) == aosPending) {
+          combinerCallDelayed(&ccArgs, &socket->root, 1, op, aaStart, 0);
+        } else {
+          tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
+          if (tag)
+            combinerCallDelayed(&ccArgs, &socket->root, tag, 0, aaNone, 0);
+          addToThreadLocalQueue(op);
+        }
+      }
+    } else {
+      eqPushBack(&socket->root.readQueue, &MAKE_OP->root);
+      tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
+      if (tag)
+        combinerCallDelayed(&ccArgs, &socket->root, tag, 0, aaNone, 0);
+    }
+  } else {
+    combinerAddAction(&socket->root, &MAKE_OP->root, aaStart);
+  }
+
   coroutineYield();
   return r.status == aosSuccess ? (ssize_t)r.transferred : -r.status;
+#undef MAKE_OP
 }
 
 ssize_t ioSslWrite(SSLSocket *socket, const void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
+#define MAKE_OP allocWriteSSLOp(writeProc, rwFinish, socket, (void*)coroutineCb, &r, buffer, size, flags, sslOpWrite, usTimeout)
   combinerCallArgs ccArgs;
   coroReturnStruct r = {coroutineCurrent(), aosPending, 0};
-  SSLOp *op = allocWriteSSLOp(writeProc, rwFinish, socket, (void*)coroutineCb, &r, buffer, size, flags, sslOpWrite, usTimeout);
-  combinerCallDelayed(&ccArgs, &socket->root, 1, &op->root, aaStart, 1);
+  if (__tag_atomic_fetch_and_add(&socket->root.tag, 1) == 0) {
+    if (!socket->root.writeQueue.head) {
+      asyncOpRoot *op = implSslWrite(socket, buffer, size, flags, usTimeout, coroutineCb, &r);
+      if (!op) {
+        tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
+        if (tag)
+          combinerCallDelayed(&ccArgs, &socket->root, tag, 0, aaNone, 0);
+        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && !tag) {
+          return (ssize_t)size;
+        } else {
+          SSLOp *op = MAKE_OP;
+          op->bytesTransferred = size;
+          opForceStatus(&op->root, aosSuccess);
+          addToThreadLocalQueue(&op->root);
+        }
+      } else {
+        if (opGetStatus(op) == aosPending) {
+          combinerCallDelayed(&ccArgs, &socket->root, 1, op, aaStart, 0);
+        } else {
+          tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
+          if (tag)
+            combinerCallDelayed(&ccArgs, &socket->root, tag, 0, aaNone, 0);
+          addToThreadLocalQueue(op);
+        }
+      }
+    } else {
+      eqPushBack(&socket->root.writeQueue, &MAKE_OP->root);
+      tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
+      if (tag)
+        combinerCallDelayed(&ccArgs, &socket->root, tag, 0, aaNone, 0);
+    }
+  } else {
+    combinerAddAction(&socket->root, &MAKE_OP->root, aaStart);
+  }
+
   coroutineYield();
   return r.status == aosSuccess ? (ssize_t)r.transferred : -r.status;
+#undef MAKE_OP
 }

@@ -205,6 +205,7 @@ p2pConnection *p2pConnectionNew(aioObject *socket)
   initObjectRoot(&connection->root, aioGetBase(socket), ioObjectUserDefined, destructor);
   new(&connection->stream) xmstream;
   connection->socket = socket;
+  setSocketBuffer(socket, 256);
   return connection;
 }
 

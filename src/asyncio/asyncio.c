@@ -453,7 +453,7 @@ ssize_t aioRead(aioObject *object,
 
         tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
         if (tag)
-          object->root.base->methodImpl.combiner(&object->root, tag, 0, aaNone);
+          combinerCallWithoutLock(&object->root, tag, 0, aaNone);
 
         if (!(flags & afSerialized)) {
           if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
@@ -466,10 +466,20 @@ ssize_t aioRead(aioObject *object,
           }
         }
       } else {
-        object->root.base->methodImpl.combiner(&object->root, 1, op, aaStart);
+        if (opGetStatus(op) == aosPending) {
+          combinerCallWithoutLock(&object->root, 1, op, aaStart);
+        } else {
+          tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
+          if (tag)
+            combinerCallWithoutLock(&object->root, tag, 0, aaNone);
+          addToThreadLocalQueue(op);
+        }
       }
     } else {
       eqPushBack(&object->root.readQueue, &MAKE_OP->root);
+      tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
+      if (tag)
+        combinerCallWithoutLock(&object->root, tag, 0, aaNone);
     }
   } else {
     combinerAddAction(&object->root, &MAKE_OP->root, aaStart);
@@ -498,7 +508,7 @@ ssize_t aioWrite(aioObject *object,
 
         tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
         if (tag)
-          object->root.base->methodImpl.combiner(&object->root, tag, 0, aaNone);
+          combinerCallWithoutLock(&object->root, tag, 0, aaNone);
 
         if (!(flags & afSerialized)) {
           if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
@@ -511,10 +521,20 @@ ssize_t aioWrite(aioObject *object,
           }
         }
       } else {
-        object->root.base->methodImpl.combiner(&object->root, 1, op, aaStart);
+        if (opGetStatus(op) == aosPending) {
+          combinerCallWithoutLock(&object->root, 1, op, aaStart);
+        } else {
+          tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
+          if (tag)
+            combinerCallWithoutLock(&object->root, tag, 0, aaNone);
+          addToThreadLocalQueue(op);
+        }
       }
     } else {
       eqPushBack(&object->root.writeQueue, &MAKE_OP->root);
+      tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
+      if (tag)
+        combinerCallWithoutLock(&object->root, tag, 0, aaNone);
     }
   } else {
     combinerAddAction(&object->root, &MAKE_OP->root, aaStart);
@@ -626,76 +646,97 @@ socketTy ioAccept(aioObject *op, uint64_t usTimeout)
 
 ssize_t ioRead(aioObject *object, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
+#define MAKE_OP initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)coroutineCb, &r, flags, actRead, usTimeout, buffer, size)
   coroReturnStruct r = {coroutineCurrent(), aosPending, INVALID_SOCKET, 0};
   combinerCallArgs ccArgs;
   if (__tag_atomic_fetch_and_add(&object->root.tag, 1) == 0) {
-    size_t bytesTransferred = 0;
-    int result = object->root.type == ioObjectSocket ?
-      socketSyncRead(object->hSocket, buffer, size, flags & afWaitAll, &bytesTransferred) :
-      deviceSyncRead(object->hDevice, buffer, size, flags & afWaitAll, &bytesTransferred);
-    if (result) {
+    if (!object->root.readQueue.head) {
+      size_t bytesTransferred;
+      asyncOpRoot *op = implRead(object, buffer, size, flags, usTimeout, coroutineCb, &r, &bytesTransferred);
+      if (!op) {
+        tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
+        if (tag)
+          combinerCallDelayed(&ccArgs, &object->root, tag, 0, aaNone, 0);
+        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && !tag) {
+          return (ssize_t)bytesTransferred;
+        } else {
+          asyncOp *op = MAKE_OP;
+          op->bytesTransferred = bytesTransferred;
+          opForceStatus(&op->root, aosSuccess);
+          addToThreadLocalQueue(&op->root);
+        }
+      } else {
+        if (opGetStatus(op) == aosPending) {
+          combinerCallDelayed(&ccArgs, &object->root, 1, op, aaStart, 0);
+        } else {
+          tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
+          if (tag)
+            combinerCallDelayed(&ccArgs, &object->root, tag, 0, aaNone, 0);
+          addToThreadLocalQueue(op);
+        }
+      }
+    } else {
+      eqPushBack(&object->root.readQueue, &MAKE_OP->root);
       tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
       if (tag)
         combinerCallDelayed(&ccArgs, &object->root, tag, 0, aaNone, 0);
-
-      if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION) {
-        return (ssize_t)bytesTransferred;
-      } else {
-        asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)coroutineCb, &r, flags, actRead, usTimeout, buffer, size);
-        op->bytesTransferred = bytesTransferred;
-        opForceStatus(&op->root, aosSuccess);
-        addToThreadLocalQueue(&op->root);
-      }
-    } else {
-      asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)coroutineCb, &r, flags, actRead, usTimeout, buffer, size);
-      op->bytesTransferred = bytesTransferred;
-      combinerCallDelayed(&ccArgs, &object->root, 1, &op->root, aaStart, 0);
     }
   } else {
-    asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)coroutineCb, &r, flags, actRead, usTimeout, buffer, size);
-    combinerAddAction(&object->root, &op->root, aaStart);
+    combinerAddAction(&object->root, &MAKE_OP->root, aaStart);
   }
 
   coroutineYield();
-  return r.status == aosSuccess ? (ssize_t)r.bytesTransferred : -(int)r.status;
+  return r.status == aosSuccess ? (ssize_t)r.bytesTransferred : -r.status;
+#undef MAKE_OP
 }
 
 
 ssize_t ioWrite(aioObject *object, const void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
+#define MAKE_OP initWriteAsyncOp(object->root.base->methodImpl.write, rwFinish, object, (void*)coroutineCb, &r, flags, actWrite, usTimeout, buffer, size)
   coroReturnStruct r = {coroutineCurrent(), aosPending, INVALID_SOCKET, 0};
   combinerCallArgs ccArgs;
 
   if (__tag_atomic_fetch_and_add(&object->root.tag, 1) == 0) {
-    size_t bytesTransferred = 0;
-    int result = object->root.type == ioObjectSocket ?
-      socketSyncWrite(object->hSocket, buffer, size, flags & afWaitAll, &bytesTransferred) :
-      deviceSyncWrite(object->hDevice, buffer, size, flags & afWaitAll, &bytesTransferred);
-    if (result) {
+    if (!object->root.writeQueue.head) {
+      size_t bytesTransferred;
+      asyncOpRoot *op = implWrite(object, buffer, size, flags, usTimeout, coroutineCb, &r, &bytesTransferred);
+      if (!op) {
+        tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
+        if (tag)
+          combinerCallDelayed(&ccArgs, &object->root, tag, 0, aaNone, 0);
+        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && !tag) {
+          return (ssize_t)bytesTransferred;
+        } else {
+          flags = afNone;
+          asyncOp *op = MAKE_OP;
+          op->bytesTransferred = bytesTransferred;
+          opForceStatus(&op->root, aosSuccess);
+          addToThreadLocalQueue(&op->root);
+        }
+      } else {
+        if (opGetStatus(op) == aosPending) {
+          combinerCallDelayed(&ccArgs, &object->root, 1, op, aaStart, 0);
+        } else {
+          tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
+          if (tag)
+            combinerCallDelayed(&ccArgs, &object->root, tag, 0, aaNone, 0);
+          addToThreadLocalQueue(op);
+        }
+      }
+    } else {
+      eqPushBack(&object->root.writeQueue, &MAKE_OP->root);
       tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
       if (tag)
         combinerCallDelayed(&ccArgs, &object->root, tag, 0, aaNone, 0);
-
-      if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION) {
-        return (ssize_t)bytesTransferred;
-      } else {
-        asyncOp *op = initWriteAsyncOp(object->root.base->methodImpl.write, rwFinish, object, (void*)coroutineCb, &r, flags, actWrite, usTimeout, buffer, size);
-        op->bytesTransferred = bytesTransferred;
-        opForceStatus(&op->root, aosSuccess);
-        addToThreadLocalQueue(&op->root);
-      }
-    } else {
-      asyncOp *op = initWriteAsyncOp(object->root.base->methodImpl.write, rwFinish, object, (void*)coroutineCb, &r, flags, actWrite, usTimeout, buffer, size);
-      op->bytesTransferred = bytesTransferred;
-      combinerCallDelayed(&ccArgs, &object->root, 1, &op->root, aaStart, 0);
     }
   } else {
-    asyncOp *op = initWriteAsyncOp(object->root.base->methodImpl.write, rwFinish, object, (void*)coroutineCb, &r, flags, actWrite, usTimeout, buffer, size);
-    combinerAddAction(&object->root, &op->root, aaStart);
+    combinerAddAction(&object->root, &MAKE_OP->root, aaStart);
   }
 
   coroutineYield();
   return r.status == aosSuccess ? (ssize_t)r.bytesTransferred : -(int)r.status;
+#undef MAKE_OP
 }
 
 ssize_t ioReadMsg(aioObject *object, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
