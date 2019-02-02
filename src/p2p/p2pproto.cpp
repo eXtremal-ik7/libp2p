@@ -374,7 +374,7 @@ static AsyncOpStatus recvBufferProc(asyncOpRoot *opptr)
   return aosPending;
 }
 
-asyncOpRoot *implp2pRecv(p2pConnection *connection, void *buffer, uint32_t bufferSize, uint64_t timeout, p2preadCb *callback, void *arg, p2pHeader *header)
+asyncOpRoot *implp2pRecv(p2pConnection *connection, void *buffer, uint32_t bufferSize, AsyncFlags flags, uint64_t timeout, p2preadCb *callback, void *arg, p2pHeader *header)
 {
   size_t bytes;
   asyncOpRoot *childOp = nullptr;
@@ -403,7 +403,7 @@ asyncOpRoot *implp2pRecv(p2pConnection *connection, void *buffer, uint32_t buffe
   }
 
   if (childOp) {
-    p2pOp *op = allocp2pOp(recvBufferProc, recvFinish, connection, afNone|afRunning, buffer, bufferSize, nullptr, reinterpret_cast<void*>(callback), arg, p2pOpRecv, timeout);
+    p2pOp *op = allocp2pOp(recvBufferProc, recvFinish, connection, flags|afRunning, buffer, bufferSize, nullptr, reinterpret_cast<void*>(callback), arg, p2pOpRecv, timeout);
     op->header = *header;
     op->rwState = state;
     childOp->arg = op;
@@ -416,18 +416,18 @@ asyncOpRoot *implp2pRecv(p2pConnection *connection, void *buffer, uint32_t buffe
   return nullptr;
 }
 
-void aiop2pRecv(p2pConnection *connection, void *buffer, uint32_t bufferSize, uint64_t timeout, p2preadCb *callback, void *arg)
+void aiop2pRecv(p2pConnection *connection, void *buffer, uint32_t bufferSize, AsyncFlags flags, uint64_t timeout, p2preadCb *callback, void *arg)
 {
   p2pHeader header;
   aioMethod([=](){
-              return &allocp2pOp(recvBufferProc, recvFinish, connection, afNone, buffer, bufferSize, nullptr, reinterpret_cast<void*>(callback), arg, p2pOpRecv, timeout)->root;
+              return &allocp2pOp(recvBufferProc, recvFinish, connection, flags, buffer, bufferSize, nullptr, reinterpret_cast<void*>(callback), arg, p2pOpRecv, timeout)->root;
             },
-            [=, &header]() { return implp2pRecv(connection, buffer, bufferSize, timeout, callback, arg, &header); },
+            [=, &header]() { return implp2pRecv(connection, buffer, bufferSize, flags, timeout, callback, arg, &header); },
             [=, &header]() { callback(aosSuccess, connection, header, buffer, arg); },
             []() {},
             [&header](asyncOpRoot *op) { reinterpret_cast<p2pOp*>(op)->header = header; },
             &connection->root,
-            afNone,
+            flags,
             reinterpret_cast<void*>(callback),
             p2pOpSend);
 }
@@ -468,7 +468,7 @@ static AsyncOpStatus recvStreamProc(asyncOpRoot *opptr)
   return aosPending;
 }
 
-asyncOpRoot *implp2pRecvStream(p2pConnection *connection, p2pStream &stream, uint32_t maxMsgSize, uint64_t timeout, p2preadStreamCb *callback, void *arg, p2pHeader *header)
+asyncOpRoot *implp2pRecvStream(p2pConnection *connection, p2pStream &stream, uint32_t maxMsgSize, AsyncFlags flags, uint64_t timeout, p2preadStreamCb *callback, void *arg, p2pHeader *header)
 {
   size_t bytes;
   asyncOpRoot *childOp = nullptr;
@@ -498,7 +498,7 @@ asyncOpRoot *implp2pRecvStream(p2pConnection *connection, p2pStream &stream, uin
   }
 
   if (childOp) {
-    p2pOp *op = allocp2pOp(recvStreamProc, recvStreamFinish, connection, afNone|afRunning, nullptr, maxMsgSize, &stream, reinterpret_cast<void*>(callback), arg, p2pOpRecvStream, timeout);
+    p2pOp *op = allocp2pOp(recvStreamProc, recvStreamFinish, connection, flags|afRunning, nullptr, maxMsgSize, &stream, reinterpret_cast<void*>(callback), arg, p2pOpRecvStream, timeout);
     op->header = *header;
     op->rwState = state;
     childOp->arg = op;
@@ -511,18 +511,18 @@ asyncOpRoot *implp2pRecvStream(p2pConnection *connection, p2pStream &stream, uin
   return nullptr;
 }
 
-void aiop2pRecvStream(p2pConnection *connection, p2pStream &stream, uint32_t maxMsgSize, uint64_t timeout, p2preadStreamCb *callback, void *arg)
+void aiop2pRecvStream(p2pConnection *connection, p2pStream &stream, uint32_t maxMsgSize, AsyncFlags flags, uint64_t timeout, p2preadStreamCb *callback, void *arg)
 {
   p2pHeader header;
   aioMethod([=, &stream](){
-              return &allocp2pOp(recvStreamProc, recvStreamFinish, connection, afNone, nullptr, maxMsgSize, &stream, reinterpret_cast<void*>(callback), arg, p2pOpRecvStream, timeout)->root;
+              return &allocp2pOp(recvStreamProc, recvStreamFinish, connection, flags, nullptr, maxMsgSize, &stream, reinterpret_cast<void*>(callback), arg, p2pOpRecvStream, timeout)->root;
             },
-            [=, &stream, &header]() { return implp2pRecvStream(connection, stream, maxMsgSize, timeout, callback, arg, &header); },
+            [=, &stream, &header]() { return implp2pRecvStream(connection, stream, maxMsgSize, flags, timeout, callback, arg, &header); },
             [=, &stream]() { callback(aosSuccess, connection, header, &stream, arg); },
             []() {},
             [&header](asyncOpRoot *op) { reinterpret_cast<p2pOp*>(op)->header = header; },
             &connection->root,
-            afNone,
+            flags,
             reinterpret_cast<void*>(callback),
             p2pOpSend);
 }
@@ -568,7 +568,7 @@ static AsyncOpStatus sendProc(asyncOpRoot *opptr)
   return aosPending;
 }
 
-asyncOpRoot *implp2pSend(p2pConnection *connection, const void *data, p2pHeader header, uint64_t timeout, p2pwriteCb *callback, void *arg)
+asyncOpRoot *implp2pSend(p2pConnection *connection, const void *data, p2pHeader header, AsyncFlags flags, uint64_t timeout, p2pwriteCb *callback, void *arg)
 {
   int state;
   size_t bytes;
@@ -590,7 +590,7 @@ asyncOpRoot *implp2pSend(p2pConnection *connection, const void *data, p2pHeader 
   }
 
   if (childOp) {
-    p2pOp *op = allocp2pOp(sendProc, sendFinish, connection, afNone|afRunning, const_cast<void*>(data), 0, nullptr, reinterpret_cast<void*>(callback), arg, p2pOpSend, timeout);
+    p2pOp *op = allocp2pOp(sendProc, sendFinish, connection, flags|afRunning, const_cast<void*>(data), 0, nullptr, reinterpret_cast<void*>(callback), arg, p2pOpSend, timeout);
     op->rwState = state;
     childOp->arg = op;
     opStart(childOp);
@@ -600,19 +600,20 @@ asyncOpRoot *implp2pSend(p2pConnection *connection, const void *data, p2pHeader 
   return nullptr;
 }
 
-void aiop2pSend(p2pConnection *connection, const void *data, p2pHeader header, uint64_t timeout, p2pwriteCb *callback, void *arg)
+void aiop2pSend(p2pConnection *connection, const void *data, uint32_t id, uint32_t type, uint32_t size, AsyncFlags flags, uint64_t timeout, p2pwriteCb *callback, void *arg)
 {
+  p2pHeader header(id, type, size);
   aioMethod([=](){
-              p2pOp *op = allocp2pOp(sendProc, sendFinish, connection, afNone, const_cast<void*>(data), 0, nullptr, reinterpret_cast<void*>(callback), arg, p2pOpSend, timeout);
+              p2pOp *op = allocp2pOp(sendProc, sendFinish, connection, flags, const_cast<void*>(data), 0, nullptr, reinterpret_cast<void*>(callback), arg, p2pOpSend, timeout);
               op->header = header;
               return &op->root;
             },
-            [=]() { return implp2pSend(connection, data, header, timeout, callback, arg); },
+            [=]() { return implp2pSend(connection, data, header, flags, timeout, callback, arg); },
             [=]() { callback(aosSuccess, connection, header, arg); },
             []() {},
             [](asyncOpRoot*) {},
             &connection->root,
-            afNone,
+            flags,
             reinterpret_cast<void*>(callback),
             p2pOpSend);
 }
@@ -640,20 +641,18 @@ int iop2pConnect(p2pConnection *connection, const HostAddress *address, uint64_t
   return r.status == aosSuccess ? 0 : -r.status;
 }
 
-ssize_t iop2pSend(p2pConnection *connection, const void *data, uint32_t id, uint32_t type, uint32_t size, uint64_t timeout)
+ssize_t iop2pSend(p2pConnection *connection, const void *data, uint32_t id, uint32_t type, uint32_t size, AsyncFlags flags, uint64_t timeout)
 {
   combinerCallArgs ccArgs;
   coroReturnStruct r = {coroutineCurrent(), nullptr, nullptr, nullptr, aosPending};
   p2pHeader header(id, type, size);
   bool finished =
     ioMethod([=, &r]() {
-               p2pOp *op = allocp2pOp(sendProc, sendFinish, connection, afNone, const_cast<void*>(data), 0, nullptr, reinterpret_cast<void*>(coroutineSendCb), &r, p2pOpSend, timeout);
-               op->header.id = id;
-               op->header.type = type;
-               op->header.size = size;
+               p2pOp *op = allocp2pOp(sendProc, sendFinish, connection, flags, const_cast<void*>(data), 0, nullptr, reinterpret_cast<void*>(coroutineSendCb), &r, p2pOpSend, timeout);
+               op->header = header;
                return &op->root;
              },
-             [=, &r]() { return implp2pSend(connection, data, header, timeout, coroutineSendCb, &r); },
+             [=, &r]() { return implp2pSend(connection, data, header, flags, timeout, coroutineSendCb, &r); },
              [](asyncOpRoot*) {},
              &ccArgs,
              &connection->root,
@@ -664,16 +663,16 @@ ssize_t iop2pSend(p2pConnection *connection, const void *data, uint32_t id, uint
     return r.status == aosSuccess ? static_cast<ssize_t>(size) : -r.status;
 }
 
-ssize_t iop2pRecvStream(p2pConnection *connection, p2pStream &stream, uint32_t maxMsgSize, p2pHeader *header, uint64_t timeout)
+ssize_t iop2pRecvStream(p2pConnection *connection, p2pStream &stream, uint32_t maxMsgSize, AsyncFlags flags, uint64_t timeout, p2pHeader *header)
 {
   combinerCallArgs ccArgs;
   coroReturnStruct r = {coroutineCurrent(), nullptr, nullptr, header, aosPending};
   p2pHeader lheader;
   bool finished =
     ioMethod([=, &stream, &r](){
-               return &allocp2pOp(recvStreamProc, recvStreamFinish, connection, afNone, nullptr, maxMsgSize, &stream, reinterpret_cast<void*>(coroutineRecvStreamCb), &r, p2pOpRecvStream, timeout)->root;
+               return &allocp2pOp(recvStreamProc, recvStreamFinish, connection, flags, nullptr, maxMsgSize, &stream, reinterpret_cast<void*>(coroutineRecvStreamCb), &r, p2pOpRecvStream, timeout)->root;
              },
-             [=, &stream, &lheader, &r]() { return implp2pRecvStream(connection, stream, maxMsgSize, timeout, coroutineRecvStreamCb, &r, &lheader); },
+             [=, &stream, &lheader, &r]() { return implp2pRecvStream(connection, stream, maxMsgSize, flags, timeout, coroutineRecvStreamCb, &r, &lheader); },
              [&lheader](asyncOpRoot *op) { reinterpret_cast<p2pOp*>(op)->header = lheader; },
              &ccArgs,
              &connection->root,
@@ -684,7 +683,7 @@ ssize_t iop2pRecvStream(p2pConnection *connection, p2pStream &stream, uint32_t m
     return r.status == aosSuccess ? static_cast<ssize_t>(header->size) : -r.status;
 }
 
-ssize_t iop2pRecv(p2pConnection *connection, void *buffer, uint32_t bufferSize, p2pHeader *header, uint64_t timeout)
+ssize_t iop2pRecv(p2pConnection *connection, void *buffer, uint32_t bufferSize, AsyncFlags flags, uint64_t timeout, p2pHeader *header)
 {
   combinerCallArgs ccArgs;
   coroReturnStruct r = {coroutineCurrent(), nullptr, nullptr, header, aosPending};
@@ -694,7 +693,7 @@ ssize_t iop2pRecv(p2pConnection *connection, void *buffer, uint32_t bufferSize, 
     ioMethod([=, &r](){
                return &allocp2pOp(recvBufferProc, recvFinish, connection, afNone, buffer, bufferSize, nullptr, reinterpret_cast<void*>(coroutineRecvCb), &r, p2pOpRecv, timeout)->root;
              },
-             [=, &lheader, &r]() { return implp2pRecv(connection, buffer, bufferSize, timeout, coroutineRecvCb, &r, &lheader); },
+             [=, &lheader, &r]() { return implp2pRecv(connection, buffer, bufferSize, flags, timeout, coroutineRecvCb, &r, &lheader); },
              [&lheader](asyncOpRoot *op) { reinterpret_cast<p2pOp*>(op)->header = lheader; },
              &ccArgs,
              &connection->root,

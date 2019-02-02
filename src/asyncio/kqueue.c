@@ -424,22 +424,43 @@ AsyncOpStatus kqueueAsyncAccept(asyncOpRoot *opptr)
 AsyncOpStatus kqueueAsyncRead(asyncOpRoot *opptr)
 {
   asyncOp *op = (asyncOp*)opptr;
-  int fd = getFd((aioObject*)op->root.object);
+  aioObject *object = (aioObject*)op->root.object;
+  struct ioBuffer *sb = &object->buffer;
+  int fd = getFd(object);
 
-  ssize_t bytesRead = read(fd,
-                           (uint8_t *)op->buffer + op->bytesTransferred,
-                           op->transactionSize - op->bytesTransferred);
+  if (copyFromBuffer(op->buffer, &op->bytesTransferred, sb, op->transactionSize))
+    return aosSuccess;
 
-  if (bytesRead > 0) {
-    op->bytesTransferred += bytesRead;
-    if (op->root.flags & afWaitAll && op->bytesTransferred < op->transactionSize)
-      return aosPending;
-    else
-      return aosSuccess;
-  } else if (bytesRead == 0) {
-    return op->transactionSize - op->bytesTransferred > 0 ? aosDisconnected : aosSuccess;
+  if (op->transactionSize <= object->buffer.totalSize) {
+    while (op->bytesTransferred < op->transactionSize) {
+      ssize_t bytesRead = read(fd, sb->ptr, sb->totalSize);
+      if (bytesRead == 0)
+        return aosDisconnected;
+      else if (bytesRead < 0)
+        return errno == EAGAIN ? aosPending : aosUnknownError;
+      sb->dataSize = (size_t)bytesRead;
+
+      if (copyFromBuffer(op->buffer, &op->bytesTransferred, sb, op->transactionSize) || !(opptr->flags & afWaitAll))
+        break;
+    }
+
+    return aosSuccess;
   } else {
-    return errno == EAGAIN ? aosPending : aosUnknownError;
+    ssize_t bytesRead = read(fd,
+                             (uint8_t *)op->buffer + op->bytesTransferred,
+                             op->transactionSize - op->bytesTransferred);
+
+    if (bytesRead > 0) {
+      op->bytesTransferred += (size_t)bytesRead;
+      if (op->root.flags & afWaitAll && op->bytesTransferred < op->transactionSize)
+        return aosPending;
+      else
+        return aosSuccess;
+    } else if (bytesRead == 0) {
+      return op->transactionSize - op->bytesTransferred > 0 ? aosDisconnected : aosSuccess;
+    } else {
+      return errno == EAGAIN ? aosPending : aosUnknownError;
+    }
   }
 }
 

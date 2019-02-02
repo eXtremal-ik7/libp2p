@@ -61,7 +61,7 @@ void p2pPeer::clientReceiver(AsyncOpStatus status, p2pConnection *connection, p2
         break;
     }
     
-    aiop2pRecvStream(peer->connection, peer->connection->stream, 65536, 0, clientReceiver, peer);
+    aiop2pRecvStream(peer->connection, peer->connection->stream, 65536, afNone, 0, clientReceiver, peer);
   } else {
     // try reconnect
     peer->connect();
@@ -75,7 +75,7 @@ void p2pPeer::clientP2PConnectCb(AsyncOpStatus status, p2pConnection *connection
   if (status == aosSuccess) {
     peer->_connected = true;
     peer->_node->connectionEstablished(peer);   
-    aiop2pRecvStream(peer->connection, peer->connection->stream, 65536, 0, clientReceiver, peer);
+    aiop2pRecvStream(peer->connection, peer->connection->stream, 65536, afNone, 0, clientReceiver, peer);
   } else if (status == aosTimeout) {
     peer->connect();
   } else {
@@ -107,7 +107,7 @@ void p2pPeer::nodeMsgHandler()
   _node->addPeer(this);
   bool valid = true;
   p2pHeader header;
-  while (valid && iop2pRecvStream(connection, connection->stream, 65536, &header, 0) != -1) {
+  while (valid && iop2pRecvStream(connection, connection->stream, 65536, afNone, 0, &header) != -1) {
     switch (header.type) {
       case p2pMsgRequest : {
         if (p2pRequestCb *handler = _node->getRequestHandler()) {
@@ -278,7 +278,7 @@ bool p2pNode::ioRequest(void *data, uint32_t size, uint64_t timeout, void *out, 
       continue;
     
     uint32_t id = _lastId++;
-    aiop2pSend(peer->connection, data, p2pHeader(id, p2pMsgRequest, size), timeout, nullptr, nullptr);
+    aiop2pSend(peer->connection, data, id, p2pMsgRequest, size, afNone, timeout, nullptr, nullptr);
     peer->addHandler(id, coroutineCurrent(), timeout, out, outSize);
     coroutineYield();    
     if (_lastActivePeer)
@@ -326,7 +326,6 @@ p2pNode* p2pNode::createNode(asyncBase *base,
 
 void p2pNode::sendSignal(void *data, uint32_t size)
 {
-  p2pHeader header(p2pMsgSignal, size);  
   for (auto c: _connections)
-    aiop2pSend(c->connection, data, header, 3000000, nullptr, nullptr);
+    aiop2pSend(c->connection, data, 0, p2pMsgSignal, size, afNone, 3000000, nullptr, nullptr);
 }
