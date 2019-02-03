@@ -12,6 +12,8 @@
 #include <string.h>
 #include <unistd.h>
 
+static __tls ObjectPool socketPool;
+
 #define MAX_EVENTS 256
 
 enum pipeDescrs {
@@ -138,6 +140,8 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
   asyncOpRoot *newOp = op;
   int hasFd = (object->type == ioObjectDevice) ||
               (object->type == ioObjectSocket);
+  if (hasFd && getFd((aioObject*)object) == -1)
+    return;
 
   while (currentTag) {
     int hasReadOp = object->readQueue.head != 0;
@@ -290,7 +294,13 @@ void kqueueNextFinishedOperation(asyncBase *base)
 
 aioObject *kqueueNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
-  aioObject *object = __tagged_alloc(sizeof(aioObject));
+  aioObject *object = (aioObject*)objectGet(&socketPool);
+  if (!object) {
+    object = __tagged_alloc(sizeof(aioObject));
+    object->buffer.ptr = 0;
+    object->buffer.totalSize = 0;
+  }
+
   initObjectRoot(&object->root, base, type, (aioObjectDestructor*)kqueueDeleteObject);
   switch (type) {
     case ioObjectDevice :
@@ -303,6 +313,8 @@ aioObject *kqueueNewAioObject(asyncBase *base, IoObjectTy type, void *data)
       break;
   }
 
+  object->buffer.offset = 0;
+  object->buffer.dataSize = 0;
   return object;
 }
 
@@ -325,9 +337,19 @@ int kqueueCancelAsyncOp(asyncOpRoot *opptr)
 
 void kqueueDeleteObject(aioObject *object)
 {
-  int fd = getFd(object);
-  close(fd);
-  free(object);
+  switch (object->root.type) {
+    case ioObjectDevice :
+      close(object->hDevice);
+      object->hDevice = -1;
+      break;
+    case ioObjectSocket :
+      close(object->hSocket);
+      object->hSocket = -1;
+      break;
+    default :
+      break;
+  }
+  objectRelease(object, &socketPool);
 }
 
 void kqueueInitializeTimer(asyncBase *base, asyncOpRoot *op)
