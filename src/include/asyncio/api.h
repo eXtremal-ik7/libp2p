@@ -75,7 +75,7 @@ static inline AsyncFlags operator|(AsyncFlags a, AsyncFlags b) {
 __NO_UNUSED_FUNCTION_END
 #endif
 
-
+typedef struct ObjectPool ObjectPool;
 typedef struct asyncBase asyncBase;
 typedef struct aioObjectRoot aioObjectRoot;
 typedef struct asyncOpRoot asyncOpRoot;
@@ -186,7 +186,7 @@ struct aioObjectRoot {
 
 struct asyncOpRoot {
   volatile tag_t tag;
-  const char *poolId;
+  ObjectPool *poolId;
   aioExecuteProc *executeMethod;
   aioCancelProc *cancelMethod;
   aioFinishProc *finishMethod;
@@ -245,8 +245,8 @@ void resumeParent(asyncOpRoot *op, AsyncOpStatus status);
 void addToThreadLocalQueue(asyncOpRoot *op);
 void executeThreadLocalQueue();
 
-asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
-                             const char *timerPool,
+asyncOpRoot *initAsyncOpRoot(ObjectPool *nonTimerPool,
+                             ObjectPool *timerPool,
                              newAsyncOpTy *newOpProc,
                              aioExecuteProc *startMethod,
                              aioCancelProc *cancelMethod,

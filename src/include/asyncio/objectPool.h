@@ -2,28 +2,22 @@
 extern "C" {
 #endif
 
-#ifndef __ASYNCIO_FMALLOC_H_
-#define __ASYNCIO_FMALLOC_H_
+#ifndef __ASYNCIO_OBJECTPOOL_H_
+#define __ASYNCIO_OBJECTPOOL_H_
 
 #include <stddef.h>
 
-typedef struct {
+typedef struct ObjectPool {
   const void *type;
   size_t blocksNumMax;
   size_t blocksNum;
   void **blocks;
-} ObjectList;
-
-typedef struct ObjectPool {
-  ObjectList *elements;
-  size_t elementsNum;
 } ObjectPool;
 
-//void initObjectPool(ObjectPool *pool);
-void *objectGet(const void *type);
-void objectRelease(void *ptr, const void *type);
+void *objectGet(ObjectPool *poolId);
+void objectRelease(void *ptr, ObjectPool *poolId);
 
-#endif //__ASYNCIO_FMALLOC_H_
+#endif //__ASYNCIO_OBJECTPOOL_H_
 
 #ifdef __cplusplus
 }

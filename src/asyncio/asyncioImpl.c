@@ -24,8 +24,8 @@ __tls List threadLocalQueue;
 __tls unsigned currentFinishedSync;
 __tls unsigned messageLoopThreadId;
 
-static const char *asyncOpLinkListPool = "asyncOpLinkListPool";
-static const char *asyncOpActionPool = "asyncOpActionPool";
+static __tls ObjectPool asyncOpLinkListPool;
+static __tls ObjectPool asyncOpActionPool;
 
 void eqRemove(List *list, asyncOpRoot *op)
 {
@@ -197,7 +197,7 @@ static void objectDecrementReference(aioObjectRoot *object, tag_t count)
 
 void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op)
 {
-  asyncOpListLink *timerLink = objectGet(asyncOpLinkListPool);
+  asyncOpListLink *timerLink = objectGet(&asyncOpLinkListPool);
   if (!timerLink)
     timerLink = malloc(sizeof(asyncOpListLink));
   timerLink->op = op;
@@ -211,7 +211,7 @@ void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op)
 {
   asyncOpListLink *timerLink = (asyncOpListLink*)op->timerId;
   if (timerLink && pageMapRemove(&base->timerMap, timerLink)) {
-    objectRelease(timerLink, asyncOpLinkListPool);
+    objectRelease(timerLink, &asyncOpLinkListPool);
     op->timerId = 0;
   }
 }
@@ -229,7 +229,7 @@ void processTimeoutQueue(asyncBase *base, time_t currentTime)
     while (link) {
       asyncOpListLink *next = link->next;
       opCancel(link->op, link->tag, aosTimeout);
-      objectRelease(link, asyncOpLinkListPool);
+      objectRelease(link, &asyncOpLinkListPool);
       link = next;
     }
   }
@@ -290,8 +290,8 @@ tag_t opEncodeTag(asyncOpRoot *op, tag_t tag)
   return ((op->tag >> TAG_STATUS_SIZE) & ~((tag_t)TAGGED_POINTER_DATA_MASK)) | (tag & (tag_t)TAGGED_POINTER_DATA_MASK);
 }
 
-asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
-                             const char *timerPool,
+asyncOpRoot *initAsyncOpRoot(ObjectPool *nonTimerPool,
+                             ObjectPool *timerPool,
                              newAsyncOpTy *newOpProc,
                              aioExecuteProc *startMethod,
                              aioCancelProc *cancelMethod,
@@ -304,7 +304,7 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
                              uint64_t timeout)
 {
   int realtime = (opCode == actUserEvent) || (flags & afRealtime);
-  const char *pool = realtime ? timerPool : nonTimerPool;  
+  ObjectPool *pool = realtime ? timerPool : nonTimerPool;
   asyncOpRoot *op = (asyncOpRoot*)objectGet(pool);
   if (!op) {
     op = newOpProc();
@@ -410,7 +410,7 @@ void processOperationList(aioObjectRoot *object, List *finished, tag_t *needStar
 
   while (action) {
     processAction(action->op, action->actionType, finished, needStart);
-    objectRelease(action, asyncOpActionPool);
+    objectRelease(action, &asyncOpActionPool);
     action = action->next;
     (*enqueued)++;
   }
@@ -485,7 +485,7 @@ void cancelOperationList(List *list, List *finished, AsyncOpStatus status)
 
 void combinerAddAction(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy actionType)
 {
-  asyncOpAction *action = objectGet(asyncOpActionPool);
+  asyncOpAction *action = objectGet(&asyncOpActionPool);
   if (!action)
     action = malloc(sizeof(asyncOpAction));
   action->op = op;

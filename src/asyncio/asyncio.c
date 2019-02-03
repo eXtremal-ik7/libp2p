@@ -9,9 +9,9 @@
 #include <string.h>
 #include <time.h>
 
-static const char *poolId = "asyncIo";
-static const char *timerPoolId = "asyncIoTimer";
-static const char *eventPoolId = "asyncIoEvent";
+static __tls ObjectPool poolId;
+static __tls ObjectPool timerPoolId;
+static __tls ObjectPool eventPoolId;
 
 #ifdef OS_WINDOWS
 asyncBase *iocpNewAsyncBase();
@@ -70,8 +70,8 @@ static asyncOp *initReadAsyncOp(aioExecuteProc *startProc,
                                 void *buffer,
                                 size_t transactionSize)
 {
-  asyncOp *op = (asyncOp*)initAsyncOpRoot(poolId,
-                                          timerPoolId,
+  asyncOp *op = (asyncOp*)initAsyncOpRoot(&poolId,
+                                          &timerPoolId,
                                           object->root.base->methodImpl.newAsyncOp,
                                           startProc,
                                           object->root.base->methodImpl.cancelAsyncOp,
@@ -101,8 +101,8 @@ static asyncOp *initWriteAsyncOp(aioExecuteProc *startProc,
                                  const void *buffer,
                                  size_t transactionSize)
 {
-  asyncOp *op = (asyncOp*)initAsyncOpRoot(poolId,
-                                          timerPoolId,
+  asyncOp *op = (asyncOp*)initAsyncOpRoot(&poolId,
+                                          &timerPoolId,
                                           object->root.base->methodImpl.newAsyncOp,
                                           startProc,
                                           object->root.base->methodImpl.cancelAsyncOp,
@@ -252,18 +252,18 @@ void postQuitOperation(asyncBase *base)
 
 void setSocketBuffer(aioObject *socket, size_t bufferSize)
 {
-  socket->buffer.ptr= malloc(bufferSize);
-  socket->buffer.totalSize = bufferSize;
-  socket->buffer.dataSize = 0;
-  socket->buffer.offset = 0;
+  if (bufferSize > socket->buffer.totalSize) {
+    socket->buffer.ptr= realloc(socket->buffer.ptr, bufferSize);
+    socket->buffer.totalSize = bufferSize;
+  }
 }
 
 aioUserEvent *newUserEvent(asyncBase *base, aioEventCb callback, void *arg)
 {
-  aioUserEvent *event = (aioUserEvent*)objectGet(eventPoolId);
+  aioUserEvent *event = (aioUserEvent*)objectGet(&eventPoolId);
   if (!event) {
     event = malloc(sizeof(aioUserEvent));
-    event->root.poolId = eventPoolId;
+    event->root.poolId = &eventPoolId;
     base->methodImpl.initializeTimer(base, &event->root);
   }
 
@@ -279,22 +279,12 @@ aioUserEvent *newUserEvent(asyncBase *base, aioEventCb callback, void *arg)
 
 aioObject *newSocketIo(asyncBase *base, socketTy hSocket)
 {
-  aioObject *object = base->methodImpl.newAioObject(base, ioObjectSocket, &hSocket);
-  object->buffer.ptr = 0;
-  object->buffer.totalSize = 0;
-  object->buffer.offset = 0;
-  object->buffer.dataSize = 0;
-  return object;
+  return base->methodImpl.newAioObject(base, ioObjectSocket, &hSocket);
 }
 
 aioObject *newDeviceIo(asyncBase *base, iodevTy hDevice)
 {
-  aioObject *object = base->methodImpl.newAioObject(base, ioObjectDevice, &hDevice);
-  object->buffer.ptr = 0;
-  object->buffer.totalSize = 0;
-  object->buffer.offset = 0;
-  object->buffer.dataSize = 0;
-  return object;
+  return base->methodImpl.newAioObject(base, ioObjectDevice, &hDevice);
 }
 
 void deleteAioObject(aioObject *object)

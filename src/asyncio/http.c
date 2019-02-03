@@ -2,10 +2,12 @@
 
 #include "asyncio/asyncio.h"
 #include "asyncio/coroutine.h"
+#include "asyncio/objectPool.h"
 #include <string.h>
 
-static const char *httpPoolId = "HTTP";
-static const char *httpPoolTimerId = "HTTPTimer";
+static __tls ObjectPool httpClientPool;
+static __tls ObjectPool httpPoolId;
+static __tls ObjectPool httpPoolTimerId;
 
 typedef enum {
   httpOpConnect = 0,
@@ -185,7 +187,7 @@ static HTTPOp *allocHttpOp(aioExecuteProc executeProc,
                            uint64_t timeout)
 {
   HTTPOp *op = (HTTPOp*)
-    initAsyncOpRoot(httpPoolId, httpPoolTimerId, alloc, executeProc, cancel, finishProc, &client->root, callback, arg, 0, type, timeout);
+    initAsyncOpRoot(&httpPoolId, &httpPoolTimerId, alloc, executeProc, cancel, finishProc, &client->root, callback, arg, 0, type, timeout);
 
   op->parseCallback = parseCallback;
   op->resultCode = 0;
@@ -239,24 +241,26 @@ void httpParseDefault(HttpComponent *component, void *arg)
 static void httpClientDestructor(aioObjectRoot *root)
 {
   HTTPClient *client = (HTTPClient*)root;
-  dynamicBufferFree(&client->out);
-  free(client->inBuffer);
   if (client->isHttps)
     sslSocketDelete(client->sslSocket);
   else
     deleteAioObject(client->plainSocket);
-  free(client);
+  objectRelease(root, &httpClientPool);
 }
 
 HTTPClient *httpClientNew(asyncBase *base, aioObject *socket)
 {
-  HTTPClient *client = (HTTPClient*)malloc(sizeof(HTTPClient));
+  HTTPClient *client = objectGet(&httpClientPool);
+  if (!client) {
+    client = (HTTPClient*)malloc(sizeof(HTTPClient));
+    client->inBuffer = (uint8_t*)malloc(65536);
+    client->inBufferSize = 65536;
+    dynamicBufferInit(&client->out, 65536);
+  }
+
   initObjectRoot(&client->root, base, ioObjectUserDefined, httpClientDestructor);
   client->isHttps = 0;
-  client->inBuffer = (uint8_t*)malloc(65536);
-  client->inBufferSize = 65536;
   client->inBufferOffset = 0;
-  dynamicBufferInit(&client->out, 65536);
   httpSetBuffer(&client->state, client->inBuffer, 0);
   client->plainSocket = socket;
   return client;
@@ -264,13 +268,17 @@ HTTPClient *httpClientNew(asyncBase *base, aioObject *socket)
 
 HTTPClient *httpsClientNew(asyncBase *base, SSLSocket *socket)
 {
-  HTTPClient *client = (HTTPClient*)malloc(sizeof(HTTPClient));
+  HTTPClient *client = objectGet(&httpClientPool);
+  if (!client) {
+    client = (HTTPClient*)malloc(sizeof(HTTPClient));
+    client->inBuffer = (uint8_t*)malloc(65536);
+    client->inBufferSize = 65536;
+    dynamicBufferInit(&client->out, 65536);
+  }
+
   initObjectRoot(&client->root, base, ioObjectUserDefined, httpClientDestructor);
   client->isHttps = 1;
-  client->inBuffer = (uint8_t*)malloc(65536);
-  client->inBufferSize = 65536;
   client->inBufferOffset = 0;
-  dynamicBufferInit(&client->out, 65536);
   httpSetBuffer(&client->state, client->inBuffer, 0);
   client->sslSocket = socket;
   return client;

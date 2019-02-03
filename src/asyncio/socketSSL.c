@@ -11,8 +11,9 @@
 #define DEFAULT_SSL_READ_BUFFER_SIZE 16384
 #define DEFAULT_SSL_WRITE_BUFFER_SIZE 16384
 
-static const char *sslPoolId = "SSL";
-static const char *sslPoolTimerId = "SSLTimer";
+static __tls ObjectPool sslSocketPool;
+static __tls ObjectPool sslPoolId;
+static __tls ObjectPool sslPoolTimerId;
 
 typedef enum {
   sslStInitalize = 0,
@@ -74,7 +75,7 @@ static SSLOp *allocReadSSLOp(aioExecuteProc executeProc,
                              uint64_t timeout)
 {
   SSLOp *op = (SSLOp*)
-    initAsyncOpRoot(sslPoolId, sslPoolTimerId, alloc, executeProc, cancel, finishProc, &socket->root, callback, arg, flags, opCode, timeout);
+    initAsyncOpRoot(&sslPoolId, &sslPoolTimerId, alloc, executeProc, cancel, finishProc, &socket->root, callback, arg, flags, opCode, timeout);
   op->buffer = buffer;
   op->transactionSize = size;
   op->bytesTransferred = 0;
@@ -94,7 +95,7 @@ static SSLOp *allocWriteSSLOp(aioExecuteProc executeProc,
                               uint64_t timeout)
 {
   SSLOp *op = (SSLOp*)
-    initAsyncOpRoot(sslPoolId, sslPoolTimerId, alloc, executeProc, cancel, finishProc, &socket->root, callback, arg, flags, opCode, timeout);
+    initAsyncOpRoot(&sslPoolId, &sslPoolTimerId, alloc, executeProc, cancel, finishProc, &socket->root, callback, arg, flags, opCode, timeout);
   op->buffer = (void*)(uintptr_t)buffer;
   op->transactionSize = size;
   op->bytesTransferred = 0;
@@ -223,34 +224,35 @@ static AsyncOpStatus readProc(asyncOpRoot *opptr)
 void sslSocketDestructor(aioObjectRoot *root)
 {
   SSLSocket *socket = (SSLSocket*)root;
-  free(socket->sslReadBuffer);  
-  SSL_free(socket->ssl);
-  SSL_CTX_free(socket->sslContext);
   deleteAioObject(socket->object);
-  free(socket);
+  objectRelease(root, &sslSocketPool);
 }
 
 
 SSLSocket *sslSocketNew(asyncBase *base)
 {
-  SSLSocket *S = (SSLSocket*)malloc(sizeof(SSLSocket));
-  initObjectRoot(&S->root, base, ioObjectUserDefined, sslSocketDestructor);
+  SSLSocket *S = objectGet(&sslSocketPool);
+  if (!S) {
+    S = (SSLSocket*)malloc(sizeof(SSLSocket));
 #ifdef DEPRECATEDIN_1_1_0
-  S->sslContext = SSL_CTX_new (TLS_client_method());
+    S->sslContext = SSL_CTX_new (TLS_client_method());
 #else
-  S->sslContext = SSL_CTX_new (TLSv1_1_client_method());
+    S->sslContext = SSL_CTX_new (TLSv1_1_client_method());
 #endif
-  S->ssl = SSL_new(S->sslContext);  
-  S->bioIn = BIO_new(BIO_s_mem());
-  S->bioOut = BIO_new(BIO_s_mem());  
-  SSL_set_bio(S->ssl, S->bioIn, S->bioOut);
-  
-  socketTy socket = socketCreate(AF_INET, SOCK_STREAM, IPPROTO_TCP, 1);
-  S->object = newSocketIo(base, socket);  
-  S->sslReadBufferSize = DEFAULT_SSL_READ_BUFFER_SIZE;
-  S->sslReadBuffer = (uint8_t*)malloc(S->sslReadBufferSize);
-  S->sslWriteBufferSize = DEFAULT_SSL_READ_BUFFER_SIZE;
-  S->sslWriteBuffer = (uint8_t*)malloc(S->sslReadBufferSize);
+    S->ssl = SSL_new(S->sslContext);
+    S->bioIn = BIO_new(BIO_s_mem());
+    S->bioOut = BIO_new(BIO_s_mem());
+    SSL_set_bio(S->ssl, S->bioIn, S->bioOut);
+    S->sslReadBufferSize = DEFAULT_SSL_READ_BUFFER_SIZE;
+    S->sslReadBuffer = (uint8_t*)malloc(S->sslReadBufferSize);
+    S->sslWriteBufferSize = DEFAULT_SSL_READ_BUFFER_SIZE;
+    S->sslWriteBuffer = (uint8_t*)malloc(S->sslReadBufferSize);
+  } else {
+    SSL_clear(S->ssl);
+  }
+
+  initObjectRoot(&S->root, base, ioObjectUserDefined, sslSocketDestructor);
+  S->object = newSocketIo(base, socketCreate(AF_INET, SOCK_STREAM, IPPROTO_TCP, 1));
   return S;
 }
 

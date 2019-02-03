@@ -16,6 +16,8 @@
 #include <sys/epoll.h>
 #include <sys/timerfd.h>
 
+static __tls ObjectPool socketPool;
+
 #define MAX_EVENTS 256
 
 enum pipeDescrs {
@@ -146,6 +148,8 @@ static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpA
   tag_t currentTag = tag;
   asyncOpRoot *newOp = op;
   int hasFd = object->type == ioObjectDevice || object->type == ioObjectSocket;
+  if (hasFd && getFd((aioObject*)object) == -1)
+    return;
 
   while (currentTag) {
     int hasReadOp = object->readQueue.head != 0;
@@ -317,7 +321,13 @@ void epollNextFinishedOperation(asyncBase *base)
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
   epollBase *localBase = (epollBase*)base;
-  aioObject *object = __tagged_alloc(sizeof(aioObject));
+  aioObject *object = (aioObject*)objectGet(&socketPool);
+  if (!object) {
+    object = __tagged_alloc(sizeof(aioObject));
+    object->buffer.ptr = 0;
+    object->buffer.totalSize = 0;
+  }
+
   initObjectRoot(&object->root, base, type, (aioObjectDestructor*)epollDeleteObject);
   switch (type) {
     case ioObjectDevice :
@@ -330,6 +340,8 @@ aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
       break;
   }
 
+  object->buffer.offset = 0;
+  object->buffer.dataSize = 0;
   epollControl(localBase->epollFd, EPOLL_CTL_ADD, 0, getFd(object), object);
   return object;
 }
@@ -353,11 +365,22 @@ int epollCancelAsyncOp(asyncOpRoot *opptr)
 
 void epollDeleteObject(aioObject *object)
 {
-  int fd = getFd(object);
   epollBase *localBase = (epollBase*)object->root.base;
-  epollControl(localBase->epollFd, EPOLL_CTL_DEL, 0, fd, 0);
-  close(fd);
-  free(object);
+  switch (object->root.type) {
+    case ioObjectDevice :
+      epollControl(localBase->epollFd, EPOLL_CTL_DEL, 0, object->hDevice, 0);
+      close(object->hDevice);
+      object->hDevice = -1;
+      break;
+    case ioObjectSocket :
+      epollControl(localBase->epollFd, EPOLL_CTL_DEL, 0, object->hSocket, 0);
+      close(object->hSocket);
+      object->hSocket = -1;
+      break;
+    default :
+      break;
+  }
+  objectRelease(object, &socketPool);
 }
 
 void epollInitializeTimer(asyncBase *base, asyncOpRoot *op)
