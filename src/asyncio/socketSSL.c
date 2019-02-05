@@ -2,7 +2,7 @@
 #include "asyncio/coroutine.h"
 #include "asyncio/objectPool.h"
 #include "asyncio/socket.h"
-#include "asyncio/socketSSL.h" 
+#include "asyncio/socketSSL.h"
 #include "asyncioImpl.h"
 #include "atomic.h"
 #include <openssl/bio.h>
@@ -11,9 +11,9 @@
 #define DEFAULT_SSL_READ_BUFFER_SIZE 16384
 #define DEFAULT_SSL_WRITE_BUFFER_SIZE 16384
 
-static __tls ObjectPool sslSocketPool;
-static __tls ObjectPool sslPoolId;
-static __tls ObjectPool sslPoolTimerId;
+static const char *sslSocketPool = "SSLSocket";
+static const char *sslPoolId = "SSL";
+static const char *sslPoolTimerId = "SSLTimer";
 
 typedef enum {
   sslStInitalize = 0,
@@ -75,7 +75,7 @@ static SSLOp *allocReadSSLOp(aioExecuteProc executeProc,
                              uint64_t timeout)
 {
   SSLOp *op = (SSLOp*)
-    initAsyncOpRoot(&sslPoolId, &sslPoolTimerId, alloc, executeProc, cancel, finishProc, &socket->root, callback, arg, flags, opCode, timeout);
+    initAsyncOpRoot(sslPoolId, sslPoolTimerId, alloc, executeProc, cancel, finishProc, &socket->root, callback, arg, flags, opCode, timeout);
   op->buffer = buffer;
   op->transactionSize = size;
   op->bytesTransferred = 0;
@@ -95,7 +95,7 @@ static SSLOp *allocWriteSSLOp(aioExecuteProc executeProc,
                               uint64_t timeout)
 {
   SSLOp *op = (SSLOp*)
-    initAsyncOpRoot(&sslPoolId, &sslPoolTimerId, alloc, executeProc, cancel, finishProc, &socket->root, callback, arg, flags, opCode, timeout);
+    initAsyncOpRoot(sslPoolId, sslPoolTimerId, alloc, executeProc, cancel, finishProc, &socket->root, callback, arg, flags, opCode, timeout);
   op->buffer = (void*)(uintptr_t)buffer;
   op->transactionSize = size;
   op->bytesTransferred = 0;
@@ -127,7 +127,7 @@ size_t copyFromOut(SSLSocket *S)
     S->sslWriteBuffer = realloc(S->sslWriteBuffer, nBytes);
     S->sslWriteBufferSize = nBytes;
   }
-  
+
   // TODO: correct processing >4Gb data blocks
   BIO_read(S->bioOut, S->sslWriteBuffer, (int)nBytes);
   return nBytes;
@@ -191,11 +191,11 @@ static AsyncOpStatus readProc(asyncOpRoot *opptr)
 {
   SSLOp *op = (SSLOp*)opptr;
   SSLSocket *socket = (SSLSocket*)op->root.object;
-    
+
   for (;;) {
     uint8_t *ptr = ((uint8_t*)op->buffer) + op->bytesTransferred;
     size_t size = op->transactionSize-op->bytesTransferred;
-    
+
     size_t readResult = 0;
     int R;
     // TODO: correct processing >4Gb data blocks
@@ -204,7 +204,7 @@ static AsyncOpStatus readProc(asyncOpRoot *opptr)
       ptr += R;
       size -= (size_t)R;
     }
-    
+
     op->bytesTransferred += readResult;
     if (op->bytesTransferred == op->transactionSize || (op->bytesTransferred && !(op->root.flags & afWaitAll))) {
       return aosSuccess;
@@ -225,13 +225,13 @@ void sslSocketDestructor(aioObjectRoot *root)
 {
   SSLSocket *socket = (SSLSocket*)root;
   deleteAioObject(socket->object);
-  objectRelease(root, &sslSocketPool);
+  objectRelease(root, sslSocketPool);
 }
 
 
 SSLSocket *sslSocketNew(asyncBase *base)
 {
-  SSLSocket *S = objectGet(&sslSocketPool);
+  SSLSocket *S = objectGet(sslSocketPool);
   if (!S) {
     S = (SSLSocket*)malloc(sizeof(SSLSocket));
 #ifdef DEPRECATEDIN_1_1_0

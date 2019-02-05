@@ -186,7 +186,7 @@ struct aioObjectRoot {
 
 struct asyncOpRoot {
   volatile tag_t tag;
-  ObjectPool *poolId;
+  const char *poolId;
   aioExecuteProc *executeMethod;
   aioCancelProc *cancelMethod;
   aioFinishProc *finishMethod;
@@ -245,8 +245,8 @@ void resumeParent(asyncOpRoot *op, AsyncOpStatus status);
 void addToThreadLocalQueue(asyncOpRoot *op);
 void executeThreadLocalQueue();
 
-asyncOpRoot *initAsyncOpRoot(ObjectPool *nonTimerPool,
-                             ObjectPool *timerPool,
+asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
+                             const char *timerPool,
                              newAsyncOpTy *newOpProc,
                              aioExecuteProc *startMethod,
                              aioCancelProc *cancelMethod,

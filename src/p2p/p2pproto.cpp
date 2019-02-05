@@ -4,9 +4,9 @@
 #include "p2p/p2pformat.h"
 #include <stdlib.h>
 
-static __tls ObjectPool p2pConnectionPool;
-static __tls ObjectPool p2pPoolId;
-static __tls ObjectPool p2pPoolTimerId;
+static const char *p2pConnectionPool = "P2PConnection";
+static const char *p2pPoolId = "P2P";
+static const char *p2pPoolTimerId = "P2PTimer";
 
 enum p2pOpTy {
   p2pOpAccept = OPCODE_READ,
@@ -131,7 +131,7 @@ static p2pOp *allocp2pOp(aioExecuteProc *executeProc,
                          uint64_t timeout)
 {
   p2pOp *op = reinterpret_cast<p2pOp*>(
-    initAsyncOpRoot(&p2pPoolId, &p2pPoolTimerId, alloc, executeProc, cancel, finishProc, &connection->root, callback, arg, flags, opCode, timeout));
+    initAsyncOpRoot(p2pPoolId, p2pPoolTimerId, alloc, executeProc, cancel, finishProc, &connection->root, callback, arg, flags, opCode, timeout));
   if (stream)
     op->stream = stream;
   else
@@ -196,12 +196,12 @@ static void destructor(aioObjectRoot *root)
 {
   p2pConnection *connection = reinterpret_cast<p2pConnection*>(root);
   deleteAioObject(connection->socket);
-  objectRelease(root, &p2pConnectionPool);
+  objectRelease(root, p2pConnectionPool);
 }
 
 p2pConnection *p2pConnectionNew(aioObject *socket)
 {
-  p2pConnection *connection = static_cast<p2pConnection*>(objectGet(&p2pConnectionPool));
+  p2pConnection *connection = static_cast<p2pConnection*>(objectGet(p2pConnectionPool));
   if (!connection) {
     connection = static_cast<p2pConnection*>(malloc(sizeof(p2pConnection)));
     new(&connection->stream) xmstream;

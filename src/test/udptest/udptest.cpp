@@ -8,9 +8,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <thread>
-#ifndef OS_WINDOWS
-#include <unistd.h>
-#endif
 
 static unsigned gDebug = 0;
 static uint16_t gPortBase = 63300;
@@ -369,13 +366,13 @@ void test_aio(unsigned senderThreads, unsigned receiverThreads, uint16_t port, A
   asyncBase *base = createAsyncBase(amOSDefault);
   
   HostAddress address;  
-  Context ctx(port);
+  Context *ctx = new Context(port);
   SenderCtx *allSenders = new SenderCtx[senderThreads];
   ReceiverCtx *allReceivers = new ReceiverCtx[receiverThreads];  
   
   address.family = AF_INET;
   address.ipv4 = INADDR_ANY;
-  address.port = htons(ctx.port);
+  address.port = htons(ctx->port);
   socketTy serverSocket = socketCreate(AF_INET, SOCK_DGRAM, IPPROTO_UDP, receiverTy == aioReceiverBlocking ? 0 : 1);
   socketReuseAddr(serverSocket);
   if (socketBind(serverSocket, &address) != 0)
@@ -385,7 +382,7 @@ void test_aio(unsigned senderThreads, unsigned receiverThreads, uint16_t port, A
   aioObject *object = receiverTy != aioReceiverBlocking ? newSocketIo(base, serverSocket) : nullptr;
   for (unsigned i = 0; i < receiverThreads; i++) {
     allReceivers[i].base = base;
-    allReceivers[i].config = &ctx;
+    allReceivers[i].config = ctx;
     allReceivers[i].type = receiverTy;
     allReceivers[i].serverSocket = serverSocket;
     if (receiverTy != aioReceiverBlocking)
@@ -422,7 +419,7 @@ void test_aio(unsigned senderThreads, unsigned receiverThreads, uint16_t port, A
     if (socketBind(clientSocket, &address) != 0)
       exit(1);
     
-    allSenders[i].config = &ctx;
+    allSenders[i].config = ctx;
     allSenders[i].clientSocket = clientSocket;
     
     switch (senderTy) {
@@ -459,20 +456,12 @@ void test_aio(unsigned senderThreads, unsigned receiverThreads, uint16_t port, A
     if (!receivingActive)
       break;
     
-#ifdef OS_WINDOWS
-    Sleep(1000);
-#else
-    sleep(1);
-#endif
+    std::this_thread::sleep_for(std::chrono::seconds(1));
   }  
   
   postQuitOperation(base);
   if (gDebug) {
-#ifdef OS_WINDOWS
-    Sleep(1000);
-#else
-    sleep(1);
-#endif
+    std::this_thread::sleep_for(std::chrono::seconds(1));
   }
   
   uint64_t packetsNum = allReceivers[0].packetsNum;

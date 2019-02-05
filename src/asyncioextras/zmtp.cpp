@@ -2,9 +2,9 @@
 #include "asyncio/coroutine.h"
 #include "asyncio/objectPool.h"
 
-static __tls ObjectPool zmtpSocketPool;
-static __tls ObjectPool poolId;
-static __tls ObjectPool timerPoolId;
+static const char *zmtpSocketPool = "zmtpSocket";
+static const char *poolId = "zmtp";
+static const char *timerPoolId = "zmtpTimer";
 
 static uint8_t localSignature[] = {0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7F};
 static uint8_t localMajorVersion = 3;
@@ -201,7 +201,7 @@ zmtpOp *initOp(aioExecuteProc *start,
                int opCode)
 {
   asyncOpRoot *opptr =
-    initAsyncOpRoot(&poolId, &timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
+    initAsyncOpRoot(poolId, timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
   zmtpOp *op = reinterpret_cast<zmtpOp*>(opptr);
   op->state = stInitialize;
   op->stateRw = stInitialize;
@@ -221,7 +221,7 @@ zmtpOp *initReadOp(aioExecuteProc *start,
                    size_t size)
 {
   asyncOpRoot *opptr =
-    initAsyncOpRoot(&poolId, &timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
+    initAsyncOpRoot(poolId, timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
   zmtpOp *op = reinterpret_cast<zmtpOp*>(opptr);
   op->state = stInitialize;
   op->stateRw = stInitialize;
@@ -245,7 +245,7 @@ zmtpOp *initWriteOp(aioExecuteProc *start,
                     zmtpUserMsgTy type)
 {
   asyncOpRoot *opptr =
-    initAsyncOpRoot(&poolId, &timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
+    initAsyncOpRoot(poolId, timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
   zmtpOp *op = reinterpret_cast<zmtpOp*>(opptr);
   op->state = stInitialize;
   op->stateRw = stInitialize;
@@ -695,12 +695,12 @@ asyncOpRoot *implZmtpSend(zmtpSocket *socket, void *data, size_t size, zmtpUserM
 void zmtpSocketDestructor(aioObjectRoot *object)
 {
   deleteAioObject(reinterpret_cast<zmtpSocket*>(object)->plainSocket);
-  objectRelease(object, &zmtpSocketPool);
+  objectRelease(object, zmtpSocketPool);
 }
 
 zmtpSocket *zmtpSocketNew(asyncBase *base, aioObject *plainSocket, zmtpSocketTy type)
 {
-  zmtpSocket *socket = static_cast<zmtpSocket*>(objectGet(&zmtpSocketPool));
+  zmtpSocket *socket = static_cast<zmtpSocket*>(objectGet(zmtpSocketPool));
   if (!socket)
     socket = static_cast<zmtpSocket*>(malloc(sizeof(zmtpSocket)));
   initObjectRoot(&socket->root, base, ioObjectUserDefined, zmtpSocketDestructor);

@@ -112,7 +112,7 @@ void readCb(AsyncOpStatus status, aioObject *rawSocket, HostAddress address, siz
     if (receivedIcmp->icmp_type == ICMP_ECHOREPLY) {     
       std::map<unsigned, timeMark>::iterator F = client->times.find(receivedIcmp->icmp_id);
       if (F != client->times.end()) {
-        double diff = usDiff(F->second, getTimeMark());
+        double diff = static_cast<double>(usDiff(F->second, getTimeMark()));
         fprintf(stdout,
                 " * [%u] response from %s %0.4lgms\n",
                 static_cast<unsigned>(receivedIcmp->icmp_id),

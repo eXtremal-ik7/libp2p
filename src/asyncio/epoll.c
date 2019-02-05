@@ -16,7 +16,7 @@
 #include <sys/epoll.h>
 #include <sys/timerfd.h>
 
-static __tls ObjectPool socketPool;
+static const char *socketPool = "aioObject";
 
 #define MAX_EVENTS 256
 
@@ -321,7 +321,7 @@ void epollNextFinishedOperation(asyncBase *base)
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
   epollBase *localBase = (epollBase*)base;
-  aioObject *object = (aioObject*)objectGet(&socketPool);
+  aioObject *object = (aioObject*)objectGet(socketPool);
   if (!object) {
     object = __tagged_alloc(sizeof(aioObject));
     object->buffer.ptr = 0;
@@ -380,7 +380,7 @@ void epollDeleteObject(aioObject *object)
     default :
       break;
   }
-  objectRelease(object, &socketPool);
+  objectRelease(object, socketPool);
 }
 
 void epollInitializeTimer(asyncBase *base, asyncOpRoot *op)

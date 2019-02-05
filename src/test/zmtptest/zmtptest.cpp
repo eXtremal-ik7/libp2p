@@ -65,7 +65,7 @@ struct SenderContext {
 struct ReceiverContext {
   Configuration *cfg;
   uint64_t received;
-  long milliSecondsElapsed;
+  int64_t milliSecondsElapsed;
   decltype (std::chrono::steady_clock::now()) startPoint;
   decltype (std::chrono::steady_clock::now()) endPoint;
   asyncBase *base;
@@ -302,14 +302,14 @@ void senderRawProc(void *arg)
 #endif
 
     // Send first packet
-    ssize_t sendResult = send(ctx->socketId, packet, ctx->cfg->packetSize+2, 0);
+    ssize_t sendResult = send(ctx->socketId, reinterpret_cast<const char*>(packet), ctx->cfg->packetSize+2, 0);
     if (sendResult > 0) {
       bool run = true;
       auto startTime = std::chrono::steady_clock::now();
       uint64_t packetsNum = 0;
       while (run) {
         for (unsigned i = 0; i < 128; i++) {
-          sendResult = send(ctx->socketId, packet, ctx->cfg->packetSize+2, 0);
+          sendResult = send(ctx->socketId, reinterpret_cast<const char*>(packet), ctx->cfg->packetSize+2, 0);
           if (sendResult < 0) {
             run = false;
             break;

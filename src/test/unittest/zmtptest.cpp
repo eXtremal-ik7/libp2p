@@ -531,7 +531,7 @@ void aio_pull_accept_coro(void *arg)
 {
   zmtpSocket *socket = nullptr;
   auto ctx = static_cast<zmtpContext*>(arg);
-  int fd = ioAccept(ctx->listener, 1000000);
+  socketTy fd = ioAccept(ctx->listener, 1000000);
   EXPECT_GT(fd, 0);
   if (fd > 0) {
     socket = zmtpSocketNew(ctx->base, newSocketIo(ctx->base, fd), zmtpSocketPULL);
@@ -965,7 +965,7 @@ void aio_rep_accept_coro(void *arg)
 {
   auto ctx = static_cast<zmtpContext*>(arg);
   zmtpSocket *socket = nullptr;
-  int fd = ioAccept(ctx->listener, 1000000);
+  socketTy fd = ioAccept(ctx->listener, 1000000);
   EXPECT_GT(fd, 0);
   if (fd > 0) {
     socket = zmtpSocketNew(ctx->base, newSocketIo(ctx->base, fd), zmtpSocketREP);

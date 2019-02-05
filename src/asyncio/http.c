@@ -5,9 +5,9 @@
 #include "asyncio/objectPool.h"
 #include <string.h>
 
-static __tls ObjectPool httpClientPool;
-static __tls ObjectPool httpPoolId;
-static __tls ObjectPool httpPoolTimerId;
+static const char *httpClientPool = "HTTPClient";
+static const char *httpPoolId = "HTTP";
+static const char *httpPoolTimerId = "HTTPTimer";
 
 typedef enum {
   httpOpConnect = 0,
@@ -180,14 +180,14 @@ static AsyncOpStatus httpParseStart(asyncOpRoot *opptr)
 static HTTPOp *allocHttpOp(aioExecuteProc executeProc,
                            aioFinishProc finishProc,
                            HTTPClient *client,
-                           int type,           
+                           int type,
                            httpParseCb parseCallback,
                            void *callback,
                            void *arg,
                            uint64_t timeout)
 {
   HTTPOp *op = (HTTPOp*)
-    initAsyncOpRoot(&httpPoolId, &httpPoolTimerId, alloc, executeProc, cancel, finishProc, &client->root, callback, arg, 0, type, timeout);
+    initAsyncOpRoot(httpPoolId, httpPoolTimerId, alloc, executeProc, cancel, finishProc, &client->root, callback, arg, 0, type, timeout);
 
   op->parseCallback = parseCallback;
   op->resultCode = 0;
@@ -245,12 +245,12 @@ static void httpClientDestructor(aioObjectRoot *root)
     sslSocketDelete(client->sslSocket);
   else
     deleteAioObject(client->plainSocket);
-  objectRelease(root, &httpClientPool);
+  objectRelease(root, httpClientPool);
 }
 
 HTTPClient *httpClientNew(asyncBase *base, aioObject *socket)
 {
-  HTTPClient *client = objectGet(&httpClientPool);
+  HTTPClient *client = objectGet(httpClientPool);
   if (!client) {
     client = (HTTPClient*)malloc(sizeof(HTTPClient));
     client->inBuffer = (uint8_t*)malloc(65536);
@@ -268,7 +268,7 @@ HTTPClient *httpClientNew(asyncBase *base, aioObject *socket)
 
 HTTPClient *httpsClientNew(asyncBase *base, SSLSocket *socket)
 {
-  HTTPClient *client = objectGet(&httpClientPool);
+  HTTPClient *client = objectGet(httpClientPool);
   if (!client) {
     client = (HTTPClient*)malloc(sizeof(HTTPClient));
     client->inBuffer = (uint8_t*)malloc(65536);

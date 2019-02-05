@@ -2,19 +2,13 @@
 #include <winsock2.h>
 #include <mswsock.h>
 #include <windows.h>
-
 #include "asyncioImpl.h"
 #include "atomic.h"
 #include <time.h>
 
+static const char *socketPool = "aioObject";
 
 typedef struct iocpOp iocpOp;
-
-typedef enum iocpOpStateTy {
-  iocpStatePending = 0,
-  iocpStateRunning,
-  iocpStatePacketWaiting
-} iocpOpStateTy;
 
 typedef struct recvFromData {
   struct sockaddr_in addr;
@@ -24,12 +18,13 @@ typedef struct recvFromData {
 typedef struct iocpBase {
   asyncBase B;
   HANDLE completionPort;
+  HANDLE timerThread;
   LPFN_CONNECTEX ConnectExPtr;
 } iocpBase;
 
 typedef struct iocpOp {
   asyncOp info;
-  iocpOpStateTy state;
+  LARGE_INTEGER signalTime;
   OVERLAPPED overlapped;
 } iocpOp;
 
@@ -43,6 +38,7 @@ void postEmptyOperation(asyncBase *base);
 void iocpNextFinishedOperation(asyncBase *base);
 aioObject *iocpNewAioObject(asyncBase *base, IoObjectTy type, void *data);
 asyncOpRoot *iocpNewAsyncOp();
+int iocpCancelAsyncOp(asyncOpRoot *opptr);
 void iocpDeleteObject(aioObject *op);
 void iocpInitializeTimer(asyncBase *base, asyncOpRoot *op);
 void iocpStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic);
@@ -61,6 +57,7 @@ static struct asyncImpl iocpImpl = {
   iocpNextFinishedOperation,
   iocpNewAioObject,
   iocpNewAsyncOp,
+  iocpCancelAsyncOp,
   iocpDeleteObject,
   iocpInitializeTimer,
   iocpStartTimer,
@@ -91,6 +88,13 @@ static HANDLE getHandle(aioObject *object)
   }
 }
 
+static DWORD WINAPI timerThreadProc(LPVOID lpParameter)
+{
+  while (1)
+    SleepEx(INFINITE, TRUE);
+  return 0;
+}
+
 static AsyncOpStatus iocpGetOverlappedResult(iocpOp *op)
 {
   DWORD bytesTransferred;
@@ -109,7 +113,7 @@ static AsyncOpStatus iocpGetOverlappedResult(iocpOp *op)
       int error = WSAGetLastError();
       if (error == WSAEMSGSIZE)
         return aosBufferTooSmall;
-      else if (error == ERROR_NETNAME_DELETED)
+      else if (error == WSAECONNRESET || error == ERROR_NETNAME_DELETED)
         return aosDisconnected;
       else if (error == ERROR_OPERATION_ABORTED)
         return aosCanceled;
@@ -155,106 +159,6 @@ static VOID CALLBACK ioFinishedTimerCb(LPVOID lpArgToCompletionRoutine, DWORD dw
   opCancel(timer->op, opEncodeTag(timer->op, timerTag), aosTimeout);
 }
 
-static void opRun(asyncOpRoot *op, List *list)
-{
-  eqPushBack(list, op);
-  if (op->timeout) {
-    asyncBase *base = op->object->base;
-    if (op->flags & afRealtime) {
-      // start timer for this operation
-      base->methodImpl.startTimer(op, op->timeout, op->opCode == actUserEvent);
-    } else {
-      // add operation to timeout grid
-      op->endTime = ((uint64_t)time(0)) * 1000000ULL + op->timeout;
-      addToTimeoutQueue(base, op);
-    }
-  }
-}
-
-void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finished, tag_t *needStart)
-{
-  List *list = 0;
-  tag_t tag = 0;
-  int restart = 0;
-  aioObjectRoot *object = opptr->object;
-  int isIocp = object->type == ioObjectDevice || object->type == ioObjectSocket;
-  if (opptr->opCode & OPCODE_WRITE) {
-    list = &object->writeQueue;
-    tag = TAG_WRITE;
-  } else {
-    list = &object->readQueue;
-    tag = TAG_READ;
-  }
-
-  asyncOpRoot *queueHead = list->head;
-
-  switch (actionType) {
-    case aaStart : {
-      opRun(opptr, list);
-      if (object->type != ioObjectUserDefined) {
-        iocpOp *op = (iocpOp*)opptr;
-        memset(&op->overlapped, 0, sizeof(op->overlapped));
-        op->state = iocpStatePending;
-      }
-
-      break;
-    }
-
-    case aaFinish : {
-      if (isIocp) {
-        iocpOp *op = (iocpOp*)opptr;
-        if (op->state == iocpStateRunning) {
-          CancelIoEx(getHandle((aioObject*)object), &op->overlapped);
-          op->state = iocpStatePacketWaiting;
-        } else {
-          opRelease(opptr, opGetStatus(opptr), list, finished);
-        }
-      } else {
-        opRelease(opptr, opGetStatus(opptr), list, finished);
-      }
-      break;
-    }
-
-    case aaIOCPPacket : {
-      opRelease(opptr, opGetStatus(opptr), list, finished);
-      break;
-    }
-
-    case aaIOCPRestart : {
-      iocpOp *op = (iocpOp*)opptr;
-      if (op->state == iocpStateRunning) {
-        memset(&op->overlapped, 0, sizeof(op->overlapped));
-        op->state = iocpStatePending;
-        restart = 1;
-      } else if (op->state == iocpStatePacketWaiting) {
-        opRelease(opptr, opGetStatus(opptr), list, finished);
-      }
-      break;
-    }
-  }
-
-  *needStart |= (list->head && (list->head != queueHead || restart)) ? tag : 0;
-}
-
-static void iocpCancelOperationList(List *list, List *finished, AsyncOpStatus status)
-{
-  iocpOp *op = (iocpOp*)list->head;
-  while (op) {
-    asyncOpRoot *opptr = &op->info.root;
-    iocpOp *next = (iocpOp*)opptr->executeQueue.next;
-    if (opSetStatus(opptr, opGetGeneration(opptr), status)) {
-      if (op->state == iocpStateRunning) {
-        CancelIoEx(getHandle((aioObject*)opptr->object), &op->overlapped);
-        op->state = iocpStatePacketWaiting;
-      } else {
-        opRelease(opptr, aosCanceled, list, finished);
-      }
-    }
-
-    op = next;
-  }
-}
-
 void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
 {
   tag_t currentTag = tag;
@@ -262,13 +166,8 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
 
   while (currentTag) {
     if (currentTag & TAG_CANCELIO) {
-      if (object->type == ioObjectDevice || object->type == ioObjectSocket) {
-        iocpCancelOperationList(&object->readQueue, &threadLocalQueue, aosCanceled);
-        iocpCancelOperationList(&object->writeQueue, &threadLocalQueue, aosCanceled);
-      } else {
-        cancelOperationList(&object->readQueue, &threadLocalQueue, aosCanceled);
-        cancelOperationList(&object->writeQueue, &threadLocalQueue, aosCanceled);
-      }
+      cancelOperationList(&object->readQueue, &threadLocalQueue, aosCanceled);
+      cancelOperationList(&object->writeQueue, &threadLocalQueue, aosCanceled);
     }
 
     // Check for delete
@@ -288,9 +187,9 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
         enqueuedOperationsNum = 1;
         newOp = 0;
       } 
-      
+
       while (enqueuedOperationsNum < pendingOperationsNum)
-        processOperationList(object, &threadLocalQueue, &needStart, processAction, &enqueuedOperationsNum);
+        processOperationList(object, &threadLocalQueue, &needStart, &enqueuedOperationsNum);
     }
 
     if (needStart & TAG_READ_MASK)
@@ -299,23 +198,15 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
       executeOperationList(&object->writeQueue, &threadLocalQueue);
 
     // Try exit combiner
-#ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable:4146)
-#endif
     tag_t processed = __tag_make_processed(currentTag, enqueuedOperationsNum);
-    currentTag = __tag_atomic_fetch_and_add(&object->tag, -processed);
+    currentTag = __tag_atomic_fetch_and_add(&object->tag, ((tag_t)0)-processed);
     currentTag -= processed;
-#ifdef _MSC_VER
-#pragma warning(pop)
-#endif
   }
 }
 
 void postEmptyOperation(asyncBase *base)
 {
-  iocpBase *localBase = (iocpBase*)base;
-  PostQueuedCompletionStatus(localBase->completionPort, 0, 0, 0);
+  PostQueuedCompletionStatus(((iocpBase*)base)->completionPort, 0, 0, 0);
 }
 
 
@@ -327,9 +218,11 @@ asyncBase *iocpNewAsyncBase()
     DWORD numBytes = 0;
     GUID guid = WSAID_CONNECTEX;
 
+    DWORD tid;
     base->completionPort =
       CreateIoCompletionPort(INVALID_HANDLE_VALUE, 0, 0, 0);
-
+    base->timerThread =
+      CreateThread(NULL, 0x10000, timerThreadProc, NULL, THREAD_PRIORITY_NORMAL, &tid);
     base->ConnectExPtr = 0;
     tmpSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     WSAIoctl(tmpSocket,
@@ -365,7 +258,7 @@ void iocpNextFinishedOperation(asyncBase *base)
       maxEntriesNum,
       &N,
       threadLocalQueue.head ? 0 : 500,
-      TRUE);
+      FALSE);
 
     time_t currentTime = time(0);
     if (currentTime % base->messageLoopThreadCounter == messageLoopThreadId)
@@ -385,7 +278,12 @@ void iocpNextFinishedOperation(asyncBase *base)
         iocpOp *op = (iocpOp*)(((uint8_t*)entry->lpOverlapped) - offsetof(struct iocpOp, overlapped));
         AsyncOpStatus result = iocpGetOverlappedResult(op);
         if (result == aosSuccess) {
-          op->info.bytesTransferred += entry->dwNumberOfBytesTransferred;
+          aioObject *object = (aioObject*)op->info.root.object;
+          int isBuffered = op->info.root.opCode == actRead && op->info.transactionSize < object->buffer.totalSize;
+          if (!isBuffered)
+            op->info.bytesTransferred += entry->dwNumberOfBytesTransferred;
+          else
+            object->buffer.dataSize = entry->dwNumberOfBytesTransferred;
           if (op->info.root.opCode == actAccept) {
             struct sockaddr_in *localAddr = 0;
             struct sockaddr_in *remoteAddr = 0;
@@ -405,8 +303,8 @@ void iocpNextFinishedOperation(asyncBase *base)
               result = aosUnknownError;
             }
           } else if (op->info.root.opCode == actRead || op->info.root.opCode == actWrite) {
-            if ((op->info.root.flags & afWaitAll) && op->info.bytesTransferred < op->info.transactionSize) {
-              combinerCall(op->info.root.object, 1, &op->info.root, aaIOCPRestart);
+            if (isBuffered || ((op->info.root.flags & afWaitAll) && op->info.bytesTransferred < op->info.transactionSize)) {
+              combinerCall(op->info.root.object, 1, &op->info.root, aaContinue);
               continue;
             }
           } else if (op->info.root.opCode == actReadMsg) {
@@ -418,11 +316,13 @@ void iocpNextFinishedOperation(asyncBase *base)
         }
 
         opSetStatus(&op->info.root, opGetGeneration(&op->info.root), result);
-        combinerCall(op->info.root.object, 1, &op->info.root, aaIOCPPacket);
+        combinerCall(op->info.root.object, 1, &op->info.root, aaFinish);
       } else {
         while (threadLocalQueue.head)
           executeThreadLocalQueue();
-        __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, -1);
+        unsigned threadsRunning = __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, -1) - 1;
+        if (threadsRunning)
+          PostQueuedCompletionStatus(((iocpBase*)base)->completionPort, 0, 0, 0);
         return;
       }
     }
@@ -433,21 +333,29 @@ void iocpNextFinishedOperation(asyncBase *base)
 aioObject *iocpNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
   iocpBase *localBase = (iocpBase*)base;
-  aioObject *object = malloc(sizeof(aioObject));
-  initObjectRoot(&object->root, base, type, (aioObjectDestructor*)iocpDeleteObject);
-  switch (type) {
-  case ioObjectDevice:
-    object->hDevice = *(iodevTy *)data;
-    CreateIoCompletionPort(object->hDevice, localBase->completionPort, 0, 1);
-    break;
-  case ioObjectSocket:
-    object->hSocket = *(socketTy *)data;
-    CreateIoCompletionPort(object->hDevice, localBase->completionPort, 0, 1);
-    break;
-  default:
-    break;
+  aioObject *object = (aioObject*)objectGet(socketPool);
+  if (!object) {
+    object = malloc(sizeof(aioObject));
+    object->buffer.ptr = 0;
+    object->buffer.totalSize = 0;
   }
 
+  initObjectRoot(&object->root, base, type, (aioObjectDestructor*)iocpDeleteObject);
+  switch (type) {
+    case ioObjectDevice:
+      object->hDevice = *(iodevTy *)data;
+      CreateIoCompletionPort(object->hDevice, localBase->completionPort, 0, 1);
+      break;
+    case ioObjectSocket:
+      object->hSocket = *(socketTy *)data;
+      CreateIoCompletionPort(object->hDevice, localBase->completionPort, 0, 1);
+      break;
+    default:
+      break;
+  }
+
+  object->buffer.offset = 0;
+  object->buffer.dataSize = 0;
   return object;
 }
 
@@ -460,6 +368,24 @@ asyncOpRoot *iocpNewAsyncOp()
     memset(op, 0, sizeof(iocpOp));
 
   return (asyncOpRoot*)op;
+}
+
+int iocpCancelAsyncOp(asyncOpRoot *opptr)
+{
+  aioObject *object = (aioObject*)opptr->object;
+  iocpOp *op = (iocpOp*)opptr;
+  switch (object->root.type) {
+    case ioObjectDevice:
+      CancelIoEx(object->hDevice, &op->overlapped);
+      break;
+    case ioObjectSocket:
+      CancelIoEx((HANDLE)object->hSocket, &op->overlapped);
+      break;
+    default:
+      break;
+  }
+
+  return 0;
 }
 
 void iocpDeleteObject(aioObject *object)
@@ -475,7 +401,7 @@ void iocpDeleteObject(aioObject *object)
       break;
   }
 
-  free(object);
+  objectRelease(object, socketPool);
 }
 
 void iocpInitializeTimer(asyncBase *base, asyncOpRoot *op)
@@ -486,33 +412,40 @@ void iocpInitializeTimer(asyncBase *base, asyncOpRoot *op)
   op->timerId = timer;
 }
 
-void iocpStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic)
+static VOID CALLBACK timerStartProc(ULONG_PTR dwParam)
 {
-  LARGE_INTEGER signalTime;
-  signalTime.QuadPart = -(int64_t)(usTimeout * 10);
-
+  iocpOp *op = (iocpOp*)dwParam;
   PTIMERAPCROUTINE timerCb;
-  switch (op->opCode) {
-  case actUserEvent:
-    timerCb = userEventTimerCb;
-    break;
-  default:
-    timerCb = ioFinishedTimerCb;
-    break;
+  switch (op->info.root.opCode) {
+    case actUserEvent:
+      timerCb = userEventTimerCb;
+      break;
+    default:
+      timerCb = ioFinishedTimerCb;
+      break;
   }
 
-  aioTimer *timer = (aioTimer*)op->timerId;
-  SetWaitableTimer(timer->hTimer, &signalTime, 0, timerCb, __tagged_pointer_make(timer, opGetGeneration(op)), FALSE);
+  aioTimer *timer = (aioTimer*)op->info.root.timerId;
+  SetWaitableTimer(timer->hTimer, &op->signalTime, 0, timerCb, __tagged_pointer_make(timer, opGetGeneration(&op->info.root)), FALSE);
+}
+
+void iocpStartTimer(asyncOpRoot *opptr, uint64_t usTimeout, int periodic)
+{
+  iocpBase *base = opptr->opCode == actUserEvent ?
+    (iocpBase*)(((aioUserEvent*)opptr)->base) : (iocpBase*)opptr->object->base;
+  iocpOp *op = (iocpOp*)opptr;
+  op->signalTime.QuadPart = -(int64_t)(usTimeout * 10);
+  QueueUserAPC(timerStartProc, base->timerThread, (ULONG_PTR)op);
 }
 
 
 void iocpStopTimer(asyncOpRoot *op)
 {
-  CancelWaitableTimer((HANDLE)op->timerId);
+  CancelWaitableTimer(((aioTimer*)op->timerId)->hTimer);
 }
 
 
-void iocpActivate(aioUserEvent *event)
+void iocpActivate(aioUserEvent *event) 
 {
   iocpBase *localBase = (iocpBase*)event->base;
   PostQueuedCompletionStatus(localBase->completionPort, 0, (ULONG_PTR)&event->root, 0);
@@ -529,6 +462,7 @@ AsyncOpStatus iocpAsyncConnect(asyncOpRoot *opptr)
   localAddress.sin_family = op->info.host.family;
   localAddress.sin_addr.s_addr = op->info.host.ipv4;
   localAddress.sin_port = op->info.host.port;
+  memset(&op->overlapped, 0, sizeof(op->overlapped));
   int result = localBase->ConnectExPtr(object->hSocket, (const struct sockaddr*)&localAddress, sizeof(struct sockaddr_in), NULL, 0, NULL, &op->overlapped);
   return (result == 0 || WSAGetLastError() == WSA_IO_PENDING) ?
     aosPending :
@@ -554,6 +488,7 @@ AsyncOpStatus iocpAsyncAccept(asyncOpRoot *opptr)
   op->info.acceptSocket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
   ioctlsocket(op->info.acceptSocket, FIONBIO, &arg);
 
+  memset(&op->overlapped, 0, sizeof(op->overlapped));
   int result = AcceptEx(object->hSocket,
                         op->info.acceptSocket,
                         op->info.internalBuffer,
@@ -564,7 +499,6 @@ AsyncOpStatus iocpAsyncAccept(asyncOpRoot *opptr)
                         &op->overlapped);
 
   if (result == 0 || WSAGetLastError() == WSA_IO_PENDING) {
-    op->state = iocpStateRunning;
     return aosPending;
   } else {
     return aosUnknownError;
@@ -577,16 +511,30 @@ AsyncOpStatus iocpAsyncRead(asyncOpRoot *opptr)
   WSABUF wsabuf;
   iocpOp *op = (iocpOp*)opptr;
   aioObject *object = getObject(op);
+  struct ioBuffer *sb = &object->buffer;
   DWORD flags = 0;
-  // TODO: correct processing >4Gb data blocks
-  wsabuf.buf = op->info.buffer;
-  wsabuf.len = (ULONG)op->info.transactionSize;
-  int result = WSARecv(object->hSocket, &wsabuf, 1, NULL, &flags, &op->overlapped, NULL);
-  if (result == 0 || WSAGetLastError() == WSA_IO_PENDING) {
-    op->state = iocpStateRunning;
-    return aosPending;
+
+  if (copyFromBuffer(op->info.buffer, &op->info.bytesTransferred, sb, op->info.transactionSize))
+    return aosSuccess;
+
+  if (op->info.transactionSize <= object->buffer.totalSize) {
+    wsabuf.buf = sb->ptr;
+    wsabuf.len = (ULONG)sb->totalSize;
+    memset(&op->overlapped, 0, sizeof(op->overlapped));
+    int result = WSARecv(object->hSocket, &wsabuf, 1, NULL, &flags, &op->overlapped, NULL);
+    if (result == 0 || WSAGetLastError() == WSA_IO_PENDING)
+      return aosPending;
+    else
+      return aosUnknownError;
   } else {
-    return aosUnknownError;
+    wsabuf.buf = (CHAR*)op->info.buffer + op->info.bytesTransferred;
+    wsabuf.len = (ULONG)(op->info.transactionSize - op->info.bytesTransferred);
+    memset(&op->overlapped, 0, sizeof(op->overlapped));
+    int result = WSARecv(object->hSocket, &wsabuf, 1, NULL, &flags, &op->overlapped, NULL);
+    if (result == 0 || WSAGetLastError() == WSA_IO_PENDING)
+      return aosPending;
+    else
+      return aosUnknownError;
   }
 }
 
@@ -597,11 +545,11 @@ AsyncOpStatus iocpAsyncWrite(asyncOpRoot *opptr)
   iocpOp *op = (iocpOp*)opptr;
   aioObject *object = getObject(op);
   // TODO: correct processing >4Gb data blocks
-  wsabuf.buf = op->info.buffer;
-  wsabuf.len = (ULONG)op->info.transactionSize;
+  wsabuf.buf = (CHAR*)op->info.buffer + op->info.bytesTransferred;
+  wsabuf.len = wsabuf.len = (ULONG)(op->info.transactionSize - op->info.bytesTransferred);
+  memset(&op->overlapped, 0, sizeof(op->overlapped));
   int result = WSASend(object->hSocket, &wsabuf, 1, NULL, 0, &op->overlapped, NULL);
   if (result == 0 || WSAGetLastError() == WSA_IO_PENDING) {
-    op->state = iocpStateRunning;
     return aosPending;
   } else {
     return aosUnknownError;
@@ -632,9 +580,9 @@ AsyncOpStatus iocpAsyncReadMsg(asyncOpRoot *opptr)
   wsabuf.buf = op->info.buffer;
   wsabuf.len = (ULONG)op->info.transactionSize;
 
+  memset(&op->overlapped, 0, sizeof(op->overlapped));
   int result = WSARecvFrom(object->hSocket, &wsabuf, 1, NULL, &flags, (SOCKADDR*)&rf->addr, &rf->size, &op->overlapped, NULL);
   if (result == 0 || WSAGetLastError() == WSA_IO_PENDING) {
-    op->state = iocpStateRunning;
     return aosPending;
   } else {
     return aosUnknownError;
@@ -655,9 +603,9 @@ AsyncOpStatus iocpAsyncWriteMsg(asyncOpRoot *opptr)
   remoteAddress.sin_family = op->info.host.family;
   remoteAddress.sin_addr.s_addr = op->info.host.ipv4;
   remoteAddress.sin_port = op->info.host.port;
+  memset(&op->overlapped, 0, sizeof(op->overlapped));
   int result = WSASendTo(object->hSocket, &wsabuf, 1, NULL, 0, (struct sockaddr*)&remoteAddress, sizeof(remoteAddress), &op->overlapped, NULL);
   if (result == 0 || WSAGetLastError() == WSA_IO_PENDING) {
-    op->state = iocpStateRunning;
     return aosPending;
   } else {
     return aosUnknownError;

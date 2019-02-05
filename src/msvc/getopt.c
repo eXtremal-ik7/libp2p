@@ -546,7 +546,7 @@ _getopt_internal_r (int argc, char *const *argv, const char *optstring,
 
       for (nameend = d->__nextchar; *nameend && *nameend != '='; nameend++)
 	/* Do nothing.  */ ;
-      namelen = nameend - d->__nextchar;
+      namelen = (unsigned int)(nameend - d->__nextchar);
 
       /* Test all long options for either exact match
 	 or abbreviated matches.  */

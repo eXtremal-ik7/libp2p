@@ -9,9 +9,9 @@
 #include <string.h>
 #include <time.h>
 
-static __tls ObjectPool poolId;
-static __tls ObjectPool timerPoolId;
-static __tls ObjectPool eventPoolId;
+static const char *poolId = "asyncIo";
+static const char *timerPoolId = "asyncIoTimer";
+static const char *eventPoolId = "asyncIoEvent";
 
 #ifdef OS_WINDOWS
 asyncBase *iocpNewAsyncBase();
@@ -70,8 +70,8 @@ static asyncOp *initReadAsyncOp(aioExecuteProc *startProc,
                                 void *buffer,
                                 size_t transactionSize)
 {
-  asyncOp *op = (asyncOp*)initAsyncOpRoot(&poolId,
-                                          &timerPoolId,
+  asyncOp *op = (asyncOp*)initAsyncOpRoot(poolId,
+                                          timerPoolId,
                                           object->root.base->methodImpl.newAsyncOp,
                                           startProc,
                                           object->root.base->methodImpl.cancelAsyncOp,
@@ -101,8 +101,8 @@ static asyncOp *initWriteAsyncOp(aioExecuteProc *startProc,
                                  const void *buffer,
                                  size_t transactionSize)
 {
-  asyncOp *op = (asyncOp*)initAsyncOpRoot(&poolId,
-                                          &timerPoolId,
+  asyncOp *op = (asyncOp*)initAsyncOpRoot(poolId,
+                                          timerPoolId,
                                           object->root.base->methodImpl.newAsyncOp,
                                           startProc,
                                           object->root.base->methodImpl.cancelAsyncOp,
@@ -260,10 +260,10 @@ void setSocketBuffer(aioObject *socket, size_t bufferSize)
 
 aioUserEvent *newUserEvent(asyncBase *base, aioEventCb callback, void *arg)
 {
-  aioUserEvent *event = (aioUserEvent*)objectGet(&eventPoolId);
+  aioUserEvent *event = (aioUserEvent*)objectGet(eventPoolId);
   if (!event) {
     event = malloc(sizeof(aioUserEvent));
-    event->root.poolId = &eventPoolId;
+    event->root.poolId = eventPoolId;
     base->methodImpl.initializeTimer(base, &event->root);
   }
 
@@ -334,6 +334,11 @@ asyncOpRoot *implRead(aioObject *object,
 {
   *bytesTransferred = 0;
   struct ioBuffer *sb = &object->buffer;
+#ifdef OS_WINDOWS
+  AsyncFlags extraFlags = afNone;
+#else
+  AsyncFlags extraFlags = afRunning;
+#endif
 
   if (copyFromBuffer(buffer, bytesTransferred, sb, size))
     return 0;
@@ -349,7 +354,7 @@ asyncOpRoot *implRead(aioObject *object,
         if (copyFromBuffer(buffer, bytesTransferred, sb, size) || !(flags & afWaitAll))
           break;
       } else {
-        asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)callback, arg, flags|afRunning, actRead, usTimeout, buffer, size);
+        asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)callback, arg, flags|extraFlags, actRead, usTimeout, buffer, size);
         op->bytesTransferred = *bytesTransferred;
         return &op->root;
       }
@@ -365,7 +370,7 @@ asyncOpRoot *implRead(aioObject *object,
     if (result) {
       return 0;
     } else {
-      asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)callback, arg, flags|afRunning, actRead, usTimeout, buffer, size);
+      asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)callback, arg, flags|extraFlags, actRead, usTimeout, buffer, size);
       op->bytesTransferred = *bytesTransferred;
       return &op->root;
     }
@@ -388,6 +393,11 @@ asyncOpRoot *implWrite(aioObject *object,
                        void *arg,
                        size_t *bytesTransferred)
 {
+#ifdef OS_WINDOWS
+  AsyncFlags extraFlags = afNone;
+#else
+  AsyncFlags extraFlags = afRunning;
+#endif
   size_t bytes = 0;
   int result = object->root.type == ioObjectSocket ?
     socketSyncWrite(object->hSocket, buffer, size, flags & afWaitAll, &bytes) :
@@ -396,7 +406,7 @@ asyncOpRoot *implWrite(aioObject *object,
     *bytesTransferred = bytes;
     return 0;
   } else {
-    asyncOp *op = initWriteAsyncOp(object->root.base->methodImpl.write, rwFinish, object, (void*)callback, arg, flags|afRunning, actWrite, usTimeout, buffer, size);
+    asyncOp *op = initWriteAsyncOp(object->root.base->methodImpl.write, rwFinish, object, (void*)callback, arg, flags|extraFlags, actWrite, usTimeout, buffer, size);
     op->bytesTransferred = bytes;
     return &op->root;
   }
@@ -419,7 +429,12 @@ void aioAccept(aioObject *object,
                aioAcceptCb callback,
                void *arg)
 {
-  asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.accept, acceptFinish, object, (void*)callback, arg, afRunning, actAccept, usTimeout, 0, 0);
+#ifdef OS_WINDOWS
+  AsyncFlags flags = afNone;
+#else
+  AsyncFlags flags = afRunning;
+#endif
+  asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.accept, acceptFinish, object, (void*)callback, arg, flags, actAccept, usTimeout, 0, 0);
   opStart(&op->root);
 }
 

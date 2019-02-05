@@ -7,15 +7,20 @@ extern "C" {
 
 #include <stddef.h>
 
-typedef struct ObjectPool {
-  const void *type;
+typedef struct {
+  const char *type;
   size_t blocksNumMax;
   size_t blocksNum;
   void **blocks;
+} ObjectList;
+
+typedef struct ObjectPool {
+  ObjectList *elements;
+  size_t elementsNum;
 } ObjectPool;
 
-void *objectGet(ObjectPool *poolId);
-void objectRelease(void *ptr, ObjectPool *poolId);
+void *objectGet(const char *type);
+void objectRelease(void *ptr, const char *type);
 
 #endif //__ASYNCIO_OBJECTPOOL_H_
 

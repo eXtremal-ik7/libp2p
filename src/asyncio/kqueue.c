@@ -12,7 +12,7 @@
 #include <string.h>
 #include <unistd.h>
 
-static __tls ObjectPool socketPool;
+static const char *socketPool = "aioObject";
 
 #define MAX_EVENTS 256
 
@@ -294,7 +294,7 @@ void kqueueNextFinishedOperation(asyncBase *base)
 
 aioObject *kqueueNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
-  aioObject *object = (aioObject*)objectGet(&socketPool);
+  aioObject *object = (aioObject*)objectGet(socketPool);
   if (!object) {
     object = __tagged_alloc(sizeof(aioObject));
     object->buffer.ptr = 0;
@@ -349,7 +349,7 @@ void kqueueDeleteObject(aioObject *object)
     default :
       break;
   }
-  objectRelease(object, &socketPool);
+  objectRelease(object, socketPool);
 }
 
 void kqueueInitializeTimer(asyncBase *base, asyncOpRoot *op)

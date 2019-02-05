@@ -1,7 +1,7 @@
 if (WIN32)
-  set(LIBRARIES asyncio-0.4 p2p ws2_32 mswsock)
+  set(LIBRARIES asyncio-0.4 ws2_32 mswsock)
 else()
-  set(LIBRARIES asyncio-0.4 p2p)
+  set(LIBRARIES asyncio-0.4)
 endif()
 
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")

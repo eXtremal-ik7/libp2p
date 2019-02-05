@@ -33,7 +33,7 @@ template<typename Type> size_t xitoa(Type value, char *out)
   char *pout = out, *pOutEnd;
   
   if (lvalue < 0) {
-    lvalue = -lvalue;
+    lvalue = ((Type)0)-lvalue;
     *pout++ = '-';
     lout++;
   }
