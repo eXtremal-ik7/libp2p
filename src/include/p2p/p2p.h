@@ -9,7 +9,7 @@ class p2pPeer;
 class xmstream;
 
 typedef void p2pNodeCb(p2pPeer*);
-typedef void p2pRequestCb(p2pPeer*, uint64_t, void*, size_t, void*);
+typedef void p2pRequestCb(p2pPeer*, uint32_t, void*, size_t, void*);
 typedef void p2pSignalCb(p2pPeer*, void*, size_t, void*);
 
 struct p2pEventHandler {

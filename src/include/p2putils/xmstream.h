@@ -2,6 +2,7 @@
 #define __XMSTREAM_H_
 
 #include "p2putils/strExtras.h"
+#include <stdint.h>
 #include <string.h>
 
 class xmstream {
