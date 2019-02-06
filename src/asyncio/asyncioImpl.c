@@ -145,7 +145,7 @@ void pageMapAdd(pageMap *map, asyncOpListLink *link)
       p1 = map->map[hi];
     }
   }
-  
+
   link->prev = 0;
 
   __spinlock_acquire(&map->lock);
@@ -319,7 +319,7 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
   op->cancelMethod = cancelMethod;
   op->finishMethod = finishMethod;
   op->executeQueue.prev = 0;
-  op->executeQueue.next = 0;  
+  op->executeQueue.next = 0;
   op->next = 0;
   op->object = object;
   op->flags = flags;
@@ -340,7 +340,7 @@ static void opRun(asyncOpRoot *op, List *list)
     asyncBase *base = op->object->base;
     if (op->flags & afRealtime) {
       // start timer for this operation
-      base->methodImpl.startTimer(op, op->timeout, op->opCode == actUserEvent);
+      base->methodImpl.startTimer(op);
     } else {
       // add operation to timeout grid
       op->endTime = ((uint64_t)time(0)) * 1000000ULL + op->timeout;

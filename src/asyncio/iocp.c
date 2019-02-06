@@ -24,7 +24,6 @@ typedef struct iocpBase {
 
 typedef struct iocpOp {
   asyncOp info;
-  LARGE_INTEGER signalTime;
   OVERLAPPED overlapped;
 } iocpOp;
 
@@ -41,7 +40,7 @@ asyncOpRoot *iocpNewAsyncOp();
 int iocpCancelAsyncOp(asyncOpRoot *opptr);
 void iocpDeleteObject(aioObject *op);
 void iocpInitializeTimer(asyncBase *base, asyncOpRoot *op);
-void iocpStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic);
+void iocpStartTimer(asyncOpRoot *op);
 void iocpStopTimer(asyncOpRoot *op);
 void iocpActivate(aioUserEvent *event);
 AsyncOpStatus iocpAsyncConnect(asyncOpRoot *op);
@@ -74,18 +73,6 @@ static struct asyncImpl iocpImpl = {
 static aioObject *getObject(iocpOp *op)
 {
   return (aioObject*)op->info.root.object;
-}
-
-static HANDLE getHandle(aioObject *object)
-{
-  switch (object->root.type) {
-  case ioObjectDevice:
-    return object->hDevice;
-  case ioObjectSocket:
-    return (HANDLE)object->hSocket;
-  default:
-    return INVALID_HANDLE_VALUE;
-  }
 }
 
 static DWORD WINAPI timerThreadProc(LPVOID lpParameter)
@@ -145,7 +132,7 @@ static VOID CALLBACK userEventTimerCb(LPVOID lpArgToCompletionRoutine, DWORD dwT
 
   if (needReactivate) {
     LARGE_INTEGER signalTime;
-    signalTime.QuadPart = -(int64_t)(event->timeout * 10);
+    signalTime.QuadPart = -(int64_t)(event->root.timeout * 10);
     SetWaitableTimer(timer->hTimer, &signalTime, 0, userEventTimerCb, timer, FALSE);
   }
 }
@@ -156,7 +143,11 @@ static VOID CALLBACK ioFinishedTimerCb(LPVOID lpArgToCompletionRoutine, DWORD dw
   aioTimer *timer;
   tag_t timerTag;
   __tagged_pointer_decode(lpArgToCompletionRoutine, (void**)&timer, &timerTag);
-  opCancel(timer->op, opEncodeTag(timer->op, timerTag), aosTimeout);
+
+  if (opSetStatus(timer->op, opEncodeTag(timer->op, timerTag), aosTimeout)) {
+    iocpBase *localBase = (iocpBase*)timer->op->object->base;
+    PostQueuedCompletionStatus(localBase->completionPort, 0, (ULONG_PTR)timer->op, 0);
+  }
 }
 
 void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
@@ -186,7 +177,7 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
         processAction(newOp, actionType, &threadLocalQueue, &needStart);
         enqueuedOperationsNum = 1;
         newOp = 0;
-      } 
+      }
 
       while (enqueuedOperationsNum < pendingOperationsNum)
         processOperationList(object, &threadLocalQueue, &needStart, &enqueuedOperationsNum);
@@ -274,6 +265,8 @@ void iocpNextFinishedOperation(asyncBase *base)
         asyncOpRoot *op = (asyncOpRoot*)entry->lpCompletionKey;
         if (op->opCode == actUserEvent)
           op->finishMethod(op);
+        else
+          combinerCall(op->object, 1, op, aaCancel);
       } else if (entry->lpOverlapped) {
         iocpOp *op = (iocpOp*)(((uint8_t*)entry->lpOverlapped) - offsetof(struct iocpOp, overlapped));
         AsyncOpStatus result = iocpGetOverlappedResult(op);
@@ -414,27 +407,24 @@ void iocpInitializeTimer(asyncBase *base, asyncOpRoot *op)
 
 static VOID CALLBACK timerStartProc(ULONG_PTR dwParam)
 {
-  iocpOp *op = (iocpOp*)dwParam;
+  asyncOpRoot *op = (asyncOpRoot*)dwParam;
   PTIMERAPCROUTINE timerCb;
-  switch (op->info.root.opCode) {
-    case actUserEvent:
-      timerCb = userEventTimerCb;
-      break;
-    default:
-      timerCb = ioFinishedTimerCb;
-      break;
-  }
+  LARGE_INTEGER signalTime;
 
-  aioTimer *timer = (aioTimer*)op->info.root.timerId;
-  SetWaitableTimer(timer->hTimer, &op->signalTime, 0, timerCb, __tagged_pointer_make(timer, opGetGeneration(&op->info.root)), FALSE);
+  if (op->opCode == actUserEvent)
+    timerCb = userEventTimerCb;
+  else
+    timerCb = ioFinishedTimerCb;
+
+  aioTimer *timer = (aioTimer*)op->timerId;
+  signalTime.QuadPart = -(int64_t)(op->timeout * 10);
+  SetWaitableTimer(timer->hTimer, &signalTime, 0, timerCb, __tagged_pointer_make(timer, opGetGeneration(op)), FALSE);
 }
 
-void iocpStartTimer(asyncOpRoot *opptr, uint64_t usTimeout, int periodic)
+void iocpStartTimer(asyncOpRoot *op)
 {
-  iocpBase *base = opptr->opCode == actUserEvent ?
-    (iocpBase*)(((aioUserEvent*)opptr)->base) : (iocpBase*)opptr->object->base;
-  iocpOp *op = (iocpOp*)opptr;
-  op->signalTime.QuadPart = -(int64_t)(usTimeout * 10);
+  iocpBase *base = op->opCode == actUserEvent ?
+    (iocpBase*)(((aioUserEvent*)op)->base) : (iocpBase*)op->object->base;
   QueueUserAPC(timerStartProc, base->timerThread, (ULONG_PTR)op);
 }
 
@@ -445,7 +435,7 @@ void iocpStopTimer(asyncOpRoot *op)
 }
 
 
-void iocpActivate(aioUserEvent *event) 
+void iocpActivate(aioUserEvent *event)
 {
   iocpBase *localBase = (iocpBase*)event->base;
   PostQueuedCompletionStatus(localBase->completionPort, 0, (ULONG_PTR)&event->root, 0);

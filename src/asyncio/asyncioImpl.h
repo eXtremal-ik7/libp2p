@@ -21,7 +21,7 @@ typedef void nextFinishedOperationTy(asyncBase*);
 typedef aioObject *newAioObjectTy(asyncBase*, IoObjectTy, void*);
 typedef void deleteObjectTy(aioObject*);
 typedef void initializeTimerTy(asyncBase*, asyncOpRoot*);
-typedef void startTimerTy(asyncOpRoot*, uint64_t, int);
+typedef void startTimerTy(asyncOpRoot*);
 typedef void stopTimerTy(asyncOpRoot*);
 typedef void activateTy(aioUserEvent*);
 
@@ -85,13 +85,12 @@ struct asyncOp {
   HostAddress host;
 
   void *internalBuffer;
-  size_t internalBufferSize;  
+  size_t internalBufferSize;
 };
 
 struct aioUserEvent {
   asyncOpRoot root;
   asyncBase *base;
-  uint64_t timeout;
   int counter;
 };
 

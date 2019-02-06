@@ -300,8 +300,8 @@ asyncBase *aioGetBase(aioObject *object)
 void userEventStartTimer(aioUserEvent *event, uint64_t usTimeout, int counter)
 {
   event->counter = counter;
-  event->timeout = usTimeout;
-  event->base->methodImpl.startTimer(&event->root, usTimeout, 1);
+  event->root.timeout = usTimeout;
+  event->base->methodImpl.startTimer(&event->root);
 }
 
 
@@ -819,7 +819,8 @@ void ioSleep(aioUserEvent *event, uint64_t usTimeout)
   coroReturnStruct r = {coroutineCurrent(), aosPending, INVALID_SOCKET, 0};
   event->root.callback = (void*)coroutineEventCb;
   event->root.arg = &r;
+  event->root.timeout = usTimeout;
   event->counter = 1;
-  event->base->methodImpl.startTimer(&event->root, usTimeout, 1);
+  event->base->methodImpl.startTimer(&event->root);
   coroutineYield();
 }
