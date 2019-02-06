@@ -54,7 +54,7 @@ asyncOpRoot *kqueueNewAsyncOp(void);
 int kqueueCancelAsyncOp(asyncOpRoot *opptr);
 void kqueueDeleteObject(aioObject *object);
 void kqueueInitializeTimer(asyncBase *base, asyncOpRoot *op);
-void kqueueStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic);
+void kqueueStartTimer(asyncOpRoot *op);
 void kqueueStopTimer(asyncOpRoot *op);
 void kqueueActivate(aioUserEvent *op);
 AsyncOpStatus kqueueAsyncConnect(asyncOpRoot *opptr);
@@ -363,16 +363,17 @@ void kqueueInitializeTimer(asyncBase *base, asyncOpRoot *op)
   op->timerId = timer;
 }
 
-void kqueueStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic)
+void kqueueStartTimer(asyncOpRoot *op)
 {
   struct kevent event;
+  int periodic = op->opCode == actUserEvent;  
   aioTimer *timer = (aioTimer*)op->timerId;
   EV_SET(&event,
          timer->fd,
          EVFILT_TIMER,
          EV_ADD | EV_ENABLE | (periodic ? 0 : EV_ONESHOT),
          NOTE_USECONDS,
-         usTimeout,
+         op->timeout,
          __tagged_pointer_make(timer, opGetGeneration(op)));
   if (kevent(((kqueueBase*)timer->root.base)->kqueueFd, &event, 1, 0, 0, 0) == -1)
     fprintf(stderr, "kqueueStartTimer: %s\n", strerror(errno));

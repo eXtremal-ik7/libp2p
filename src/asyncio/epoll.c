@@ -58,7 +58,7 @@ asyncOpRoot *epollNewAsyncOp(void);
 int epollCancelAsyncOp(asyncOpRoot *opptr);
 void epollDeleteObject(aioObject *object);
 void epollInitializeTimer(asyncBase *base, asyncOpRoot *op);
-void epollStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic);
+void epollStartTimer(asyncOpRoot *op);
 void epollStopTimer(asyncOpRoot *op);
 void epollActivate(aioUserEvent *op);
 AsyncOpStatus epollAsyncConnect(asyncOpRoot *opptr);
@@ -395,11 +395,12 @@ void epollInitializeTimer(asyncBase *base, asyncOpRoot *op)
   op->timerId = timer;
 }
 
-void epollStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic)
+void epollStartTimer(asyncOpRoot *op)
 {
   struct itimerspec its;
-  its.it_value.tv_sec = usTimeout / 1000000;
-  its.it_value.tv_nsec = (usTimeout % 1000000) * 1000;
+  int periodic = op->opCode == actUserEvent;
+  its.it_value.tv_sec = op->timeout / 1000000;
+  its.it_value.tv_nsec = (op->timeout % 1000000) * 1000;
   its.it_interval.tv_sec = periodic ? its.it_value.tv_sec : 0;
   its.it_interval.tv_nsec = periodic ? its.it_value.tv_nsec : 0;
 
