@@ -10,6 +10,8 @@ __NO_PADDING_BEGIN
 struct TestContext {
   aioObject *serverSocket;
   aioObject *clientSocket;
+  aioObject *pipeRead;
+  aioObject *pipeWrite;
   uint8_t clientBuffer[65536];
   uint8_t serverBuffer[128];
   p2pStream serverStream;

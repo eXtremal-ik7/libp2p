@@ -144,6 +144,28 @@ void serialPortFlush(iodevTy port)
   tcflush(port, TCIOFLUSH);
 }
 
+int pipeCreate(struct pipeTy *pipePtr, int isAsync)
+{
+  int fd[2];
+  int result = pipe(fd);
+  pipePtr->read = fd[0];
+  pipePtr->write = fd[1];
+  if (result == 0 && isAsync) {
+    int rstate = fcntl(fd[0], F_GETFL);
+    int wstate = fcntl(fd[1], F_GETFL);
+    fcntl(fd[0], F_SETFL, O_NONBLOCK | rstate);
+    fcntl(fd[1], F_SETFL, O_NONBLOCK | wstate);
+  }
+
+  return result;
+}
+
+void pipeClose(struct pipeTy pipePtr)
+{
+  close(pipePtr.read);
+  close(pipePtr.write);
+}
+
 int deviceSyncRead(iodevTy hDevice, void *buffer, size_t size, int waitAll, size_t *bytesTransferred)
 {
   if (!waitAll) {

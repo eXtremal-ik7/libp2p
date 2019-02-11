@@ -77,6 +77,7 @@ static aioObject *getObject(iocpOp *op)
 
 static DWORD WINAPI timerThreadProc(LPVOID lpParameter)
 {
+  __UNUSED(lpParameter);
   while (1)
     SleepEx(INFINITE, TRUE);
   return 0;
@@ -116,6 +117,8 @@ static AsyncOpStatus iocpGetOverlappedResult(iocpOp *op)
 
 static VOID CALLBACK userEventTimerCb(LPVOID lpArgToCompletionRoutine, DWORD dwTimerLowValue, DWORD dwTimerHighValue)
 {
+  __UNUSED(dwTimerLowValue);
+  __UNUSED(dwTimerHighValue);
   aioTimer *timer;
   tag_t timerTag;
   __tagged_pointer_decode(lpArgToCompletionRoutine, (void**)&timer, &timerTag);
@@ -140,6 +143,8 @@ static VOID CALLBACK userEventTimerCb(LPVOID lpArgToCompletionRoutine, DWORD dwT
 
 static VOID CALLBACK ioFinishedTimerCb(LPVOID lpArgToCompletionRoutine, DWORD dwTimerLowValue, DWORD dwTimerHighValue)
 {
+  __UNUSED(dwTimerLowValue);
+  __UNUSED(dwTimerHighValue);
   aioTimer *timer;
   tag_t timerTag;
   __tagged_pointer_decode(lpArgToCompletionRoutine, (void**)&timer, &timerTag);
@@ -399,6 +404,7 @@ void iocpDeleteObject(aioObject *object)
 
 void iocpInitializeTimer(asyncBase *base, asyncOpRoot *op)
 {
+  __UNUSED(base);
   aioTimer *timer = __tagged_alloc(sizeof(aioTimer));
   timer->op = op;
   timer->hTimer = CreateWaitableTimer(NULL, FALSE, NULL);
@@ -508,23 +514,40 @@ AsyncOpStatus iocpAsyncRead(asyncOpRoot *opptr)
     return aosSuccess;
 
   if (op->info.transactionSize <= object->buffer.totalSize) {
-    wsabuf.buf = sb->ptr;
-    wsabuf.len = (ULONG)sb->totalSize;
     memset(&op->overlapped, 0, sizeof(op->overlapped));
-    int result = WSARecv(object->hSocket, &wsabuf, 1, NULL, &flags, &op->overlapped, NULL);
-    if (result == 0 || WSAGetLastError() == WSA_IO_PENDING)
-      return aosPending;
-    else
-      return aosUnknownError;
+    if (object->root.type == ioObjectDevice) {
+      int result = ReadFile(object->hDevice, sb->ptr, sb->totalSize, 0, &op->overlapped);
+      if (result == TRUE || GetLastError() == WSA_IO_PENDING)
+        return aosPending;
+      else
+        return aosUnknownError;
+    } else {
+      wsabuf.buf = sb->ptr;
+      wsabuf.len = (ULONG)sb->totalSize;
+      int result = WSARecv(object->hSocket, &wsabuf, 1, NULL, &flags, &op->overlapped, NULL);
+      if (result == 0 || WSAGetLastError() == WSA_IO_PENDING)
+        return aosPending;
+      else
+        return aosUnknownError;
+    }
   } else {
     wsabuf.buf = (CHAR*)op->info.buffer + op->info.bytesTransferred;
     wsabuf.len = (ULONG)(op->info.transactionSize - op->info.bytesTransferred);
     memset(&op->overlapped, 0, sizeof(op->overlapped));
-    int result = WSARecv(object->hSocket, &wsabuf, 1, NULL, &flags, &op->overlapped, NULL);
-    if (result == 0 || WSAGetLastError() == WSA_IO_PENDING)
-      return aosPending;
-    else
-      return aosUnknownError;
+    if (object->root.type == ioObjectDevice) {
+      int result = ReadFile(object->hDevice, op->info.buffer + op->info.bytesTransferred, op->info.transactionSize - op->info.bytesTransferred, 0, &op->overlapped);
+      if (result == TRUE || GetLastError() == WSA_IO_PENDING)
+        return aosPending;
+      else
+        return aosUnknownError;
+    } else {
+      int result = WSARecv(object->hSocket, &wsabuf, 1, NULL, &flags, &op->overlapped, NULL);
+      if (result == 0 || WSAGetLastError() == WSA_IO_PENDING)
+        return aosPending;
+      else
+        return aosUnknownError;
+    }
+
   }
 }
 
@@ -535,14 +558,21 @@ AsyncOpStatus iocpAsyncWrite(asyncOpRoot *opptr)
   iocpOp *op = (iocpOp*)opptr;
   aioObject *object = getObject(op);
   // TODO: correct processing >4Gb data blocks
-  wsabuf.buf = (CHAR*)op->info.buffer + op->info.bytesTransferred;
-  wsabuf.len = wsabuf.len = (ULONG)(op->info.transactionSize - op->info.bytesTransferred);
   memset(&op->overlapped, 0, sizeof(op->overlapped));
-  int result = WSASend(object->hSocket, &wsabuf, 1, NULL, 0, &op->overlapped, NULL);
-  if (result == 0 || WSAGetLastError() == WSA_IO_PENDING) {
-    return aosPending;
+  if (object->root.type == ioObjectDevice) {
+    BOOL result = WriteFile(object->hDevice, op->info.buffer + op->info.bytesTransferred, op->info.transactionSize - op->info.bytesTransferred, 0, &op->overlapped);
+    if (result == TRUE || GetLastError() == WSA_IO_PENDING)
+      return aosPending;
+    else
+      return aosUnknownError;
   } else {
-    return aosUnknownError;
+    wsabuf.buf = (CHAR*)op->info.buffer + op->info.bytesTransferred;
+    wsabuf.len = (ULONG)(op->info.transactionSize - op->info.bytesTransferred);
+    int result = WSASend(object->hSocket, &wsabuf, 1, NULL, 0, &op->overlapped, NULL);
+    if (result == 0 || WSAGetLastError() == WSA_IO_PENDING)
+      return aosPending;
+    else
+      return aosUnknownError;
   }
 }
 

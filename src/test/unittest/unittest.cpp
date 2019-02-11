@@ -1,5 +1,6 @@
 #include "unittest.h"
 #include "asyncio/coroutine.h"
+#include "asyncio/device.h"
 #include "asyncio/socket.h"
 #include "atomic.h"
 #include <chrono>
@@ -86,6 +87,48 @@ aioObject *initializeUDPClient(asyncBase *base)
 
   aioObject *object = newSocketIo(base, clientSocket);
   return object;
+}
+
+void test_pipe_writecb(AsyncOpStatus status, aioObject*, size_t, void *arg)
+{
+  TestContext *ctx = static_cast<TestContext*>(arg);
+  EXPECT_EQ(status, aosSuccess);
+  if (status != aosSuccess)
+    postQuitOperation(ctx->base);
+}
+
+void test_pipe_readcb(AsyncOpStatus status, aioObject*, size_t transferred, void *arg)
+{
+  TestContext *ctx = static_cast<TestContext*>(arg);
+  reqStruct *req = reinterpret_cast<reqStruct*>(ctx->serverBuffer);
+  EXPECT_EQ(status, aosSuccess);
+  EXPECT_EQ(transferred, sizeof(reqStruct));
+  if (status == aosSuccess && transferred == sizeof(reqStruct)) {
+    EXPECT_EQ(req->a, 11);
+    EXPECT_EQ(req->b, 77);
+  }
+
+  postQuitOperation(ctx->base);
+}
+
+TEST(basic, test_pipe)
+{
+  TestContext context(gBase);
+  pipeTy unnamedPipe;
+  int result = pipeCreate(&unnamedPipe, 1);
+  EXPECT_EQ(result, 0);
+  if (result == 0) {
+    reqStruct req;
+    context.pipeRead = newDeviceIo(gBase, unnamedPipe.read);
+    context.pipeWrite = newDeviceIo(gBase, unnamedPipe.write);
+    req.a = 11;
+    req.b = 77;
+    aioRead(context.pipeRead, context.serverBuffer, sizeof(req), afWaitAll, 1000000, test_pipe_readcb, &context);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    aioWrite(context.pipeWrite, &req, sizeof(req), afWaitAll, 0, test_pipe_writecb, &context);
+    asyncLoop(gBase);
+    pipeClose(unnamedPipe);
+  }
 }
 
 void test_connect_accept_readcb(AsyncOpStatus status, aioObject *socket, size_t transferred, void *arg)
