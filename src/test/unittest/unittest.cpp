@@ -127,7 +127,8 @@ TEST(basic, test_pipe)
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
     aioWrite(context.pipeWrite, &req, sizeof(req), afWaitAll, 0, test_pipe_writecb, &context);
     asyncLoop(gBase);
-    pipeClose(unnamedPipe);
+    deleteAioObject(context.pipeRead);
+    deleteAioObject(context.pipeWrite);
   }
 }
 

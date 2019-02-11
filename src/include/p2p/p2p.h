@@ -53,6 +53,13 @@ public:
     _checkTimeoutEvent = newUserEvent(base, checkTimeout, this);
     userEventStartTimer(_checkTimeoutEvent, 1000000, -1);
   }
+
+  ~p2pPeer() {
+    if (connection)
+      p2pConnectionDelete(connection);
+    deleteUserEvent(_checkTimeoutEvent);
+    deleteUserEvent(_event);
+  }
   
   void checkTimeout();
   bool createConnection();

@@ -1,3 +1,6 @@
+#ifndef __DEVICE_H_
+#define __DEVICE_H_
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -30,3 +33,5 @@ int deviceSyncWrite(iodevTy hDevice, const void *buffer, size_t size, int waitAl
 #ifdef __cplusplus
 }
 #endif
+
+#endif //__DEVICE_H_

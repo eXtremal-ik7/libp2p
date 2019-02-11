@@ -29,8 +29,7 @@ enum p2pPeerState {
   stAcceptWaitAnswerSend,
 
   // other states
-  stTransferring,
-  stFinished
+  stTransferring,  stFinished
 };
 
 __NO_PADDING_BEGIN
@@ -672,13 +671,12 @@ ssize_t iop2pRecvStream(p2pConnection *connection, p2pStream &stream, uint32_t m
 {
   combinerCallArgs ccArgs;
   coroReturnStruct r = {coroutineCurrent(), nullptr, nullptr, header, aosPending};
-  p2pHeader lheader;
   bool finished =
     ioMethod([=, &stream, &r](){
                return &allocp2pOp(recvStreamProc, recvStreamFinish, connection, flags, nullptr, maxMsgSize, &stream, reinterpret_cast<void*>(coroutineRecvStreamCb), &r, p2pOpRecvStream, timeout)->root;
              },
-             [=, &stream, &lheader, &r]() { return implp2pRecvStream(connection, stream, maxMsgSize, flags, timeout, coroutineRecvStreamCb, &r, &lheader); },
-             [&lheader](asyncOpRoot *op) { reinterpret_cast<p2pOp*>(op)->header = lheader; },
+             [=, &stream, &header, &r]() { return implp2pRecvStream(connection, stream, maxMsgSize, flags, timeout, coroutineRecvStreamCb, &r, header); },
+             [&header](asyncOpRoot *op) { reinterpret_cast<p2pOp*>(op)->header = *header; },
              &ccArgs,
              &connection->root,
              p2pOpSend);
@@ -692,14 +690,12 @@ ssize_t iop2pRecv(p2pConnection *connection, void *buffer, uint32_t bufferSize, 
 {
   combinerCallArgs ccArgs;
   coroReturnStruct r = {coroutineCurrent(), nullptr, nullptr, header, aosPending};
-  p2pHeader lheader;
-
   bool finished =
     ioMethod([=, &r](){
                return &allocp2pOp(recvBufferProc, recvFinish, connection, afNone, buffer, bufferSize, nullptr, reinterpret_cast<void*>(coroutineRecvCb), &r, p2pOpRecv, timeout)->root;
              },
-             [=, &lheader, &r]() { return implp2pRecv(connection, buffer, bufferSize, flags, timeout, coroutineRecvCb, &r, &lheader); },
-             [&lheader](asyncOpRoot *op) { reinterpret_cast<p2pOp*>(op)->header = lheader; },
+             [=, &header, &r]() { return implp2pRecv(connection, buffer, bufferSize, flags, timeout, coroutineRecvCb, &r, header); },
+             [&header](asyncOpRoot *op) { reinterpret_cast<p2pOp*>(op)->header = *header; },
              &ccArgs,
              &connection->root,
              p2pOpSend);

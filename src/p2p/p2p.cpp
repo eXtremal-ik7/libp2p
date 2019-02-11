@@ -101,13 +101,15 @@ p2pErrorTy p2pPeer::nodeAcceptCb(AsyncOpStatus status, p2pConnection *connection
 void p2pPeer::nodeMsgHandler()
 {
   if (iop2pAccept(connection, 3000000, nodeAcceptCb, this) != aosSuccess) {
+    delete this;
     return;
   }
   
   _node->addPeer(this);
   bool valid = true;
   p2pHeader header;
-  while (valid && iop2pRecvStream(connection, connection->stream, 65536, afNone, 0, &header) != -1) {
+  int status;
+  while (valid && (status = iop2pRecvStream(connection, connection->stream, 65536, afNone, 0, &header)) > 0) {
     switch (header.type) {
       case p2pMsgRequest : {
         if (p2pRequestCb *handler = _node->getRequestHandler()) {
@@ -124,7 +126,7 @@ void p2pPeer::nodeMsgHandler()
   }
   
   _node->removePeer(this);
-  p2pConnectionDelete(connection);
+  delete this;
 }
 
 
