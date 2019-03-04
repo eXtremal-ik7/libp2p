@@ -29,7 +29,8 @@ enum p2pPeerState {
   stAcceptWaitAnswerSend,
 
   // other states
-  stTransferring,  stFinished
+  stTransferring,
+  stFinished
 };
 
 __NO_PADDING_BEGIN

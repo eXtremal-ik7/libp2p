@@ -1,7 +1,27 @@
 project(libp2p)
 cmake_minimum_required(VERSION 2.8)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+set (CMAKE_CXX_STANDARD 11)
+option(SSL_ENABLED "SSL support (OpenSSL is required)" ON)
+option(HTTP_ENABLED "HTTP protocol support" ON)
+option(ZMTP_ENABLED "ZMTP (zmq) protocol support" ON)
+option(TEST_ENABLED "Build tests" OFF)
+option(SANITIZER_ENABLED "Build with address sanitizer" OFF)
+option(GPROF_ENABLED "Build with GNU profiler (use gprof ./exename -p > out.txt)" OFF)
+
+if (SANITIZER_ENABLED)
+  set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
+  set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
+endif()
+
+if (GPROF_ENABLED)
+  set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pg")
+  set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pg")
+endif()
+
+if (SSL_ENABLED)
+  find_package(OpenSSL REQUIRED)
+endif()
 
 if (WIN32)
   if(MSVC)
@@ -56,21 +76,6 @@ include_directories(
   ${CMAKE_SOURCE_DIR}/config4cpp/include
   ${CMAKE_BINARY_DIR}/include
 )
-
-option(SSL_ENABLED "SSL support (OpenSSL is required)" ON)
-option(HTTP_ENABLED "HTTP protocol support" ON)
-option(ZMTP_ENABLED "ZMTP (zmq) protocol support" ON)
-option(TEST_ENABLED "Build tests" OFF)
-option(SANITIZER_ENABLED "Build with address sanitizer" OFF)
-
-if (SSL_ENABLED)
-  find_package(OpenSSL REQUIRED)
-endif()
-
-if (SANITIZER_ENABLED)
-  set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
-  set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
-endif()
 
 add_subdirectory(asyncio)
 add_subdirectory(asyncioextras)

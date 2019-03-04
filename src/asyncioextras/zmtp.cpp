@@ -680,7 +680,7 @@ asyncOpRoot *implZmtpSend(zmtpSocket *socket, void *data, size_t size, zmtpUserM
   }
 
   if (childOp) {
-    zmtpOp *op = initWriteOp(startZmtpSend, sendFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpConnect, data, size, type);
+    zmtpOp *op = initWriteOp(startZmtpSend, sendFinish, socket, flags|afRunning, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpConnect, data, size, type);
     op->stateRw = state;
     op->type = msgType;
     childOp->arg = op;
