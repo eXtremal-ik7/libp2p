@@ -35,7 +35,7 @@ struct p2pOp {
     void *buffer;
     p2pStream *stream;
   };
-  uint32_t bufferSize;
+  size_t bufferSize;
 
   HostAddress address;
   p2pHeader header;
@@ -65,7 +65,7 @@ void aiop2pConnect(p2pConnection *connection,
   
 void aiop2pRecvStream(p2pConnection *connection,
                       p2pStream &stream,
-                      uint32_t maxMsgSize,
+                      size_t maxMsgSize,
                       AsyncFlags flags,
                       uint64_t timeout,
                       p2preadStreamCb *callback,

@@ -22,10 +22,10 @@ enum p2pMsgTy {
 struct p2pHeader {
   uint32_t id;
   uint32_t type;
-  uint32_t size;
+  uint64_t size;
   p2pHeader() {}
-  p2pHeader(uint32_t typeArg, uint32_t sizeArg) : id(0), type(typeArg), size(sizeArg) {}
-  p2pHeader(uint32_t idArg, uint32_t typeArg, uint32_t sizeArg) : id(idArg), type(typeArg), size(sizeArg) {}
+  p2pHeader(uint32_t typeArg, uint64_t sizeArg) : id(0), type(typeArg), size(sizeArg) {}
+  p2pHeader(uint32_t idArg, uint32_t typeArg, uint64_t sizeArg) : id(idArg), type(typeArg), size(sizeArg) {}
 };
 #pragma pack(pop)
 
