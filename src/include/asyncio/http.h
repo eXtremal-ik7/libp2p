@@ -46,7 +46,8 @@ typedef struct HTTPOp {
   HostAddress address;
   unsigned resultCode;
   Raw contentType;
-  Raw body;
+  size_t bodyOffset;
+  size_t bodySize;
   httpParseCb *parseCallback;
 } HTTPOp;
 

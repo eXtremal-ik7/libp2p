@@ -51,7 +51,14 @@ static void requestFinish(asyncOpRoot *opptr)
   HTTPOp *op = (HTTPOp*)opptr;
   HTTPClient *client = (HTTPClient*)opptr->object;
   client->contentType = op->contentType;
-  client->body = op->body;
+
+  // Append zero byte
+  *(char*)dynamicBufferAlloc(&client->out, 1) = 0;
+
+  // Write pointer and body size to client
+  client->body.data = (uint8_t*)client->out.data + op->bodyOffset;
+  client->body.size = client->out.size - op->bodyOffset - 1;
+
   ((httpRequestCb*)opptr->callback)(opGetStatus(opptr), client, op->resultCode, opptr->arg);
 }
 
@@ -125,7 +132,7 @@ static AsyncOpStatus httpParseStart(asyncOpRoot *opptr)
   HTTPClient *client = (HTTPClient*)op->root.object;
 
   if (op->state == 0) {
-    dynamicBufferSeek(&client->out, SeekSet, 0);
+    dynamicBufferClear(&client->out);
     httpInit(&client->state);
     op->state = 1;
   }
@@ -192,7 +199,7 @@ static HTTPOp *allocHttpOp(aioExecuteProc executeProc,
   op->parseCallback = parseCallback;
   op->resultCode = 0;
   op->contentType.data = 0;
-  op->body.data = 0;
+  op->bodyOffset = 0;
   op->state = 0;
   return op;
 }
@@ -225,14 +232,11 @@ void httpParseDefault(HttpComponent *component, void *arg)
 
     case httpDtData :
     case httpDtDataFragment : {
-      char *out = (char*)dynamicBufferAlloc(&client->out, component->data.size+1);
-      dynamicBufferSeek(&client->out, SeekCur, -1);
-      memcpy(out, component->data.data, component->data.size);
-      out[component->data.size] = 0;
+      if (op->bodyOffset == 0)
+          op->bodyOffset = client->out.offset;
 
-      if (!op->body.data)
-        op->body.data = out;
-      op->body.size += component->data.size;
+      char *out = (char*)dynamicBufferAlloc(&client->out, component->data.size);
+      memcpy(out, component->data.data, component->data.size);
       break;
     }
   }
