@@ -8,6 +8,10 @@ if (ZMTP_ENABLED)
   set(Sources ${Sources} zmtp.cpp)
 endif()
 
+if (BTC_ENABLED)
+  set(Sources ${Sources} btc.cpp)
+endif()
+
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
   add_definitions(-fPIC)
 endif ()

@@ -4,27 +4,28 @@
 #include <algorithm>
 #include "config.h"
 
-template<typename IntType> IntType xhton(IntType X)
-{
-  if (!is_bigendian()) {
-    IntType lX = X;
-    IntType result = 0;
+#if defined(__GNUC__) || defined(__clang__)
+static inline uint16_t xswap(uint16_t value) { return __builtin_bswap16(value); }
+static inline int16_t xswap(int16_t value) { return __builtin_bswap16(value); }
+static inline uint32_t xswap(uint32_t value) { return __builtin_bswap32(value); }
+static inline int32_t xswap(int32_t value) { return __builtin_bswap32(value); }
+static inline uint64_t xswap(uint64_t value) { return __builtin_bswap64(value); }
+static inline int64_t xswap(int64_t value) { return __builtin_bswap64(value); }
+#elif defined(_MSC_VER)
+static inline uint16_t xswap(uint16_t value) { return _byteswap_ushort(value); }
+static inline int16_t xswap(int16_t value) { return _byteswap_ushort(value); }
+static inline uint32_t xswap(uint32_t value) { return _byteswap_ulong(value); }
+static inline int32_t xswap(int32_t value) { return _byteswap_ulong(value); }
+static inline uint64_t xswap(uint64_t value) { return _byteswap_uint64(value); }
+static inline int64_t xswap(int64_t value) { return _byteswap_uint64(value); }
+#endif
 
-    for (size_t i = 0; i < sizeof(IntType); i++) {
-      result |= (lX & 0xFF) << (8 * (sizeof(IntType) - i - 1));
-      lX >>= 8;
-    }
-
-    return result;
-  } else {
-    return X;
-  }
-}
-
-template<typename IntType> IntType xntoh(IntType X)
-{
-  return xhton(X);
-}
+template<typename IntType> IntType xhtole(IntType value) { return is_bigendian() ? xswap(value) : value; }
+template<typename IntType> IntType xhtobe(IntType value) { return is_bigendian() ? value : xswap(value); }
+template<typename IntType> IntType xletoh(IntType value) { return is_bigendian() ? xswap(value) : value; }
+template<typename IntType> IntType xbetoh(IntType value) { return is_bigendian() ? value : xswap(value); }
+template<typename IntType> IntType xhton(IntType value) { return xhtobe(value); }
+template<typename IntType> IntType xntoh(IntType value) { return xbetoh(value); }
 
 template<typename Type> size_t xitoa(Type value, char *out)
 {
