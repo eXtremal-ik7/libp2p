@@ -26,6 +26,31 @@ public:
     if (_own)
       free(_m);
   }
+
+  xmstream(const xmstream &s) {
+    _size = s._size;
+    _msize = s._msize;
+    _own = s._own;
+    _eof = s._eof;
+    if (_own) {
+      _m = static_cast<uint8_t*>(malloc(_msize));
+      memcpy(_m, s._m, _size);
+    } else {
+      _m = s._m;
+    }
+
+    _p = _m + (s._p - s._m);
+  }
+
+  xmstream(xmstream &&s) :
+    _m(s._m),
+    _p(s._p),
+    _size(s._size),
+    _msize(s._msize),
+    _eof(s._eof),
+    _own(s._own) {
+    s._m = nullptr;
+  }
   
   size_t offsetOf() { return _p - _m; }
   size_t sizeOf() { return _size; }
@@ -77,6 +102,15 @@ public:
     _eof = 0;
   }
   
+  void seekCur(size_t offset) {
+    if (offset <= remaining()) {
+      _p += offset;
+    } else {
+      _p = _m + _size;
+      _eof = 1;
+    }
+  }
+
   void seekSet(size_t offset) {
     _p = _m + ((offset < _size) ? offset : _size);
   }
@@ -88,6 +122,7 @@ public:
       _p += size;
       return p;
     } else {
+      _p = _m + _size;
       _eof = 1;
       return 0;
     }
@@ -103,9 +138,14 @@ public:
     return p ? *p : T();
   }
   
-  template<typename T> T readNetworkByteOrder() {
+  template<typename T> T readle() {
     T *p = jumpOver<T>(sizeof(T));
-    return p ? xhton<T>(*p) : T();
+    return p ? xletoh<T>(*p) : T();
+  }
+
+  template<typename T> T readbe() {
+    T *p = jumpOver<T>(sizeof(T));
+    return p ? xbetoh<T>(*p) : T();
   }
   
   // write functions
@@ -113,7 +153,9 @@ public:
   template<typename T>
     void write(const T& data) { *(T*)alloc<T>(sizeof(T)) = data; }
   template<typename T>
-    void writeNetworkByteOrder(T data) { *(T*)alloc<T>(sizeof(T)) = xhton(data); }
+    void writele(T data) { *(T*)alloc<T>(sizeof(T)) = xhtole(data); }
+  template<typename T>
+    void writebe(T data) { *(T*)alloc<T>(sizeof(T)) = xhtobe(data); }
 };
 
 #endif //__XMSTREAM_H_

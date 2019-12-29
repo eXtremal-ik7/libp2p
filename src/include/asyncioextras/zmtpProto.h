@@ -13,7 +13,7 @@ private:
     key->size = read<uint8_t>();
     if ( !(key->data = jumpOver<uint8_t>(key->size)) )
       return false;
-    value->size = readNetworkByteOrder<uint32_t>();
+    value->size = readbe<uint32_t>();
     if ( !(value->data = jumpOver<uint8_t>(value->size)) )
       return false;
     return true;
@@ -24,7 +24,7 @@ private:
     size_t valueLength = strlen(value);
     write<uint8_t>(static_cast<uint8_t>(keyLength));
     write(key, keyLength);
-    writeNetworkByteOrder<uint32_t>(static_cast<uint32_t>(valueLength));
+    writebe<uint32_t>(static_cast<uint32_t>(valueLength));
     write(value, valueLength);
   }
   

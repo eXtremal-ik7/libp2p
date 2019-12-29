@@ -2,7 +2,7 @@
 
 const char *p2pStream::jumpOverString()
 {
-  uint64_t length = readNetworkByteOrder<uint64_t>();
+  uint64_t length = readbe<uint64_t>();
   const char *s = jumpOver<char>(length);
   const char *e = jumpOver<char>(1);
   if (e && *e == 0)
@@ -13,7 +13,7 @@ const char *p2pStream::jumpOverString()
 void p2pStream::writeString(const char *s)
 {
   size_t length = strlen(s);
-  writeNetworkByteOrder<uint64_t>(static_cast<uint64_t>(length));
+  writebe<uint64_t>(static_cast<uint64_t>(length));
   write(s, length);
   write<uint8_t>(0);
 }

@@ -1,6 +1,7 @@
 #ifndef __LIBP2P_STREXTRAS_H_
 #define __LIBP2P_STREXTRAS_H_
 
+#include <stdint.h>
 #include <algorithm>
 #include "config.h"
 
