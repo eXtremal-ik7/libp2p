@@ -10,6 +10,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/eventfd.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -20,27 +21,12 @@ static const char *socketPool = "aioObject";
 
 #define MAX_EVENTS 256
 
-enum pipeDescrs {
-  Read = 0,
-  Write
-};
-
-typedef enum pipeCmd {
-  Reset = 0,
-  UserEvent
-} pipeCmd;
-
 __NO_PADDING_BEGIN
-typedef struct pipeMsg {
-  pipeCmd cmd;
-  void *data;
-} pipeMsg;
-
 typedef struct epollBase {
   asyncBase B;
   int epollFd;
-  int pipeFd[2];
-  aioObject *pipeObject;
+  int eventFd;
+  aioObject *eventObject;
 } epollBase;
 
 typedef struct aioTimer {
@@ -51,6 +37,7 @@ typedef struct aioTimer {
 __NO_PADDING_END
 
 static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType);
+void epollWakeup(asyncBase *base);
 void epollPostEmptyOperation(asyncBase *base);
 void epollNextFinishedOperation(asyncBase *base);
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data);
@@ -70,6 +57,7 @@ AsyncOpStatus epollAsyncWriteMsg(asyncOpRoot *op);
 
 static struct asyncImpl epollImpl = {
   combiner,
+  epollWakeup,
   epollPostEmptyOperation,
   epollNextFinishedOperation,
   epollNewAioObject,
@@ -116,30 +104,39 @@ asyncBase *epollNewAsyncBase()
 {
   epollBase *base = malloc(sizeof(epollBase));
   if (base) {
-    pipe(base->pipeFd);
+    base->eventFd = eventfd(0, EFD_NONBLOCK);
     base->B.methodImpl = epollImpl;
     base->epollFd = epoll_create(MAX_EVENTS);
     if (base->epollFd == -1) {
       fprintf(stderr, " * epollNewAsyncBase: epoll_create failed\n");
     }
 
-    base->pipeObject = epollNewAioObject(&base->B, ioObjectDevice, &base->pipeFd[Read]);
+    base->eventObject = epollNewAioObject(&base->B, ioObjectDevice, &base->eventFd);
 
-    epollControl(base->epollFd, EPOLL_CTL_MOD, EPOLLIN | EPOLLONESHOT, base->pipeFd[Read], base->pipeObject);
+    epollControl(base->epollFd, EPOLL_CTL_MOD, EPOLLIN | EPOLLONESHOT, base->eventFd, base->eventObject);
   }
 
   return (asyncBase *)base;
 }
 
+void epollWakeup(asyncBase *base)
+{
+  epollBase *localBase = (epollBase*)base;
+  eventfd_write(localBase->eventFd, 1);
+}
+
 void epollPostEmptyOperation(asyncBase *base)
 {
+  epollBase *localBase = (epollBase*)base;
   unsigned count = base->messageLoopThreadCounter;
   unsigned i;
   for (i = 0; i < count; i++) {
-    pipeMsg msg = {Reset, 0};
-    epollBase *localBase = (epollBase *)base;
-    write(localBase->pipeFd[Write], &msg, sizeof(pipeMsg));
+    asyncOpRoot *op = epollNewAsyncOp();
+    op->opCode = actEmpty;
+    fnPush(base, op);
   }
+
+  eventfd_write(localBase->eventFd, 1);
 }
 
 static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
@@ -161,13 +158,13 @@ static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpA
       int fd = getFd((aioObject*)object);
       ioctl(fd, FIONREAD, &available);
       if (available == 0)
-        cancelOperationList(&object->readQueue, &threadLocalQueue, aosDisconnected);
-      cancelOperationList(&object->writeQueue, &threadLocalQueue, aosDisconnected);
+        cancelOperationList(&object->readQueue, aosDisconnected);
+      cancelOperationList(&object->writeQueue, aosDisconnected);
     }
 
     if (currentTag & TAG_CANCELIO) {
-      cancelOperationList(&object->readQueue, &threadLocalQueue, aosCanceled);
-      cancelOperationList(&object->writeQueue, &threadLocalQueue, aosCanceled);
+      cancelOperationList(&object->readQueue, aosCanceled);
+      cancelOperationList(&object->writeQueue, aosCanceled);
     }
 
     if (currentTag & TAG_DELETE) {
@@ -183,19 +180,19 @@ static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpA
     if ( (pendingOperationsNum = __tag_get_opcount(currentTag)) ) {
       if (newOp) {
         // Don't try synchonously execute operation second time
-        processAction(newOp, actionType, &threadLocalQueue, &needStart);
+        processAction(newOp, actionType, &needStart);
         enqueuedOperationsNum = 1;
         newOp = 0;
       } else {
         while (enqueuedOperationsNum < pendingOperationsNum)
-          processOperationList(object, &threadLocalQueue, &needStart, &enqueuedOperationsNum);
+          processOperationList(object, &needStart, &enqueuedOperationsNum);
       }
     }
 
     if (needStart & TAG_READ_MASK)
-      executeOperationList(&object->readQueue, &threadLocalQueue);
+      executeOperationList(&object->readQueue);
     if (needStart & TAG_WRITE_MASK)
-      executeOperationList(&object->writeQueue, &threadLocalQueue);
+      executeOperationList(&object->writeQueue);
 
     // I/O multiplexer configuration
     if (hasFd) {
@@ -243,8 +240,17 @@ void epollNextFinishedOperation(asyncBase *base)
 
   while (1) {
     do {
-      executeThreadLocalQueue();
-      nfds = epoll_wait(localBase->epollFd, events, MAX_EVENTS, threadLocalQueue.head ? 0 : 500);
+      if (!executeGlobalQueue(base)) {
+        unsigned remainingThreads = __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, 0u-1);
+        if (remainingThreads == 1) {
+          // Try finish all operations
+          executeGlobalQueue(base);
+        }
+
+        eventfd_write(localBase->eventFd, 1);
+        return;
+      }
+      nfds = epoll_wait(localBase->epollFd, events, MAX_EVENTS, base->globalQueue ? 0 : 500);
       time_t currentTime = time(0);
       if (currentTime % base->messageLoopThreadCounter == messageLoopThreadId)
         processTimeoutQueue(base, currentTime);
@@ -254,29 +260,10 @@ void epollNextFinishedOperation(asyncBase *base)
       tag_t timerId;
       aioObjectRoot *object;
       __tagged_pointer_decode(events[n].data.ptr, (void**)&object, &timerId);
-      if (object == &localBase->pipeObject->root) {
-        pipeMsg msg;
-        int available;
-        int fd = localBase->pipeFd[Read];
-        ioctl(fd, FIONREAD, &available);
-        int i;
-        for (i = 0; i < available / (int)sizeof(pipeMsg); i++) {
-          read(fd, &msg, sizeof(pipeMsg));
-          asyncOpRoot *op = (asyncOpRoot*)msg.data;
-          switch (msg.cmd) {
-            case Reset :
-              while (threadLocalQueue.head)
-                executeThreadLocalQueue();
-              epollControl(localBase->epollFd, EPOLL_CTL_MOD, EPOLLIN | EPOLLONESHOT, fd, object);
-              __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, 0u-1);
-              return;
-            case UserEvent :
-              op->finishMethod(op);
-              break;
-          }
-        }
-
-        epollControl(localBase->epollFd, EPOLL_CTL_MOD, EPOLLIN | EPOLLONESHOT, fd, object);
+      if (object == &localBase->eventObject->root) {
+        eventfd_t eventValue;
+        eventfd_read(localBase->eventFd, &eventValue);
+        epollControl(localBase->epollFd, EPOLL_CTL_MOD, EPOLLIN | EPOLLONESHOT, localBase->eventFd, object);
       } else if (object->type == ioObjectTimer) {
         uint64_t data;
         aioTimer *timer = (aioTimer*)object;
@@ -348,7 +335,7 @@ aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 
 asyncOpRoot *epollNewAsyncOp()
 {
-  asyncOp *op = malloc(sizeof(asyncOp));
+  asyncOp *op = __tagged_alloc(sizeof(asyncOp));
   if (op) {
     op->internalBuffer = 0;
     op->internalBufferSize = 0;
@@ -429,14 +416,14 @@ void epollStopTimer(asyncOpRoot *op)
 
 void epollActivate(aioUserEvent *op)
 {
-  pipeMsg msg = {UserEvent, (void *)op};
   epollBase *localBase = (epollBase *)op->base;
-  write(localBase->pipeFd[Write], &msg, sizeof(pipeMsg));
+  fnPush(&localBase->B, &op->root);
+  eventfd_write(localBase->eventFd, 1);
 }
 
 
 AsyncOpStatus epollAsyncConnect(asyncOpRoot *opptr)
-{ 
+{
   asyncOp *op = (asyncOp*)opptr;
   int fd = getFd((aioObject*)op->root.object);
   if (op->state == 0) {

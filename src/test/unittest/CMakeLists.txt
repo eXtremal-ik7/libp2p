@@ -5,7 +5,7 @@ find_package(GTest REQUIRED)
   endif(MSVC)
 
 set(SOURCES unittest.cpp)
-set(LIBRARIES asyncio-0.4 asyncioextras-0.4 p2p ${GTEST_LIBRARIES})
+set(LIBRARIES asyncio-0.5 asyncioextras-0.5 p2p ${GTEST_LIBRARIES})
 include_directories(${GTEST_INCLUDE_DIRS})
 
 if (ZMTP_ENABLED)

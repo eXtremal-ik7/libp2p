@@ -16,9 +16,9 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
   add_definitions(-fPIC)
 endif ()
 
-add_library(asyncioextras-0.4 STATIC ${Sources})
+add_library(asyncioextras-0.5 STATIC ${Sources})
 
 install(
-  TARGETS asyncioextras-0.4
+  TARGETS asyncioextras-0.5
   ARCHIVE DESTINATION lib
 )

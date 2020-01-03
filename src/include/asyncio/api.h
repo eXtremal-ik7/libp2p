@@ -49,8 +49,8 @@ typedef enum AsyncFlags {
   afNoCopy = 2,
   afRealtime = 4,
   afActiveOnce = 8,
-  afSerialized = 16,
-  afRunning = 32,
+  afRunning = 16,
+  afCoroutine = 32
 } AsyncFlags;
 
 typedef enum AsyncOpActionTy {
@@ -105,7 +105,6 @@ typedef int aioCancelProc(asyncOpRoot*);
 typedef void aioFinishProc(asyncOpRoot*);
 typedef void aioObjectDestructor(aioObjectRoot*);
 
-extern __tls List threadLocalQueue;
 extern __tls unsigned currentFinishedSync;
 extern __tls unsigned messageLoopThreadId;
 
@@ -128,7 +127,8 @@ extern __tls unsigned messageLoopThreadId;
 #define OPCODE_WRITE (1<<(sizeof(int)*8-4))
 #define OPCODE_OTHER (1<<(sizeof(int)*8-2))
 
-
+void objectIncrementReference(aioObjectRoot *object);
+void objectDecrementReference(aioObjectRoot *object, tag_t count);
 
 void *__tagged_alloc(size_t size);
 void *__tagged_pointer_make(void *ptr, tag_t data);
@@ -136,7 +136,7 @@ void __tagged_pointer_decode(void *ptr, void **outPtr, tag_t *outData);
 
 void eqRemove(List *list, asyncOpRoot *op);
 void eqPushBack(List *list, asyncOpRoot *op);
-void fnPushBack(List *list, asyncOpRoot *op);
+void fnPush(asyncBase *base, asyncOpRoot *op);
 
 __NO_UNUSED_FUNCTION_BEGIN
 static inline tag_t __tag_get_opcount(tag_t tag)
@@ -218,32 +218,22 @@ int opSetStatus(asyncOpRoot *op, tag_t tag, AsyncOpStatus status);
 void opForceStatus(asyncOpRoot *op, AsyncOpStatus status);
 tag_t opEncodeTag(asyncOpRoot *op, tag_t tag);
 
-void opRelease(asyncOpRoot *op, AsyncOpStatus status, List *executeList, List *finished);
-void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finished, tag_t *needStart);
-void processOperationList(aioObjectRoot *object, List *finished, tag_t *needStart, tag_t *enqueued);
-void executeOperationList(List *list, List *finished);
-void cancelOperationList(List *list, List *finished, AsyncOpStatus status);
+void opRelease(asyncOpRoot *op, AsyncOpStatus status, List *executeList);
+void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, tag_t *needStart);
+void processOperationList(aioObjectRoot *object, tag_t *needStart, tag_t *enqueued);
+void executeOperationList(List *list);
+void cancelOperationList(List *list, AsyncOpStatus status);
 
 void combinerAddAction(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy actionType);
 void combinerCall(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType);
 void combinerCallWithoutLock(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy action);
 
-typedef struct combinerCallArgs {
-  aioObjectRoot *object;
-  tag_t tag;
-  asyncOpRoot *op;
-  AsyncOpActionTy actionType;
-  int needLock;
-} combinerCallArgs;
-
-void combinerCallDelayed(combinerCallArgs *args, aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType, int needLock);
-
 void opStart(asyncOpRoot *op);
 void opCancel(asyncOpRoot *op, tag_t generation, AsyncOpStatus status);
 void resumeParent(asyncOpRoot *op, AsyncOpStatus status);
 
-void addToThreadLocalQueue(asyncOpRoot *op);
-void executeThreadLocalQueue();
+void addToGlobalQueue(asyncOpRoot *op);
+int executeGlobalQueue(asyncBase *base);
 
 asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
                              const char *timerPool,
@@ -266,12 +256,11 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
 #include "atomic.h"
 #include "asyncio/coroutine.h"
 
-template<typename f1, typename f2, typename f3, typename f4, typename f5>
+template<typename f1, typename f2, typename f3, typename f4>
 static inline void aioMethod(f1 createProc,
                              f2 implCallProc,
-                             f3 callbackProc,
-                             f4 makeResultProc,
-                             f5 initOpProc,
+                             f3 makeResultProc,
+                             f4 initOpProc,
                              aioObjectRoot *object,
                              AsyncFlags flags,
                              void *callback,
@@ -282,22 +271,16 @@ static inline void aioMethod(f1 createProc,
     if (!list.head) {
       asyncOpRoot *op = implCallProc();
       if (!op) {
-        if (flags & afSerialized)
-          callbackProc();
-
         tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
         if (tag)
           combinerCallWithoutLock(object, tag, nullptr, aaNone);
-
-        if (!(flags & afSerialized)) {
-          if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == nullptr || flags & afActiveOnce)) {
-            makeResultProc();
-          } else {
-            asyncOpRoot *op = createProc();
-            initOpProc(op);
-            opForceStatus(op, aosSuccess);
-            addToThreadLocalQueue(op);
-          }
+        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == nullptr || flags & afActiveOnce)) {
+          makeResultProc();
+        } else {
+          asyncOpRoot *op = createProc();
+          initOpProc(op);
+          opForceStatus(op, aosSuccess);
+          addToGlobalQueue(op);
         }
       } else {
         if (opGetStatus(op) == aosPending) {
@@ -306,7 +289,7 @@ static inline void aioMethod(f1 createProc,
           tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
           if (tag)
             combinerCallWithoutLock(object, tag, nullptr, aaNone);
-          addToThreadLocalQueue(op);
+          addToGlobalQueue(op);
         }
       }
     } else {
@@ -321,53 +304,54 @@ static inline void aioMethod(f1 createProc,
 }
 
 template<typename f1, typename f2, typename f3>
-static inline bool ioMethod(f1 createProc,
-                            f2 implCallProc,
-                            f3 initOpProc,
-                            combinerCallArgs *ccArgs,
-                            aioObjectRoot *object,
-                            int opCode)
+static inline asyncOpRoot *ioMethod(f1 createProc,
+                                    f2 implCallProc,
+                                    f3 initOpProc,
+                                    aioObjectRoot *object,
+                                    int opCode)
 {
-  bool finished = false;
+  asyncOpRoot *op;
   if (__tag_atomic_fetch_and_add(&object->tag, 1) == 0) {
     List &list = !(opCode & OPCODE_WRITE) ? object->readQueue : object->writeQueue;
     if (!list.head) {
-      asyncOpRoot *op = implCallProc();
+      op = implCallProc();
       if (!op) {
         tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
         if (tag)
-          combinerCallDelayed(ccArgs, object, tag, nullptr, aaNone, 0);
+          combinerCallWithoutLock(object, tag, nullptr, aaNone);
         if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && !tag) {
-          finished = true;
+          // nothing to do
         } else {
-          asyncOpRoot *op = createProc();
+          op = createProc();
           initOpProc(op);
           opForceStatus(op, aosSuccess);
-          addToThreadLocalQueue(op);
+          addToGlobalQueue(op);
         }
       } else {
         if (opGetStatus(op) == aosPending) {
-          combinerCallDelayed(ccArgs, object, 1, op, aaStart, 0);
+          combinerCallWithoutLock(object, 1, op, aaStart);
         } else {
           tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
           if (tag)
-            combinerCallDelayed(ccArgs, object, tag, nullptr, aaNone, 0);
-          addToThreadLocalQueue(op);
+            combinerCallWithoutLock(object, tag, nullptr, aaNone);
+          addToGlobalQueue(op);
         }
       }
     } else {
-      eqPushBack(&list, createProc());
+      op = createProc();
+      eqPushBack(&list, op);
       tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
       if (tag)
-        combinerCallDelayed(ccArgs, object, tag, nullptr, aaNone, 0);
+        combinerCallWithoutLock(object, tag, nullptr, aaNone);
     }
   } else {
-    combinerAddAction(object, createProc(), aaStart);
+    op = createProc();
+    combinerAddAction(object, op, aaStart);
   }
 
-  if (!finished)
+  if (op)
     coroutineYield();
-  return finished;
+  return op;
 }
 #endif
 

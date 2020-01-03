@@ -12,10 +12,12 @@ typedef enum IoActionTy {
   actConnect = OPCODE_WRITE,
   actWrite,
   actWriteMsg,
-  actUserEvent = OPCODE_OTHER
+  actUserEvent = OPCODE_OTHER,
+  actEmpty
 } IoActionTy;
 
 typedef void combinerTy(aioObjectRoot*, tag_t, asyncOpRoot*, AsyncOpActionTy);
+typedef void wakeupOperationTy(asyncBase*);
 typedef void postEmptyOperationTy(asyncBase*);
 typedef void nextFinishedOperationTy(asyncBase*);
 typedef aioObject *newAioObjectTy(asyncBase*, IoObjectTy, void*);
@@ -27,6 +29,7 @@ typedef void activateTy(aioUserEvent*);
 
 struct asyncImpl {
   combinerTy *combiner;
+  wakeupOperationTy *wakeup;
   postEmptyOperationTy *postEmptyOperation;
   nextFinishedOperationTy *nextFinishedOperation;
   newAioObjectTy *newAioObject;
@@ -53,6 +56,7 @@ struct asyncBase {
   time_t lastCheckPoint;
   volatile unsigned messageLoopThreadCounter;
   volatile unsigned timerMapLock;
+  asyncOpRoot *globalQueue;
 #ifndef NDEBUG
   int opsCount;
 #endif

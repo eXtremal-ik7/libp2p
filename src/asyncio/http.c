@@ -31,7 +31,7 @@ static AsyncOpStatus httpParseStart(asyncOpRoot *opptr);
 
 static asyncOpRoot *alloc()
 {
-  return (asyncOpRoot*)malloc(sizeof(HTTPOp));
+  return (asyncOpRoot*)__tagged_alloc(sizeof(HTTPOp));
 }
 
 static int cancel(asyncOpRoot *opptr)
@@ -336,30 +336,31 @@ void aioHttpRequest(HTTPClient *client,
 {
   HTTPOp *op = allocHttpOp(httpParseStart, requestFinish, client, httpOpConnect, parseCallback, (void*)callback, arg, usTimeout);
   if (client->isHttps)
-    aioSslWrite(client->sslSocket, request, requestSize, afSerialized, 0, sslWriteCb, op);
+    aioSslWrite(client->sslSocket, request, requestSize, afNone, 0, sslWriteCb, op);
   else
-    aioWrite(client->plainSocket, request, requestSize, afSerialized, 0, writeCb, op);
+    aioWrite(client->plainSocket, request, requestSize, afNone, 0, writeCb, op);
 }
 
 
 int ioHttpConnect(HTTPClient *client, const HostAddress *address, uint64_t usTimeout)
 {
-  combinerCallArgs ccArgs;
-  coroReturnStruct r = {coroutineCurrent(), aosPending, 0};
-  HTTPOp *op = allocHttpOp(httpConnectStart, connectFinish, client, httpOpConnect, 0, (void*)coroutineConnectCb, &r, usTimeout);
+  HTTPOp *op = allocHttpOp(httpConnectStart, 0, client, httpOpConnect, 0, 0, 0, usTimeout);
   op->address = *address;
-  combinerCallDelayed(&ccArgs, &client->root, 1, &op->root, aaStart, 1);
+  combinerCall(&client->root, 1, &op->root, aaStart);
   coroutineYield();
-  return r.status == aosSuccess ? 0 : -(int)r.status;
+  AsyncOpStatus status = opGetStatus(&op->root);
+  objectRelease(&op->root, op->root.poolId);
+  objectDecrementReference(&client->root, 1);
+  return status == aosSuccess ? 0 : -(int)status;
 }
 
 void ioHttpRequestStart(void *arg)
 {
   ioHttpRequestArg *hrArgs = (ioHttpRequestArg*)arg;
   if (hrArgs->client->isHttps)
-    aioSslWrite(hrArgs->client->sslSocket, hrArgs->request, hrArgs->requestSize, afSerialized, 0, sslWriteCb, hrArgs->op);
+    aioSslWrite(hrArgs->client->sslSocket, hrArgs->request, hrArgs->requestSize, afNone, 0, sslWriteCb, hrArgs->op);
   else
-    aioWrite(hrArgs->client->plainSocket, hrArgs->request, hrArgs->requestSize, afSerialized, 0, writeCb, hrArgs->op);
+    aioWrite(hrArgs->client->plainSocket, hrArgs->request, hrArgs->requestSize, afNone, 0, writeCb, hrArgs->op);
 }
 
 int ioHttpRequest(HTTPClient *client,

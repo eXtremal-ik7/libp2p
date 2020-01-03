@@ -27,8 +27,6 @@ typedef struct coroutineTy {
   void *arg;
   int finished;
   int counter;
-  coroutineCbTy *cbProc;
-  void *cbArg;
 } coroutineTy;
 
 static __thread coroutineTy *mainCoroutine;
@@ -41,7 +39,9 @@ static void fiberEntryPoint(coroutineTy *coroutine)
 {
   coroutine->entryPoint(coroutine->arg);
   coroutine->finished = 1;
+  __sync_fetch_and_add(&coroutine->counter, -1);
   currentCoroutine = currentCoroutine->prev;
+  assert(currentCoroutine && "Try exit from main coroutine");
   switchContext(&coroutine->context, &currentCoroutine->context);
 }
 
@@ -75,7 +75,7 @@ static void fiberInit(coroutineTy *coroutine, size_t stackSize)
 
 int coroutineIsMain()
 {
-  return currentCoroutine == mainCoroutine;
+  return currentCoroutine->prev == 0;
 }
 
 coroutineTy *coroutineCurrent()
@@ -108,8 +108,6 @@ coroutineTy *coroutineNew(coroutineProcTy entry, void *arg, unsigned stackSize)
   coroutine->prev = currentCoroutine;
   coroutine->finished = 0;
   coroutine->counter = 0;
-  coroutine->cbProc = 0;
-  coroutine->cbArg = 0;
   sigprocmask(SIG_SETMASK, &old, 0);  
   return coroutine;
 }
@@ -122,21 +120,21 @@ void coroutineDelete(coroutineTy *coroutine)
 
 int coroutineCall(coroutineTy *coroutine)
 {
-  assert(__sync_fetch_and_add(&coroutine->counter, 1) == 0 &&
-         "Call coroutine from multiple threads detected!");
   if (!coroutineFinished(coroutine)) {
+    if (__sync_fetch_and_add(&coroutine->counter, 2) != 0) {
+      // Don't call active coroutine
+      return 1;
+    }
+
     // Create main fiber if it not exists
     if (currentCoroutine == 0)
       mainCoroutine = currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
-    coroutine->prev = currentCoroutine;
-    currentCoroutine = coroutine;
 
-    switchContext(&coroutine->prev->context, &coroutine->context);
-
-    if (coroutine->cbProc) {
-      coroutine->cbProc(coroutine->cbArg);
-      coroutine->cbProc = 0;
-    }
+    do {
+      coroutine->prev = currentCoroutine;
+      currentCoroutine = coroutine;
+      switchContext(&coroutine->prev->context, &coroutine->context);
+    } while (__sync_fetch_and_add(&coroutine->counter, -1) != 1);
 
     int finished = coroutine->finished;
     if (finished) {
@@ -154,18 +152,16 @@ void coroutineYield()
 {
   if (currentCoroutine && currentCoroutine->prev) {
     coroutineTy *old = currentCoroutine;
+    unsigned counter = __sync_fetch_and_add(&old->counter, -1);
+    assert(counter >= 2 && "Double yield detected");
+    if (counter != 2) {
+      // Other thread tried call this coroutine before
+      __sync_fetch_and_add(&old->counter, -1);
+      return;
+    }
+
+
     currentCoroutine = currentCoroutine->prev;
-    assert(__sync_fetch_and_add(&old->counter, -1) == 1 &&
-           "Multiple yield from one coroutine detected!");
     switchContext(&old->context, &currentCoroutine->context);
   }
-}
-
-void coroutineSetYieldCallback(coroutineCbTy proc, void *arg)
-{
-  // Create main fiber if it not exists
-  if (currentCoroutine == 0)
-    mainCoroutine = currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
-  currentCoroutine->cbProc = proc;
-  currentCoroutine->cbArg = arg;
 }

@@ -20,7 +20,6 @@
 #define TAG_STATUS_MASK ((((tag_t)1) << TAG_STATUS_SIZE)-1)
 #define TAG_GENERATION_MASK (~TAG_STATUS_MASK)
 
-__tls List threadLocalQueue;
 __tls unsigned currentFinishedSync;
 __tls unsigned messageLoopThreadId;
 
@@ -58,14 +57,33 @@ void eqPushBack(List *list, asyncOpRoot *op)
   }
 }
 
-void fnPushBack(List *list, asyncOpRoot *op)
+void fnPush(asyncBase *base, asyncOpRoot *op)
 {
-  op->next = 0;
-  if (list->tail) {
-    list->tail->next = op;
-    list->tail = op;
-  } else {
-    list->head = list->tail = op;
+  assert(((uintptr_t)op & TAGGED_POINTER_DATA_MASK) == 0 && "Non-aligned operation pointer");
+  op->next = (asyncOpRoot*)UINTPTR_MAX;
+  op->next = __atomic_exchange_n(&base->globalQueue, __tagged_pointer_make(op, opGetGeneration(op)), __ATOMIC_SEQ_CST);
+  base->methodImpl.wakeup(base);
+}
+
+asyncOpRoot *fnPop(asyncBase *base)
+{
+  asyncOpRoot *taggedPtr;
+  asyncOpRoot *op;
+  asyncOpRoot *next;
+  tag_t tag;
+
+  for (;;) {
+    taggedPtr = base->globalQueue;
+    if (!taggedPtr)
+      return 0;
+
+    __tagged_pointer_decode(taggedPtr, (void**)&op, &tag);
+    while ( (next = op->next) == (asyncOpRoot*)UINTPTR_MAX)
+      continue;
+
+    if (__pointer_atomic_compare_and_swap(&base->globalQueue, taggedPtr, next)) {
+      return op;
+    }
   }
 }
 
@@ -181,12 +199,12 @@ int pageMapRemove(pageMap *map, asyncOpListLink *link)
   return removed;
 }
 
-static void objectIncrementReference(aioObjectRoot *object)
+void objectIncrementReference(aioObjectRoot *object)
 {
   __tag_atomic_fetch_and_add(&object->refs, 1);
 }
 
-static void objectDecrementReference(aioObjectRoot *object, tag_t count)
+void objectDecrementReference(aioObjectRoot *object, tag_t count)
 {
   if (__tag_atomic_fetch_and_add(&object->refs, (tag_t)0-count) == count) {
     // try delete
@@ -317,7 +335,7 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
   op->tag = ((opGetGeneration(op)+1) << TAG_STATUS_SIZE) | aosPending;
   op->executeMethod = startMethod;
   op->cancelMethod = cancelMethod;
-  op->finishMethod = finishMethod;
+  op->finishMethod = (flags & afCoroutine) ? coroutineCurrent() : finishMethod;
   op->executeQueue.prev = 0;
   op->executeQueue.next = 0;
   op->next = 0;
@@ -349,7 +367,7 @@ static void opRun(asyncOpRoot *op, List *list)
   }
 }
 
-void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finished, tag_t *needStart)
+void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, tag_t *needStart)
 {
   List *list = 0;
   tag_t tag = 0;
@@ -372,15 +390,15 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
       if (opptr->running == arRunning) {
         opptr->running = arCancelling;
         if (opptr->cancelMethod(opptr))
-          opRelease(opptr, opGetStatus(opptr), list, finished);
+          opRelease(opptr, opGetStatus(opptr), list);
       } else {
-        opRelease(opptr, opGetStatus(opptr), list, finished);
+        opRelease(opptr, opGetStatus(opptr), list);
       }
       break;
     }
 
     case aaFinish : {
-      opRelease(opptr, opGetStatus(opptr), list, finished);
+      opRelease(opptr, opGetStatus(opptr), list);
       break;
     }
 
@@ -388,7 +406,7 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
       if (opptr->running == arRunning)
         opptr->running = arWaiting;
       else
-        opRelease(opptr, opGetStatus(opptr), list, finished);
+        opRelease(opptr, opGetStatus(opptr), list);
       break;
     }
 
@@ -399,7 +417,7 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, List *finishe
   *needStart |= (list->head && list->head->running == arWaiting) ? tag : 0;
 }
 
-void processOperationList(aioObjectRoot *object, List *finished, tag_t *needStart, tag_t *enqueued)
+void processOperationList(aioObjectRoot *object, tag_t *needStart, tag_t *enqueued)
 {
   asyncOpAction *action;
   __spinlock_acquire(&object->announcementQueue.lock);
@@ -409,14 +427,14 @@ void processOperationList(aioObjectRoot *object, List *finished, tag_t *needStar
   __spinlock_release(&object->announcementQueue.lock);
 
   while (action) {
-    processAction(action->op, action->actionType, finished, needStart);
+    processAction(action->op, action->actionType, needStart);
     objectRelease(action, asyncOpActionPool);
     action = action->next;
     (*enqueued)++;
   }
 }
 
-void opRelease(asyncOpRoot *op, AsyncOpStatus status, List *executeList, List *finished)
+void opRelease(asyncOpRoot *op, AsyncOpStatus status, List *executeList)
 {
   if (op->timerId && status != aosTimeout) {
     if (op->flags & afRealtime)
@@ -427,19 +445,10 @@ void opRelease(asyncOpRoot *op, AsyncOpStatus status, List *executeList, List *f
 
   if (executeList)
     eqRemove(executeList, op);
-  if (!(op->flags & afSerialized)) {
-    fnPushBack(finished, op);
-  } else {
-    aioObjectRoot *object = op->object;
-    objectRelease(op, op->poolId);
-    if (op->callback)
-      op->finishMethod(op);
-    objectDecrementReference(object, 1);
-  }
-
+  fnPush(op->object->base, op);
 }
 
-void executeOperationList(List *list, List *finished)
+void executeOperationList(List *list)
 {
   asyncOpRoot *op = list->head;
   while (op) {
@@ -451,7 +460,7 @@ void executeOperationList(List *list, List *finished)
     }
 
     if (opSetStatus(op, opGetGeneration(op), status))
-      opRelease(op, status, 0, finished);
+      opRelease(op, status, 0);
     else
       op->executeQueue.prev = op->executeQueue.next = 0;
     op = next;
@@ -462,7 +471,7 @@ void executeOperationList(List *list, List *finished)
     list->tail = 0;
 }
 
-void cancelOperationList(List *list, List *finished, AsyncOpStatus status)
+void cancelOperationList(List *list, AsyncOpStatus status)
 {
   asyncOpRoot *op = list->head;
   while (op) {
@@ -471,9 +480,9 @@ void cancelOperationList(List *list, List *finished, AsyncOpStatus status)
       if (op->running == arRunning) {
         op->running = arCancelling;
         if (op->cancelMethod(op))
-          opRelease(op, opGetStatus(op), list, finished);
+          opRelease(op, opGetStatus(op), list);
       } else {
-        opRelease(op, opGetStatus(op), list, finished);
+        opRelease(op, opGetStatus(op), list);
       }
     }
     op = next;
@@ -516,25 +525,6 @@ void combinerCallWithoutLock(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, 
   object->base->methodImpl.combiner(object, tag, op, action);
 }
 
-static void combinerCallDelayedCb(void *arg)
-{
-  combinerCallArgs *ccArgs = (combinerCallArgs*)arg;
-  if (ccArgs->needLock)
-    combinerCall(ccArgs->object, ccArgs->tag, ccArgs->op, ccArgs->actionType);
-  else
-    ccArgs->object->base->methodImpl.combiner(ccArgs->object, ccArgs->tag, ccArgs->op, ccArgs->actionType);
-}
-
-void combinerCallDelayed(combinerCallArgs *args, aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType, int needLock)
-{
-  args->object = object;
-  args->tag = tag;
-  args->op = op;
-  args->actionType = actionType;
-  args->needLock = needLock;
-  coroutineSetYieldCallback(combinerCallDelayedCb, args);
-}
-
 void opStart(asyncOpRoot *op)
 {
   combinerCall(op->object, 1, op, aaStart);
@@ -556,26 +546,39 @@ void resumeParent(asyncOpRoot *op, AsyncOpStatus status)
   }
 }
 
-void addToThreadLocalQueue(asyncOpRoot *op)
+void addToGlobalQueue(asyncOpRoot *op)
 {
-  fnPushBack(&threadLocalQueue, op);
+  fnPush(op->object->base, op);
 }
 
-void executeThreadLocalQueue()
+int executeGlobalQueue(asyncBase *base)
 {
-  asyncOpRoot *op = threadLocalQueue.head;
-  threadLocalQueue.head = 0;
-  threadLocalQueue.tail = 0;
-  while (op) {
-    currentFinishedSync = 0;
-    asyncOpRoot *nextOp = op->next;
-    aioObjectRoot *object = op->object;
-    objectRelease(op, op->poolId);
-    if (op->callback)
-      op->finishMethod(op);
-    objectDecrementReference(object, 1);
-    op = nextOp;
+  asyncOpRoot *op;
+  while ( (op = fnPop(base)) ) {
+    switch (op->opCode) {
+      case actUserEvent : {
+        op->finishMethod(op);
+        break;
+      }
+      case actEmpty : {
+        return 0;
+      }
+      default : {
+        currentFinishedSync = 0;
+        if (op->flags & afCoroutine) {
+          assert(coroutineIsMain() && "Execute global queue from non-main coroutine");
+          coroutineCall((coroutineTy*)op->finishMethod);
+        } else {
+          aioObjectRoot *object = op->object;
+          objectRelease(op, op->poolId);
+          op->finishMethod(op);
+          objectDecrementReference(object, 1);
+        }
+      }
+    }
   }
+
+  return 1;
 }
 
 int copyFromBuffer(void *dst, size_t *offset, struct ioBuffer *src, size_t size)

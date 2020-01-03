@@ -21,7 +21,7 @@ struct MessageHeader {
 
 constexpr int USERSPACE_BUFFER_SIZE=1472;
 
-enum zmtpOpTy {
+enum btcOpTy {
   btcOpRecv = OPCODE_READ,
   btcOpSend = OPCODE_WRITE
 };
@@ -51,11 +51,6 @@ struct btcOp {
   xmstream *stream;
   void *data;
   size_t size;
-};
-
-struct coroReturnStruct {
-  coroutineTy *coroutine;
-  AsyncOpStatus status;
 };
 
 static uint32_t calculateCheckSum(void *data, size_t size)
@@ -98,12 +93,7 @@ static void decodeMessageHeader(MessageHeader *header)
 
 static asyncOpRoot *alloc()
 {
-  return static_cast<asyncOpRoot*>(malloc(sizeof(btcOp)));
-}
-
-static void resumeConnectCb(AsyncOpStatus status, aioObject*, void *arg)
-{
-  resumeParent(static_cast<asyncOpRoot*>(arg), status);
+  return static_cast<asyncOpRoot*>(__tagged_alloc(sizeof(btcOp)));
 }
 
 static void resumeRwCb(AsyncOpStatus status, aioObject*, size_t, void *arg)
@@ -133,20 +123,6 @@ static void sendFinish(asyncOpRoot *opptr)
   reinterpret_cast<btcSendCb*>(opptr->callback)(opGetStatus(opptr),
                                                 reinterpret_cast<BTCSocket*>(opptr->object),
                                                 opptr->arg);
-}
-
-void coroRecvStreamCb(AsyncOpStatus status, BTCSocket*, char[12], xmstream*, void *arg)
-{
-  coroReturnStruct *r = static_cast<coroReturnStruct*>(arg);
-  r->status = status;
-  coroutineCall(r->coroutine);
-}
-
-void coroSendCb(AsyncOpStatus status, BTCSocket*, void *arg)
-{
-  coroReturnStruct *r = static_cast<coroReturnStruct*>(arg);
-  r->status = status;
-  coroutineCall(r->coroutine);
 }
 
 btcOp *initReadOp(aioExecuteProc *start,
@@ -407,6 +383,7 @@ BTCSocket *btcSocketNew(asyncBase *base, aioObject *plainSocket)
 
   // Set up default magic for BTC mainnet
   socket->magic = 0xD9B4BEF9;
+  return socket;
 }
 
 void btcSocketDelete(BTCSocket *socket)
@@ -431,7 +408,6 @@ ssize_t aioBtcRecv(BTCSocket *socket, char command[12], xmstream &stream, size_t
   size_t bytesTransferred;
   aioMethod([=, &stream]() { return &initReadOp(startBtcRecv, recvFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, btcOpRecv, &stream, sizeLimit, command)->root; },
             [=, &stream, &bytesTransferred]() { return implBtcRecv(socket, command, stream, sizeLimit, flags, timeout, callback, arg, &bytesTransferred); },
-            [=, &stream]() { callback(aosSuccess, socket, command, &stream, arg); },
             [&bytesTransferred, &result]() { result = static_cast<ssize_t>(bytesTransferred); },
             [](asyncOpRoot*) {},
             &socket->root,
@@ -447,7 +423,6 @@ ssize_t aioBtcSend(BTCSocket *socket, const char *command, void *data, size_t si
   size_t bytesTransferred;
   aioMethod([=]() { return &initWriteOp(startBtcSend, sendFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, btcOpSend, command, data, size)->root; },
             [=, &bytesTransferred]() { return implBtcSend(socket, command, data, size, flags, timeout, callback, arg, &bytesTransferred); },
-            [=]() { callback(aosSuccess, socket, arg); },
             [&bytesTransferred, &result]() { result = static_cast<ssize_t>(bytesTransferred); },
             [](asyncOpRoot*) {},
             &socket->root,
@@ -461,35 +436,37 @@ ssize_t aioBtcSend(BTCSocket *socket, const char *command, void *data, size_t si
 ssize_t ioBtcRecv(BTCSocket *socket, char command[12], xmstream &stream, size_t sizeLimit, AsyncFlags flags, uint64_t timeout)
 {
   size_t bytesTransferred;
-  combinerCallArgs ccArgs;
-  coroReturnStruct r = {coroutineCurrent(), aosSuccess};
-  bool finished =
-    ioMethod([=, &stream, &r]() { return &initReadOp(startBtcRecv, recvFinish, socket, flags, timeout, reinterpret_cast<void*>(coroRecvStreamCb), &r, btcOpRecv, &stream, sizeLimit, command)->root; },
-             [=, &stream, &r, &bytesTransferred]() { return implBtcRecv(socket, command, stream, sizeLimit, flags, timeout, coroRecvStreamCb, &r, &bytesTransferred); },
+  btcOp *op = reinterpret_cast<btcOp*>(
+    ioMethod([=, &stream]() { return &initReadOp(startBtcRecv, nullptr, socket, flags | afCoroutine, timeout, nullptr, nullptr, btcOpRecv, &stream, sizeLimit, command)->root; },
+             [=, &stream, &bytesTransferred]() { return implBtcRecv(socket, command, stream, sizeLimit, flags | afCoroutine, timeout, nullptr, nullptr, &bytesTransferred); },
              [](asyncOpRoot*) {},
-             &ccArgs,
              &socket->root,
-             btcOpRecv);
-  if (finished)
-    return static_cast<ssize_t>(bytesTransferred);
-  else
-    return (r.status == aosSuccess) ? static_cast<ssize_t>(bytesTransferred) : -r.status;
+             btcOpRecv));
+  if (op) {
+    AsyncOpStatus status = opGetStatus(&op->root);
+    objectRelease(&op->root, op->root.poolId);
+    objectDecrementReference(&socket->root, 1);
+    return status == aosSuccess ? static_cast<ssize_t>(stream.sizeOf()) : -status;
+  } else {
+    return static_cast<ssize_t>(stream.sizeOf());
+  }
 }
 
 ssize_t ioBtcSend(BTCSocket *socket, const char *command, void *data, size_t size, AsyncFlags flags, uint64_t timeout)
 {
   size_t bytesTransferred;
-  combinerCallArgs ccArgs;
-  coroReturnStruct r = {coroutineCurrent(), aosSuccess};
-  bool finished =
-    ioMethod([=, &r]() { return &initWriteOp(startBtcSend, sendFinish, socket, flags, timeout, reinterpret_cast<void*>(coroSendCb), &r, btcOpSend, command, data, size)->root; },
-             [=, &r, &bytesTransferred]() { return implBtcSend(socket, command, data, size, flags, timeout, coroSendCb, &r, &bytesTransferred); },
+  btcOp *op = reinterpret_cast<btcOp*>(
+    ioMethod([=]() { return &initWriteOp(startBtcSend, nullptr, socket, flags | afCoroutine, timeout, nullptr, nullptr, btcOpSend, command, data, size)->root; },
+             [=, &bytesTransferred]() { return implBtcSend(socket, command, data, size, flags | afCoroutine, timeout, nullptr, nullptr, &bytesTransferred); },
              [](asyncOpRoot*) {},
-             &ccArgs,
              &socket->root,
-             btcOpSend);
-  if (finished)
-    return static_cast<ssize_t>(bytesTransferred);
-  else
-    return (r.status == aosSuccess) ? static_cast<ssize_t>(bytesTransferred) : -r.status;
+             btcOpSend));
+  if (op) {
+    AsyncOpStatus status = opGetStatus(&op->root);
+    objectRelease(&op->root, op->root.poolId);
+    objectDecrementReference(&socket->root, 1);
+    return status == aosSuccess ? static_cast<ssize_t>(size) : -status;
+  } else {
+    return static_cast<ssize_t>(size);
+  }
 }
