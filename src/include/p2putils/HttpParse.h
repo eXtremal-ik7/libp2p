@@ -48,10 +48,12 @@ typedef enum HttpParserResultTy {
 } HttpParserResultTy;
 
 typedef enum HttpParserDataTy {
-  httpDtStartLine = 0,
+  httpDtInitialize = 0,
+  httpDtStartLine,
   httpDtHeaderEntry,
   httpDtData,
-  httpDtDataFragment
+  httpDtDataFragment,
+  httpDtFinalize
 } HttpParserDataTy;
 
 typedef struct HttpParserState {

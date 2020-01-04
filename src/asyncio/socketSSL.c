@@ -7,6 +7,7 @@
 #include "atomic.h"
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
+#include <string.h>
 
 #define DEFAULT_SSL_READ_BUFFER_SIZE 16384
 #define DEFAULT_SSL_WRITE_BUFFER_SIZE 16384
@@ -42,6 +43,8 @@ static void sslWriteWriteCb(AsyncOpStatus status, aioObject *object, size_t tran
 static asyncOpRoot *alloc()
 {
   SSLOp *op = (SSLOp*)__tagged_alloc(sizeof(SSLOp));
+  op->internalBuffer = 0;
+  op->internalBufferSize = 0;
   return (asyncOpRoot*)op;
 }
 
@@ -76,6 +79,7 @@ static SSLOp *allocReadSSLOp(aioExecuteProc executeProc,
 {
   SSLOp *op = (SSLOp*)
     initAsyncOpRoot(sslPoolId, sslPoolTimerId, alloc, executeProc, cancel, finishProc, &socket->root, callback, arg, flags, opCode, timeout);
+
   op->buffer = buffer;
   op->transactionSize = size;
   op->bytesTransferred = 0;
@@ -96,7 +100,22 @@ static SSLOp *allocWriteSSLOp(aioExecuteProc executeProc,
 {
   SSLOp *op = (SSLOp*)
     initAsyncOpRoot(sslPoolId, sslPoolTimerId, alloc, executeProc, cancel, finishProc, &socket->root, callback, arg, flags, opCode, timeout);
-  op->buffer = (void*)(uintptr_t)buffer;
+
+  if (!(flags & afNoCopy) && size) {
+    if (op->internalBuffer == 0) {
+      op->internalBuffer = malloc(size);
+      op->internalBufferSize = size;
+    } else if (op->internalBufferSize < size) {
+      op->internalBufferSize = size;
+      op->internalBuffer = realloc(op->internalBuffer, size);
+    }
+
+    memcpy(op->internalBuffer, buffer, size);
+    op->buffer = op->internalBuffer;
+  } else {
+    op->buffer = (void*)(uintptr_t)buffer;
+  }
+
   op->transactionSize = size;
   op->bytesTransferred = 0;
   op->state = sslStInitalize;
@@ -127,13 +146,13 @@ size_t copyFromOut(SSLSocket *S)
 
 static void sslConnectConnectCb(AsyncOpStatus status, aioObject *object, void *arg)
 {
-  __UNUSED(object)
+  __UNUSED(object);
   resumeParent((asyncOpRoot*)arg, status);
 }
 
 static void sslConnectReadCb(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 {
-  __UNUSED(object)
+  __UNUSED(object);
   SSLOp *op = (SSLOp*)arg;
   SSLSocket *socket = (SSLSocket*)op->root.object;
   // TODO: correct processing >4Gb data blocks
@@ -149,6 +168,8 @@ static AsyncOpStatus connectProc(asyncOpRoot *opptr)
   if (op->state == sslStInitalize) {
       op->state = sslStProcessing;
       aioConnect(socket->object, &op->address, 0, sslConnectConnectCb, op);
+      if (op->buffer)
+        SSL_set_tlsext_host_name(socket->ssl, op->buffer);
       return aosPending;
   }
 
@@ -170,7 +191,7 @@ static AsyncOpStatus connectProc(asyncOpRoot *opptr)
 
 static void sslReadReadCb(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 {
-  __UNUSED(object)
+  __UNUSED(object);
   SSLOp *op = (SSLOp*)arg;
   SSLSocket *socket = (SSLSocket*)op->root.object;
   // TODO: correct processing >4Gb data blocks
@@ -229,7 +250,7 @@ SSLSocket *sslSocketNew(asyncBase *base)
 #ifdef DEPRECATEDIN_1_1_0
     S->sslContext = SSL_CTX_new (TLS_client_method());
 #else
-    S->sslContext = SSL_CTX_new (TLSv1_1_client_method());
+    S->sslContext = SSL_CTX_new (TLS_method());
 #endif
     S->ssl = SSL_new(S->sslContext);
     S->bioIn = BIO_new(BIO_s_mem());
@@ -260,12 +281,13 @@ socketTy sslGetSocket(const SSLSocket *socket)
 
 void aioSslConnect(SSLSocket *socket,
                    const HostAddress *address,
+                   const char *tlsextHostName,
                    uint64_t usTimeout,
                    sslConnectCb callback,
                    void *arg)
 {
   SSL_set_connect_state(socket->ssl);
-  SSLOp *newOp = allocReadSSLOp(connectProc, connectFinish, socket, (void*)callback, arg, 0, 0, afNone, sslOpConnect, usTimeout);
+  SSLOp *newOp = allocWriteSSLOp(connectProc, connectFinish, socket, (void*)callback, arg, tlsextHostName, tlsextHostName ? strlen(tlsextHostName)+1 : 0, afNone, sslOpConnect, usTimeout);
   newOp->address = *address;
   opStart(&newOp->root);
 }
@@ -460,10 +482,10 @@ ssize_t aioSslWrite(SSLSocket *socket,
 #undef MAKE_OP
 }
 
-int ioSslConnect(SSLSocket *socket, const HostAddress *address, uint64_t usTimeout)
+int ioSslConnect(SSLSocket *socket, const HostAddress *address, const char *tlsextHostName, uint64_t usTimeout)
 {
   SSL_set_connect_state(socket->ssl);
-  SSLOp *op = allocReadSSLOp(connectProc, 0, socket, 0, 0, 0, 0, afCoroutine, sslOpConnect, usTimeout);
+  SSLOp *op = allocWriteSSLOp(connectProc, 0, socket, 0, 0, tlsextHostName, tlsextHostName ? strlen(tlsextHostName)+1 : 0, afCoroutine, sslOpConnect, usTimeout);
   op->address = *address;
   combinerCall(&socket->root, 1, &op->root, aaStart);
   coroutineYield();

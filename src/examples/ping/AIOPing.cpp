@@ -103,7 +103,7 @@ void printHelpMessage(const char *appName)
 
 void readCb(AsyncOpStatus status, aioObject *rawSocket, HostAddress address, size_t transferred, void *arg)
 {
-  __UNUSED(address)
+  __UNUSED(address);
   ICMPClientData *client = static_cast<ICMPClientData*>(arg);
   if (status == aosSuccess && transferred >= (sizeof(ip) + sizeof(icmp))) {
     uint8_t *ptr = static_cast<uint8_t*>(client->buffer);

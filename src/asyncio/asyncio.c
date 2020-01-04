@@ -131,7 +131,7 @@ static asyncOp *initWriteAsyncOp(aioExecuteProc *startProc,
 
 static void coroutineEventCb(aioObject *event, void *arg)
 {
-  __UNUSED(event)
+  __UNUSED(event);
   coroutineTy *coroutine = (coroutineTy*)arg;
   assert(coroutineIsMain() && "no main coroutine!\n");
   coroutineCall(coroutine);

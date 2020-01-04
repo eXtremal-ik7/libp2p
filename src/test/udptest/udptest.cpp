@@ -271,8 +271,8 @@ void test_readcb_timer_rt(AsyncOpStatus status,
                           size_t transferred,
                           void *arg)
 {
-  __UNUSED(address)
-  __UNUSED(transferred)
+  __UNUSED(address);
+  __UNUSED(transferred);
   threadPacketsNum++;
   ReceiverCtx *ctx = static_cast<ReceiverCtx*>(arg);
   
@@ -493,8 +493,8 @@ void test_aio(unsigned senderThreads, unsigned receiverThreads, uint16_t port, A
 
 int main(int argc, char **argv)
 {
-  __UNUSED(argc)
-  __UNUSED(argv)
+  __UNUSED(argc);
+  __UNUSED(argv);
 
   initializeSocketSubsystem();
   uint16_t port = gPortBase;

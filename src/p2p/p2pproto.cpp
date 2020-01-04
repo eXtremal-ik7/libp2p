@@ -217,7 +217,7 @@ void aiop2pAccept(p2pConnection *connection, uint64_t timeout, p2pAcceptCb *call
 
 static void connectCb(AsyncOpStatus status, aioObject *socket, void *arg)
 {
-  __UNUSED(socket)
+  __UNUSED(socket);
   resumeParent(static_cast<asyncOpRoot*>(arg), status);
 }
 

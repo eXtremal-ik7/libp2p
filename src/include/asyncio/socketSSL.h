@@ -35,6 +35,8 @@ typedef struct SSLOp {
   void *buffer;
   size_t transactionSize;
   size_t bytesTransferred;  
+  void *internalBuffer;
+  size_t internalBufferSize;
 } SSLOp;
 
 
@@ -62,6 +64,7 @@ asyncOpRoot *implSslWrite(SSLSocket *socket,
 
 void aioSslConnect(SSLSocket *socket,
                    const HostAddress *address,
+                   const char *tlsextHostName,
                    uint64_t usTimeout,
                    sslConnectCb callback,
                    void *arg);
@@ -83,7 +86,7 @@ ssize_t aioSslWrite(SSLSocket *socket,
                     void *arg);
 
 
-int ioSslConnect(SSLSocket *socket, const HostAddress *address, uint64_t usTimeout);
+int ioSslConnect(SSLSocket *socket, const HostAddress *address, const char *tlsextHostName, uint64_t usTimeout);
 ssize_t ioSslRead(SSLSocket *socket, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
 ssize_t ioSslWrite(SSLSocket *socket, const void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
 

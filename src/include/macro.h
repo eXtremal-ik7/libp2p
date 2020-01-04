@@ -1,6 +1,6 @@
 #ifndef __UNUSED_H_
 #define __UNUSED_H_
-#define __UNUSED(x) (void)x;
+#define __UNUSED(x) (void)x
 
 #if defined(__clang__)
 #define __NO_DEPRECATED_BEGIN \
