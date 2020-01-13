@@ -17,6 +17,7 @@ static inline AsyncOpStatus btcMakeStatus(btcStatusTy status) {
 typedef void btcRecvCb(AsyncOpStatus, BTCSocket*, char*, xmstream*, void*);
 typedef void btcSendCb(AsyncOpStatus, BTCSocket*, void*);
 
+aioObjectRoot *btcSocketHandle(BTCSocket *socket);
 BTCSocket *btcSocketNew(asyncBase *base, aioObject *socket);
 void btcSocketDelete(BTCSocket *socket);
 

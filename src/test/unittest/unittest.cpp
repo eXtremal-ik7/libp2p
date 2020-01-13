@@ -381,7 +381,6 @@ void test_userevent_cb(aioUserEvent *event, void *arg)
 {
   TestContext *ctx = static_cast<TestContext*>(arg);
   unsigned value = __uint_atomic_fetch_and_add(reinterpret_cast<unsigned*>(&ctx->serverState), 1);
-
   if (value == 256) {
     userEventActivate(event);
   } else if (value == 257) {

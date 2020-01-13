@@ -16,10 +16,6 @@
 #define TAGGED_POINTER_DATA_MASK (TAGGED_POINTER_ALIGNMENT-1)
 #define TAGGED_POINTER_PTR_MASK (~TAGGED_POINTER_DATA_MASK)
 
-#define TAG_STATUS_SIZE 8
-#define TAG_STATUS_MASK ((((tag_t)1) << TAG_STATUS_SIZE)-1)
-#define TAG_GENERATION_MASK (~TAG_STATUS_MASK)
-
 __tls unsigned currentFinishedSync;
 __tls unsigned messageLoopThreadId;
 
@@ -78,10 +74,10 @@ asyncOpRoot *fnPop(asyncBase *base)
       return 0;
 
     __tagged_pointer_decode(taggedPtr, (void**)&op, &tag);
-    while ( (next = op->next) == (asyncOpRoot*)UINTPTR_MAX)
+    while (__atomic_load_n(&op->next, __ATOMIC_SEQ_CST) == (asyncOpRoot*)UINTPTR_MAX)
       continue;
 
-    if (__pointer_atomic_compare_and_swap(&base->globalQueue, taggedPtr, next)) {
+    if (__pointer_atomic_compare_and_swap(&base->globalQueue, taggedPtr, op->next)) {
       return op;
     }
   }
@@ -213,6 +209,20 @@ void objectDecrementReference(aioObjectRoot *object, tag_t count)
   }
 }
 
+tag_t eventIncrementReference(aioUserEvent *event, tag_t tag)
+{
+  return __tag_atomic_fetch_and_add(&event->tag, tag);
+}
+
+void eventDecrementReference(aioUserEvent *event, tag_t tag)
+{
+  if ((__tag_atomic_fetch_and_add(&event->tag, (tag_t)0 - tag) & TAG_EVENT_MASK) == (tag & TAG_EVENT_MASK)) {
+    objectRelease(&event->root, event->root.poolId);
+    if (event->destructorCb)
+      event->destructorCb(event, event->destructorCbArg);
+  }
+}
+
 void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op)
 {
   asyncOpListLink *timerLink = objectGet(asyncOpLinkListPool);
@@ -267,6 +277,20 @@ void initObjectRoot(aioObjectRoot *object, asyncBase *base, IoObjectTy type, aio
   object->type = type;
   object->refs = 1;
   object->destructor = destructor;
+  object->destructorCb = 0;
+  object->destructorCbArg = 0;
+}
+
+void objectSetDestructorCb(aioObjectRoot *object, aioObjectDestructorCb callback, void *arg)
+{
+  object->destructorCb = callback;
+  object->destructorCbArg = arg;
+}
+
+void eventSetDestructorCb(aioUserEvent *event, userEventDestructorCb callback, void *arg)
+{
+  event->destructorCb = callback;
+  event->destructorCbArg = arg;
 }
 
 void cancelIo(aioObjectRoot *object)
@@ -557,7 +581,9 @@ int executeGlobalQueue(asyncBase *base)
   while ( (op = fnPop(base)) ) {
     switch (op->opCode) {
       case actUserEvent : {
+        aioUserEvent *event = (aioUserEvent*)op;
         op->finishMethod(op);
+        eventDecrementReference(event, TAG_EVENT_OP);
         break;
       }
       case actEmpty : {
@@ -571,7 +597,8 @@ int executeGlobalQueue(asyncBase *base)
         } else {
           aioObjectRoot *object = op->object;
           objectRelease(op, op->poolId);
-          op->finishMethod(op);
+          if (op->callback)
+            op->finishMethod(op);
           objectDecrementReference(object, 1);
         }
       }

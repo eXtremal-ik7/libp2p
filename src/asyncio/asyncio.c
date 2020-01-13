@@ -233,8 +233,12 @@ aioUserEvent *newUserEvent(asyncBase *base, aioEventCb callback, void *arg)
   event->root.finishMethod = eventFinish;
   event->root.callback = (void*)callback;
   event->root.arg = arg;
+  event->root.tag = ((opGetGeneration(&event->root)+1) << TAG_STATUS_SIZE) | aosPending;
   event->base = base;
   event->counter = 0;
+  event->tag = 1;
+  event->destructorCb = 0;
+  event->destructorCbArg = 0;
   return event;
 }
 
@@ -273,16 +277,20 @@ void userEventStopTimer(aioUserEvent *event)
   event->base->methodImpl.stopTimer(&event->root);
 }
 
-
 void userEventActivate(aioUserEvent *event)
 {
-  event->base->methodImpl.activate(event);
+  // Allow only single user activation
+  tag_t result = eventIncrementReference(event, TAG_EVENT_OP);
+  if ((result & (TAG_EVENT_OP_MASK | TAG_EVENT_DELETE_MASK)) == TAG_EVENT_OP)
+    event->base->methodImpl.activate(event);
+  else
+    eventDecrementReference(event, TAG_EVENT_OP);
 }
 
 void deleteUserEvent(aioUserEvent *event)
 {
   event->base->methodImpl.stopTimer(&event->root);
-  objectRelease(&event->root, event->root.poolId);
+  eventDecrementReference(event, TAG_EVENT_OP - TAG_EVENT_DELETE);
 }
 
 asyncOpRoot *implRead(aioObject *object,

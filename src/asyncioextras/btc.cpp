@@ -49,8 +49,10 @@ struct btcOp {
   char *commandPtr;
   char command[12];
   xmstream *stream;
-  void *data;
+  void *buffer;
   size_t size;
+  void *internalBuffer;
+  size_t internalBufferSize;
 };
 
 static uint32_t calculateCheckSum(void *data, size_t size)
@@ -93,7 +95,12 @@ static void decodeMessageHeader(MessageHeader *header)
 
 static asyncOpRoot *alloc()
 {
-  return static_cast<asyncOpRoot*>(__tagged_alloc(sizeof(btcOp)));
+  btcOp *op = static_cast<btcOp*>(__tagged_alloc(sizeof(btcOp)));
+  op->internalBuffer = nullptr;
+  op->internalBufferSize = 0;
+  return &op->root;
+
+//  return static_cast<asyncOpRoot*>();
 }
 
 static void resumeRwCb(AsyncOpStatus status, aioObject*, size_t, void *arg)
@@ -163,7 +170,25 @@ btcOp *initWriteOp(aioExecuteProc *start,
     initAsyncOpRoot(poolId, timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
   btcOp *op = reinterpret_cast<btcOp*>(opptr);
   op->state = stInitialize;
-  op->data = data;
+
+//  op->buffer = data;
+  if (!(flags & afNoCopy)) {
+    if (op->internalBuffer == nullptr) {
+      op->internalBuffer = malloc(size);
+      op->internalBufferSize = size;
+    } else if (op->internalBufferSize < size) {
+      op->internalBufferSize = size;
+      op->internalBuffer = realloc(op->internalBuffer, size);
+    }
+
+    memcpy(op->internalBuffer, data, size);
+    op->buffer = op->internalBuffer;
+  } else {
+    op->buffer = (void*)(uintptr_t)data;
+  }
+
+
+
   op->size = size;
   op->stream = nullptr;
   strncpy(op->command, command, sizeof(op->command));
@@ -177,6 +202,7 @@ static AsyncOpStatus startBtcRecv(asyncOpRoot *opptr)
   MessageHeader *header = reinterpret_cast<MessageHeader*>(socket->receiveBuffer);
   asyncOpRoot *childOp = nullptr;
   size_t bytes;
+
   while (!childOp) {
     switch (op->state) {
       case stInitialize : {
@@ -233,7 +259,6 @@ asyncOpRoot *implBtcRecv(BTCSocket *socket,
   asyncOpRoot *childOp = nullptr;
   btcOpState state = stInitialize;
   AsyncOpStatus result = aosSuccess;
-
   state = stReadData;
   MessageHeader *header = reinterpret_cast<MessageHeader*>(socket->receiveBuffer);
   if ( !(childOp = implRead(socket->plainSocket, header, sizeof(MessageHeader), afWaitAll, 0, resumeRwCb, nullptr, &bytes)) ) {
@@ -288,11 +313,11 @@ static AsyncOpStatus startBtcSend(asyncOpRoot *opptr)
   while (!childOp) {
     switch (op->state) {
       case stInitialize : {
-        buildMessageHeader(header, socket->magic, op->command, op->data, op->size);
+        buildMessageHeader(header, socket->magic, op->command, op->buffer, op->size);
         if (op->size+sizeof(MessageHeader) <= sizeof(buffer)) {
           op->state = stFinished;
           uint8_t *dataPtr = buffer + sizeof(MessageHeader);
-          memcpy(dataPtr, op->data, op->size);
+          memcpy(dataPtr, op->buffer, op->size);
           childOp = implWrite(socket->plainSocket, buffer, op->size+sizeof(MessageHeader), afWaitAll, 0, resumeRwCb, opptr, &bytes);
         } else {
           op->state = stWriteData;
@@ -304,7 +329,7 @@ static AsyncOpStatus startBtcSend(asyncOpRoot *opptr)
 
       case stWriteData : {
         op->state = stFinished;
-        childOp = implWrite(socket->plainSocket, op->data, op->size, afWaitAll, 0, resumeRwCb, opptr, &bytes);
+        childOp = implWrite(socket->plainSocket, op->buffer, op->size, afWaitAll, 0, resumeRwCb, opptr, &bytes);
         break;
       }
 
@@ -370,6 +395,11 @@ void btcSocketDestructor(aioObjectRoot *object)
 {
   deleteAioObject(reinterpret_cast<BTCSocket*>(object)->plainSocket);
   objectRelease(object, btcSocketPool);
+}
+
+aioObjectRoot *btcSocketHandle(BTCSocket *socket)
+{
+  return &socket->root;
 }
 
 BTCSocket *btcSocketNew(asyncBase *base, aioObject *plainSocket)

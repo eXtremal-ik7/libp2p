@@ -104,6 +104,8 @@ typedef AsyncOpStatus aioExecuteProc(asyncOpRoot*);
 typedef int aioCancelProc(asyncOpRoot*);
 typedef void aioFinishProc(asyncOpRoot*);
 typedef void aioObjectDestructor(aioObjectRoot*);
+typedef void aioObjectDestructorCb(aioObjectRoot*, void*);
+typedef void userEventDestructorCb(aioUserEvent*, void*);
 
 extern __tls unsigned currentFinishedSync;
 extern __tls unsigned messageLoopThreadId;
@@ -114,6 +116,10 @@ extern __tls unsigned messageLoopThreadId;
 #define TAG(x) static_cast<tag_t>(x)
 #endif
 
+#define TAG_STATUS_SIZE 8
+#define TAG_STATUS_MASK ((((tag_t)1) << TAG_STATUS_SIZE)-1)
+#define TAG_GENERATION_MASK (~TAG_STATUS_MASK)
+
 #define TAG_READ (TAG(1) << (sizeof(tag_t)*8 - 2))
 #define TAG_READ_MASK (TAG(3) << (sizeof(tag_t)*8 - 2))
 #define TAG_WRITE (TAG(1) << (sizeof(tag_t)*8 - 4))
@@ -123,12 +129,32 @@ extern __tls unsigned messageLoopThreadId;
 #define TAG_DELETE (TAG(1) << (sizeof(tag_t)*8 - 8))
 #define TAG_CANCELIO (TAG(1) << (sizeof(tag_t)*8 - 9))
 
+// Event tag area
+#if defined(OS_32)
+#define TAG_EVENT_OP          TAG(0x00000001UL)
+#define TAG_EVENT_TIMER       TAG(0x00010000UL)
+#define TAG_EVENT_DELETE      TAG(0x10000000UL)
+#define TAG_EVENT_MASK        TAG(0x0FFFFFFFUL)
+#define TAG_EVENT_DELETE_MASK TAG(0xF0000000UL)
+#elif defined(OS_64)
+#define TAG_EVENT_OP          TAG(0x0000000000000001ULL)
+#define TAG_EVENT_TIMER       TAG(0x0000000100000000ULL)
+#define TAG_EVENT_DELETE      TAG(0x1000000000000000ULL)
+#define TAG_EVENT_OP_MASK     TAG(0x00000000FFFFFFFFULL)
+#define TAG_EVENT_MASK        TAG(0x0FFFFFFFFFFFFFFFULL)
+#define TAG_EVENT_DELETE_MASK TAG(0xF000000000000000ULL)
+#else
+#error Configution incomplete
+#endif
+
 #define OPCODE_READ 0
 #define OPCODE_WRITE (1<<(sizeof(int)*8-4))
 #define OPCODE_OTHER (1<<(sizeof(int)*8-2))
 
 void objectIncrementReference(aioObjectRoot *object);
 void objectDecrementReference(aioObjectRoot *object, tag_t count);
+tag_t eventIncrementReference(aioUserEvent *event, tag_t tag);
+void eventDecrementReference(aioUserEvent *event, tag_t tag);
 
 void *__tagged_alloc(size_t size);
 void *__tagged_pointer_make(void *ptr, tag_t data);
@@ -182,6 +208,8 @@ struct aioObjectRoot {
   ListMt announcementQueue;
   IoObjectTy type;
   aioObjectDestructor *destructor;
+  aioObjectDestructorCb *destructorCb;
+  void *destructorCbArg;
 };
 
 struct asyncOpRoot {
@@ -206,8 +234,8 @@ struct asyncOpRoot {
 };
 
 void initObjectRoot(aioObjectRoot *object, asyncBase *base, IoObjectTy type, aioObjectDestructor destructor);
-
-
+void objectSetDestructorCb(aioObjectRoot *object, aioObjectDestructorCb callback, void *arg);
+void eventSetDestructorCb(aioUserEvent *event, userEventDestructorCb callback, void *arg);
 
 void cancelIo(aioObjectRoot *object);
 void objectDelete(aioObjectRoot *object);

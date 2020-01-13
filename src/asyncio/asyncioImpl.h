@@ -94,8 +94,11 @@ struct asyncOp {
 
 struct aioUserEvent {
   asyncOpRoot root;
+  tag_t tag;
   asyncBase *base;
   int counter;
+  userEventDestructorCb *destructorCb;
+  void *destructorCbArg;
 };
 
 void pageMapInit(pageMap *map);

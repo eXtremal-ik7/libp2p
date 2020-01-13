@@ -170,6 +170,8 @@ static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpA
     if (currentTag & TAG_DELETE) {
       // Perform delete and exit combiner
       object->destructor(object);
+      if (object->destructorCb)
+        object->destructorCb(object, object->destructorCbArg);
       return;
     }
     
@@ -197,31 +199,26 @@ static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpA
     // I/O multiplexer configuration
     if (hasFd) {
       int fd = getFd((aioObject*)object);
-      int needUpdate = 0;
-      uint32_t events = 0;
+      uint32_t currentEvents = 0;
+      uint32_t newEvents = 0;
 
-      if (object->readQueue.head) {
-        if (!hasReadOp || (currentTag & TAG_READ_MASK)) {
-          needUpdate = 1;
-          events |= EPOLLIN;
-        }
-      } else {
-        if (hasReadOp && !(currentTag & TAG_READ_MASK))
-          needUpdate = 1;
-      }
+      // "Calculate" current epoll_ctl mask because we don't have map<fd, oldMask>
+      // EPOLLIN/EPOLLOUT now enabled if read/write queue was not empty and file descriptor not deactivated by EPOLLONESHOT flag
+      int fdDeactivated = (currentTag & (TAG_READ_MASK | TAG_WRITE_MASK)) != 0;
 
-      if (object->writeQueue.head) {
-        if (!hasWriteOp || (currentTag & TAG_WRITE_MASK)) {
-          events = EPOLLOUT;
-          needUpdate = 1;
-        }
-      } else {
-        if (hasWriteOp && !(currentTag & TAG_WRITE_MASK))
-          needUpdate = 1;
-      }
+      if (hasReadOp)
+        currentEvents |= EPOLLIN;
+      if (hasWriteOp)
+        currentEvents |= EPOLLOUT;
+      if (fdDeactivated)
+        currentEvents = 0;
 
-      if (needUpdate)
-        epollControl(base->epollFd, EPOLL_CTL_MOD, events ? events | EPOLLONESHOT | EPOLLRDHUP : 0, fd, object);
+      if (object->readQueue.head)
+        newEvents |= EPOLLIN;
+      if (object->writeQueue.head)
+        newEvents |= EPOLLOUT;
+      if (currentEvents != newEvents)
+        epollControl(base->epollFd, EPOLL_CTL_MOD, newEvents ? newEvents | EPOLLONESHOT | EPOLLRDHUP : 0, fd, object);
     }
     
     // Try exit combiner
@@ -250,6 +247,7 @@ void epollNextFinishedOperation(asyncBase *base)
         eventfd_write(localBase->eventFd, 1);
         return;
       }
+
       nfds = epoll_wait(localBase->epollFd, events, MAX_EVENTS, base->globalQueue ? 0 : 500);
       time_t currentTime = time(0);
       if (currentTime % base->messageLoopThreadCounter == messageLoopThreadId)
@@ -271,18 +269,23 @@ void epollNextFinishedOperation(asyncBase *base)
           asyncOpRoot *op = timer->op;
           if (op->opCode == actUserEvent) {
             aioUserEvent *event = (aioUserEvent*)op;
-            if (event->counter > 0 && --event->counter == 0) {
-              epollStopTimer(op);
-            } else {
-              // We need rearm epoll for timer
-              epollControl(localBase->epollFd,
-                           EPOLL_CTL_MOD,
-                           EPOLLIN | EPOLLONESHOT,
-                           timer->fd,
-                           __tagged_pointer_make(timer, opGetGeneration(op)));
+            if (!(eventIncrementReference(event, TAG_EVENT_TIMER) & 0xF000000000000000ULL)) {
+              // TODO: compare timer and event tag
+              if (event->counter > 0 && --event->counter == 0) {
+                epollStopTimer(op);
+              } else {
+                // We need rearm epoll for timer
+                epollControl(localBase->epollFd,
+                             EPOLL_CTL_MOD,
+                             EPOLLIN | EPOLLONESHOT,
+                             timer->fd,
+                             __tagged_pointer_make(timer, opGetGeneration(op)));
+              }
+
+              op->finishMethod(op);
             }
 
-            op->finishMethod(op);
+            eventDecrementReference(event, TAG_EVENT_TIMER);
           } else {
             opCancel(op, opEncodeTag(op, timerId), aosTimeout);
           }
@@ -515,11 +518,12 @@ AsyncOpStatus epollAsyncRead(asyncOpRoot *opptr)
 AsyncOpStatus epollAsyncWrite(asyncOpRoot *opptr)
 {
   asyncOp *op = (asyncOp*)opptr;
-  int fd = getFd((aioObject*)op->root.object);
+  aioObject *object = (aioObject*)op->root.object;
+  int fd = getFd(object);
 
-  ssize_t bytesWritten = write(fd,
-                               (uint8_t *)op->buffer + op->bytesTransferred,
-                               op->transactionSize - op->bytesTransferred);
+  ssize_t bytesWritten = object->root.type == ioObjectSocket ?
+    send(fd, (uint8_t *)op->buffer + op->bytesTransferred, op->transactionSize - op->bytesTransferred, MSG_NOSIGNAL) :
+    write(fd, (uint8_t *)op->buffer + op->bytesTransferred, op->transactionSize - op->bytesTransferred);
   if (bytesWritten > 0) {
     op->bytesTransferred += (size_t)bytesWritten;
     if (op->root.flags & afWaitAll && op->bytesTransferred < op->transactionSize)
