@@ -195,18 +195,21 @@ int pageMapRemove(pageMap *map, asyncOpListLink *link)
   return removed;
 }
 
-void objectIncrementReference(aioObjectRoot *object)
+tag_t objectIncrementReference(aioObjectRoot *object, tag_t count)
 {
-  __tag_atomic_fetch_and_add(&object->refs, 1);
+  return __tag_atomic_fetch_and_add(&object->refs, 1);
 }
 
-void objectDecrementReference(aioObjectRoot *object, tag_t count)
+tag_t objectDecrementReference(aioObjectRoot *object, tag_t count)
 {
-  if (__tag_atomic_fetch_and_add(&object->refs, (tag_t)0-count) == count) {
+  tag_t result = __tag_atomic_fetch_and_add(&object->refs, (tag_t)0-count);
+  if (result == count) {
     // try delete
     if (__tag_atomic_fetch_and_add(&object->tag, TAG_DELETE) == 0)
       object->base->methodImpl.combiner(object, TAG_DELETE, 0, aaNone);
   }
+
+  return result;
 }
 
 tag_t eventIncrementReference(aioUserEvent *event, tag_t tag)
@@ -371,7 +374,7 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
   op->timeout = timeout;
   op->timerId = realtime ? op->timerId : 0;
   op->running = (flags & afRunning) ? arRunning : arWaiting;
-  objectIncrementReference(object);
+  objectIncrementReference(object, 1);
   return op;
 }
 

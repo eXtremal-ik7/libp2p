@@ -151,8 +151,8 @@ extern __tls unsigned messageLoopThreadId;
 #define OPCODE_WRITE (1<<(sizeof(int)*8-4))
 #define OPCODE_OTHER (1<<(sizeof(int)*8-2))
 
-void objectIncrementReference(aioObjectRoot *object);
-void objectDecrementReference(aioObjectRoot *object, tag_t count);
+tag_t objectIncrementReference(aioObjectRoot *object, tag_t count);
+tag_t objectDecrementReference(aioObjectRoot *object, tag_t count);
 tag_t eventIncrementReference(aioUserEvent *event, tag_t tag);
 void eventDecrementReference(aioUserEvent *event, tag_t tag);
 

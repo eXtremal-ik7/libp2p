@@ -156,6 +156,11 @@ iodevTy aioObjectDevice(aioObject *object)
   return object->hDevice;
 }
 
+aioObjectRoot *aioObjectHandle(aioObject *object)
+{
+  return &object->root;
+}
+
 asyncBase *createAsyncBase(AsyncMethod method)
 {
   asyncBase *base = 0;

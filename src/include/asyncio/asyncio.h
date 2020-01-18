@@ -14,6 +14,7 @@ typedef void aioReadMsgCb(AsyncOpStatus, aioObject*, HostAddress, size_t, void*)
   
 socketTy aioObjectSocket(aioObject *object);
 iodevTy aioObjectDevice(aioObject *object);
+aioObjectRoot *aioObjectHandle(aioObject *object);
 
 asyncBase *createAsyncBase(AsyncMethod method);
 aioObject *newSocketIo(asyncBase *base, socketTy hSocket);
