@@ -129,13 +129,13 @@ static AsyncOpStatus httpParseStart(asyncOpRoot *opptr)
 
   for (;;) {
     switch (httpParse(&client->state, op->parseCallback, op->parseArg)) {
-      case httpResultOk : {
+      case ParserResultOk : {
         HttpComponent component;
         component.type = httpDtFinalize;
         op->parseCallback(&component, op->parseArg);
         return aosSuccess;  
       }
-      case httpResultNeedMoreData : {
+      case ParserResultNeedMoreData : {
         // copy 'tail' to begin of buffer
         size_t offset = httpDataRemaining(&client->state);
         if (offset)
@@ -171,7 +171,7 @@ static AsyncOpStatus httpParseStart(asyncOpRoot *opptr)
         }
         break;
       }
-      case httpResultError :
+      case ParserResultError :
         return aosUnknownError;
     }
   }

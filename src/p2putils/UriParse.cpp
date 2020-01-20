@@ -4,13 +4,6 @@
 #include "p2putils/strExtras.h"
 #include <string.h>
 
-enum Status {
-  stSchemeFirst = 0,
-  stScheme,
-  stHierPart,
-  stError
-};
-
 int isLetter(char s)
 {
   return (s >= 'A' && s <= 'Z') || (s >= 'a' && s <= 'z');
@@ -140,45 +133,51 @@ int uriParseIpv4(const char **ptr, uriParseCb callback, void *arg)
 }
 
 
-int uriParsePath(const char **ptr, uriParseCb callback, void *arg)
+ParserResultTy uriParsePath(const char **ptr, const char *end, bool uriOnly, uriParseCb callback, void *arg)
 {
+  URIComponent component;
   const char *p = *ptr;
   const char *lastElement = p;
-  for (;;) {
+  while (p != end) {
     if (isPChar(&p)) {
       continue;
     } else if (*p == '/') {
       if (p != *ptr) {
-        URIComponent component;
         component.type = uriCtPathElement;
         component.raw.data = lastElement;
         component.raw.size = static_cast<size_t>(p-lastElement);
-        callback(&component, arg);
+        if (!callback(&component, arg))
+          return ParserResultCancelled;
+        *ptr = p;
       }
       p++;
       lastElement = p;
     } else {
-      if (p != *ptr) {
-        URIComponent component;
-        
-        // send last fragment
-        component.type = uriCtPathElement;
-        component.raw.data = lastElement;
-        component.raw.size = static_cast<size_t>(p-lastElement);
-        callback(&component, arg);
-        
-        // send entire path
-        component.type = uriCtPath;
-        component.raw.data = *ptr;
-        component.raw.size = static_cast<size_t>(p-*ptr);
-        callback(&component, arg);
-      }
       break;
     }
   }
+
+  if (p != *ptr) {
+    if (p == end && !uriOnly)
+      return ParserResultNeedMoreData;
+
+    // send last fragment
+    component.type = uriCtPathElement;
+    component.raw.data = lastElement;
+    component.raw.size = static_cast<size_t>(p-lastElement);
+    if (!callback(&component, arg))
+      return ParserResultCancelled;
+    *ptr = p;
+
+    // send entire path
+    component.type = uriCtPath;
+    component.raw.data = *ptr;
+    component.raw.size = static_cast<size_t>(p-*ptr);
+    if (!callback(&component, arg))
+      return ParserResultCancelled;
+  }
   
-  *ptr = p;
-  return 1;
+  return ParserResultOk;
 }
 
 int uriParseAuthority(const char **ptr, uriParseCb callback, void *arg)
@@ -313,7 +312,7 @@ int uriParseAuthority(const char **ptr, uriParseCb callback, void *arg)
   }
   
   if (*p == '/') {
-    if (!uriParsePath(&p, callback, arg))
+    if (uriParsePath(&p, p+strlen(p), true, callback, arg) != ParserResultOk)
       return 0;
   }
   
@@ -333,39 +332,41 @@ int uriParseHierPart(const char **ptr, uriParseCb callback, void *arg)
       if (!uriParseAuthority(&p, callback, arg))
         return 0;
       if (*p == '/') {
-        result = uriParsePath(&p, callback, arg);
+        result = (uriParsePath(&p, p+strlen(p), true, callback, arg) == ParserResultOk);
       }
     } else {
-      result = uriParsePath(&p, callback, arg);
+      result = (uriParsePath(&p, p+strlen(p), true, callback, arg) == ParserResultOk);
     }
   } else {
-    result = uriParsePath(&p, callback, arg);
+    result = (uriParsePath(&p, p+strlen(p), true, callback, arg) == ParserResultOk);
   }
   
   *ptr = p;
   return result;
 }
 
-int uriParseQuery(const char **ptr, uriParseCb callback, void *arg)
+ParserResultTy uriParseQuery(const char **ptr, const char *end, bool uriOnly, uriParseCb callback, void *arg)
 {
+  URIComponent component;
   const char *p = *ptr;
   const char *lastName = p;
   const char *lastValue = nullptr;
   size_t lastNameSize = 0;
-  for (;;) {
+  while (p != end) {
     if (*p == '=') {
       lastNameSize = static_cast<size_t>(p - lastName);
       p++;
       lastValue = p;
     } else if (*p == '&') {
       if (lastValue) {
-        URIComponent component;
         component.type = uriCtQueryElement;
         component.raw.data = lastName;
         component.raw.size = lastNameSize;
         component.raw2.data = lastValue;
         component.raw2.size = static_cast<size_t>(p - lastValue);
-        callback(&component, arg);
+        if (!callback(&component, arg))
+          return ParserResultCancelled;
+        *ptr = p;
       }
       p++;
       lastName = p;
@@ -376,52 +377,64 @@ int uriParseQuery(const char **ptr, uriParseCb callback, void *arg)
       continue;
     } else {
       if (p != *ptr) {
-        URIComponent component;
-        if (lastValue) {
-          component.type = uriCtQueryElement;
-          component.raw.data = lastName;
-          component.raw.size = lastNameSize;
-          component.raw2.data = lastValue;
-          component.raw2.size = static_cast<size_t>(p - lastValue);
-          callback(&component, arg);
-        }
-        
-        component.type = uriCtQuery;
-        component.raw.data = *ptr;
-        component.raw.size = static_cast<size_t>(p-*ptr);
-        callback(&component, arg);
+        break;
       }
-      break;
     }
   }
-  
-  *ptr = p;
-  return 1;
+
+  if (p != *ptr) {
+    if (p == end && !uriOnly)
+      return ParserResultNeedMoreData;
+
+    if (lastValue) {
+      component.type = uriCtQueryElement;
+      component.raw.data = lastName;
+      component.raw.size = lastNameSize;
+      component.raw2.data = lastValue;
+      component.raw2.size = static_cast<size_t>(p - lastValue);
+      if (!callback(&component, arg))
+        return ParserResultCancelled;
+    }
+
+    component.type = uriCtQuery;
+    component.raw.data = *ptr;
+    component.raw.size = static_cast<size_t>(p-*ptr);
+    if (!callback(&component, arg))
+      return ParserResultCancelled;
+    *ptr = p;
+  }
+
+  return ParserResultOk;
 }
 
-int uriParseFragment(const char **ptr, uriParseCb callback, void *arg)
+ParserResultTy uriParseFragment(const char **ptr, const char *end, bool uriOnly, uriParseCb callback, void *arg)
 {
   const char *p = *ptr;
-  for (;;) {
+  while (p != end) {
     if (isPChar(&p)) {
       continue;
     } else if (*p == '/' || *p == '?') {
       p++;
       continue;
     } else {
-      if (p != *ptr) {
-        URIComponent component;
-        component.type = uriCtFragment;
-        component.raw.data = *ptr;
-        component.raw.size = static_cast<size_t>(p-*ptr);
-        callback(&component, arg);
-      }
       break;
     }
   }
   
-  *ptr = p;
-  return 1;
+  if (p != *ptr) {
+    if (p == end && !uriOnly)
+      return ParserResultNeedMoreData;
+
+    URIComponent component;
+    component.type = uriCtFragment;
+    component.raw.data = *ptr;
+    component.raw.size = static_cast<size_t>(p-*ptr);
+    if (!callback(&component, arg))
+      return ParserResultCancelled;
+    *ptr = p;
+  }
+
+  return ParserResultOk;
 }
 
 int uriParse(const char *uri, uriParseCb callback, void *arg)
@@ -436,13 +449,13 @@ int uriParse(const char *uri, uriParseCb callback, void *arg)
   
   if (*ptr == '?') {
     ptr++;
-    if (!uriParseQuery(&ptr, callback, arg))
+    if (!uriParseQuery(&ptr, ptr + strlen(ptr), true, callback, arg))
       return 0;
   }
   
   if (*ptr == '#') {
     ptr++;
-    if (!uriParseFragment(&ptr, callback, arg))
+    if (!uriParseFragment(&ptr, ptr + strlen(ptr), true, callback, arg))
       return 0;
   }
   
@@ -501,7 +514,7 @@ static void uriPctEncode(const char *ptr, size_t size, const char *extra, std::s
   
 }
 
-static void stdCb(URIComponent *component, void *arg)
+static int stdCb(URIComponent *component, void *arg)
 {
   URI *data = static_cast<URI*>(arg);
   switch (component->type) {
@@ -532,6 +545,8 @@ static void stdCb(URIComponent *component, void *arg)
       uriPctDecode(component->raw.data, component->raw.size, data->fragment);
       break;      
   }
+
+  return 1;
 }
 
 int uriParse(const char *uri, URI *data)

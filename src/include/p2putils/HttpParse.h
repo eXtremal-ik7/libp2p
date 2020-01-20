@@ -7,23 +7,7 @@ extern "C" {
 
 #include <stddef.h>
 #include <stdint.h>
-
-typedef enum StateTy {
-  stFinish = 0,
-  stMemcmp,
-  stError,
-  stSwitchTable
-} StateTy;
-
-typedef struct StateElement {
-  StateTy state;
-  int token;
-  union {
-    struct StateElement *element;
-    const char *terminal;
-  };
-  int intValue;
-} StateElement;
+#include "CommonParse.h"
 
 enum {
   hhContentLength = 1,
@@ -40,12 +24,6 @@ typedef enum HttpParserStateTy {
   httpStBody,
   httpStLast
 } HttpParserStateTy;
-
-typedef enum HttpParserResultTy {
-  httpResultOk = 0,
-  httpResultNeedMoreData,
-  httpResultError
-} HttpParserResultTy;
 
 typedef enum HttpParserDataTy {
   httpDtInitialize = 0,
@@ -65,11 +43,6 @@ typedef struct HttpParserState {
   int firstFragment;
   size_t dataRemaining;
 } HttpParserState;
-
-typedef struct Raw {
-  const char *data;
-  size_t size;
-} Raw;
 
 typedef struct HttpComponent {
   int type;
@@ -100,7 +73,7 @@ typedef void httpParseCb(HttpComponent *component, void *arg);
 
 void httpInit(HttpParserState *state);
 void httpSetBuffer(HttpParserState *state, const void *buffer, size_t size);
-HttpParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void *arg);
+ParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void *arg);
 
 const void *httpDataPtr(HttpParserState *state);
 size_t httpDataRemaining(HttpParserState *state);

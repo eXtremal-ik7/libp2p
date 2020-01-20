@@ -3,7 +3,9 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
 endif ()
 
 add_library(p2putils
+  FSMTable.cpp
   HttpParse.cpp
+  HttpRequestParse.cpp
   UriParse.cpp
 )
 

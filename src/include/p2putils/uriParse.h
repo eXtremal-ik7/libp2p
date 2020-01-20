@@ -1,6 +1,7 @@
 #ifndef __LIBP2P_URIPARSE_H_
 #define __LIBP2P_URIPARSE_H_
 
+#include "p2putils/CommonParse.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -40,7 +41,11 @@ struct URIComponent {
   } raw2;    
 };
 
-typedef void uriParseCb(URIComponent *component, void *arg);
+typedef int uriParseCb(URIComponent *component, void *arg);
+
+ParserResultTy uriParsePath(const char **ptr, const char *end, bool uriOnly, uriParseCb callback, void *arg);
+ParserResultTy uriParseQuery(const char **ptr, const char *end, bool uriOnly, uriParseCb callback, void *arg);
+ParserResultTy uriParseFragment(const char **ptr, const char *end, bool uriOnly, uriParseCb callback, void *arg);
 
 int uriParse(const char *uri, uriParseCb callback, void *arg);
 
