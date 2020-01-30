@@ -21,22 +21,9 @@ enum pipeDescrs {
   Write
 };
 
-typedef enum pipeCmd {
-  Reset = 0,
-  UserEvent
-} pipeCmd;
-
-
-typedef struct pipeMsg {
-  pipeCmd cmd;
-  void *data;
-} pipeMsg;
-
 typedef struct kqueueBase {
   asyncBase B;
   int kqueueFd;
-  int pipeFd[2];
-  aioObject *pipeObject;
   intptr_t timerIdCounter;
 } kqueueBase;
 
@@ -47,6 +34,7 @@ typedef struct aioTimer {
 } aioTimer;
 
 void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType);
+void kqueueWakeup(asyncBase *base);
 void kqueuePostEmptyOperation(asyncBase *base);
 void kqueueNextFinishedOperation(asyncBase *base);
 aioObject *kqueueNewAioObject(asyncBase *base, IoObjectTy type, void *data);
@@ -66,6 +54,7 @@ AsyncOpStatus kqueueAsyncWriteMsg(asyncOpRoot *op);
 
 static struct asyncImpl kqueueImpl = {
   combiner,
+  kqueueWakeup,
   kqueuePostEmptyOperation,
   kqueueNextFinishedOperation,
   kqueueNewAioObject,
@@ -108,7 +97,6 @@ asyncBase *kqueueNewAsyncBase()
 {
   kqueueBase *base = malloc(sizeof(kqueueBase));
   if (base) {
-    pipe(base->pipeFd);
     base->B.methodImpl = kqueueImpl;
     base->kqueueFd = kqueue();
     if (base->kqueueFd == -1) {
@@ -116,21 +104,30 @@ asyncBase *kqueueNewAsyncBase()
     }
 
     base->timerIdCounter = 1;
-    base->pipeObject = kqueueNewAioObject(&base->B, ioObjectDevice, &base->pipeFd[Read]);
-    kqueueControl(base->kqueueFd, EV_ADD | EV_ONESHOT, EVFILT_READ, base->pipeFd[Read], base->pipeObject);
+    kqueueControl(base->kqueueFd, EV_ADD | EV_ONESHOT, EVFILT_USER, 1, 0);
   }
 
   return (asyncBase *)base;
 }
 
+void kqueueWakeup(asyncBase *base)
+{
+  kqueueBase *localBase = (kqueueBase*)base;
+  kqueueControl(localBase->kqueueFd, EV_ENABLE, EVFILT_USER, 1, 0);
+}
+
 void kqueuePostEmptyOperation(asyncBase *base)
 {
+  kqueueBase *localBase = (kqueueBase*)base;
   unsigned count = base->messageLoopThreadCounter;
-  for (unsigned i = 0; i < count; i++) {
-    pipeMsg msg = {Reset, 0};
-    kqueueBase *localBase = (kqueueBase *)base;
-    write(localBase->pipeFd[Write], &msg, sizeof(pipeMsg));
+  unsigned i;
+  for (i = 0; i < count; i++) {
+    asyncOpRoot *op = kqueueNewAsyncOp();
+    op->opCode = actEmpty;
+    fnPush(base, op);
   }
+
+  kqueueControl(localBase->kqueueFd, EV_ENABLE, EVFILT_USER, 1, 0);
 }
 
 void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
@@ -153,13 +150,13 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
       int fd = getFd((aioObject*)object);
       ioctl(fd, FIONREAD, &available);
       if (available == 0)
-        cancelOperationList(&object->readQueue, &threadLocalQueue, aosDisconnected);
-      cancelOperationList(&object->writeQueue, &threadLocalQueue, aosDisconnected);
+        cancelOperationList(&object->readQueue, aosDisconnected);
+      cancelOperationList(&object->writeQueue, aosDisconnected);
     }
 
     if (currentTag & TAG_CANCELIO) {
-      cancelOperationList(&object->readQueue, &threadLocalQueue, aosCanceled);
-      cancelOperationList(&object->writeQueue, &threadLocalQueue, aosCanceled);
+      cancelOperationList(&object->readQueue, aosCanceled);
+      cancelOperationList(&object->writeQueue, aosCanceled);
     }
 
     if (currentTag & TAG_DELETE) {
@@ -174,19 +171,19 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
     tag_t needStart = currentTag;
     if ( (pendingOperationsNum = __tag_get_opcount(currentTag)) ) {
       if (newOp) {
-        processAction(newOp, actionType, &threadLocalQueue, &needStart);
+        processAction(newOp, actionType, &needStart);
         enqueuedOperationsNum = 1;
         newOp = 0;
       } else {
         while (enqueuedOperationsNum < pendingOperationsNum)
-          processOperationList(object, &threadLocalQueue, &needStart, &enqueuedOperationsNum);
+          processOperationList(object, &needStart, &enqueuedOperationsNum);
       }
     }
 
     if (needStart & TAG_READ_MASK)
-      executeOperationList(&object->readQueue, &threadLocalQueue);
+      executeOperationList(&object->readQueue);
     if (needStart & TAG_WRITE_MASK)
-      executeOperationList(&object->writeQueue, &threadLocalQueue);
+      executeOperationList(&object->writeQueue);
 
     if (hasFd) {
       int fd = getFd((aioObject*)object);
@@ -223,10 +220,20 @@ void kqueueNextFinishedOperation(asyncBase *base)
 
   while (1) {
     do {
+      if (!executeGlobalQueue(base)) {
+        unsigned remainingThreads = __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, 0u-1);
+        if (remainingThreads == 1) {
+          // Try finish all operations
+          executeGlobalQueue(base);
+        }
+
+        kqueueControl(localBase->kqueueFd, EV_ENABLE, EVFILT_USER, 1, 0);
+        return;
+      }
+
       struct timespec timeout;
-      timeout.tv_sec = threadLocalQueue.head ? 0 : 1;
+      timeout.tv_sec = base->globalQueue ? 0 : 1;
       timeout.tv_nsec = 0;
-      executeThreadLocalQueue();
       nfds = kevent(localBase->kqueueFd, 0, 0, events, MAX_EVENTS, &timeout);
 
       time_t currentTime = time(0);
@@ -238,42 +245,26 @@ void kqueueNextFinishedOperation(asyncBase *base)
       tag_t timerId;
       aioObjectRoot *object;
       __tagged_pointer_decode(events[n].udata, (void**)&object, &timerId);
-      if (object == &localBase->pipeObject->root) {
-        pipeMsg msg;
-        int available;
-        int fd = localBase->pipeFd[Read];
-        ioctl(fd, FIONREAD, &available);
-        for (int i = 0; i < available / (int)sizeof(pipeMsg); i++) {
-          read(fd, &msg, sizeof(pipeMsg));
-          asyncOpRoot *op = (asyncOpRoot*)msg.data;
-          switch (msg.cmd) {
-            case Reset :
-              while (threadLocalQueue.head)
-                executeThreadLocalQueue();
-              kqueueControl(localBase->kqueueFd, EV_ADD | EV_ONESHOT, EVFILT_READ, fd, object);
-              __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, 0u-1);
-              return;
-            case UserEvent :
-              op->finishMethod(op);
-              break;
-          }
-        }
-
-        kqueueControl(localBase->kqueueFd, EV_ADD | EV_ONESHOT, EVFILT_READ, fd, object);
+      if (object == 0) {
+        kqueueControl(localBase->kqueueFd, EV_ADD | EV_ONESHOT, EVFILT_USER, 1, 0);
       } else if (object->type == ioObjectTimer) {
         aioTimer *timer = (aioTimer*)object;
         asyncOpRoot *op = timer->op;
         if (op->opCode == actUserEvent) {
-          aioUserEvent *event = (aioUserEvent*)op;
-          if (event->counter > 0 && --event->counter == 0) {
-            kqueueStopTimer(op);
-          }
+            aioUserEvent *event = (aioUserEvent*)op;
+            if (!(eventIncrementReference(event, TAG_EVENT_TIMER) & 0xF000000000000000ULL)) {
+              // TODO: compare timer and event tag
+              if (event->counter > 0 && --event->counter == 0) {
+                kqueueStopTimer(op);
+              }
 
-          op->finishMethod(op);
+              op->finishMethod(op);
+            }
+
+            eventDecrementReference(event, TAG_EVENT_TIMER);
         } else {
           opCancel(op, opEncodeTag(op, timerId), aosTimeout);
         }
-
       } else {
         tag_t eventMask = 0;
         if (events[n].filter == EVFILT_READ)
@@ -320,7 +311,7 @@ aioObject *kqueueNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 
 asyncOpRoot *kqueueNewAsyncOp()
 {
-  asyncOp *op = malloc(sizeof(asyncOp));
+  asyncOp *op = __tagged_alloc(sizeof(asyncOp));
   if (op) {
     op->internalBuffer = 0;
     op->internalBufferSize = 0;
@@ -392,9 +383,9 @@ void kqueueStopTimer(asyncOpRoot *op)
 
 void kqueueActivate(aioUserEvent *op)
 {
-  pipeMsg msg = {UserEvent, (void *)op};
-  kqueueBase *localBase = (kqueueBase *)op->base;
-  write(localBase->pipeFd[Write], &msg, sizeof(pipeMsg));
+  kqueueBase *localBase = (kqueueBase*)op->base;
+  fnPush(&localBase->B, &op->root);
+  kqueueControl(localBase->kqueueFd, EV_ENABLE, EVFILT_USER, 1, 0);
 }
 
 
