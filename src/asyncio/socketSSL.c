@@ -42,7 +42,7 @@ static void sslWriteWriteCb(AsyncOpStatus status, aioObject *object, size_t tran
 
 static asyncOpRoot *alloc()
 {
-  SSLOp *op = (SSLOp*)__tagged_alloc(sizeof(SSLOp));
+  SSLOp *op = (SSLOp*)malloc(sizeof(SSLOp));
   op->internalBuffer = 0;
   op->internalBufferSize = 0;
   return (asyncOpRoot*)op;

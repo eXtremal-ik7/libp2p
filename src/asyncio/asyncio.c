@@ -229,7 +229,7 @@ aioUserEvent *newUserEvent(asyncBase *base, int isSemaphore, aioEventCb callback
 {
   aioUserEvent *event = (aioUserEvent*)objectGet(eventPoolId);
   if (!event) {
-    event = __tagged_alloc(sizeof(aioUserEvent));
+    event = malloc(sizeof(aioUserEvent));
     event->root.poolId = eventPoolId;
     base->methodImpl.initializeTimer(base, &event->root);
   }

@@ -95,7 +95,7 @@ static void decodeMessageHeader(MessageHeader *header)
 
 static asyncOpRoot *alloc()
 {
-  btcOp *op = static_cast<btcOp*>(__tagged_alloc(sizeof(btcOp)));
+  btcOp *op = static_cast<btcOp*>(malloc(sizeof(btcOp)));
   op->internalBuffer = nullptr;
   op->internalBufferSize = 0;
   return &op->root;
@@ -171,7 +171,6 @@ btcOp *initWriteOp(aioExecuteProc *start,
   btcOp *op = reinterpret_cast<btcOp*>(opptr);
   op->state = stInitialize;
 
-//  op->buffer = data;
   if (!(flags & afNoCopy)) {
     if (op->internalBuffer == nullptr) {
       op->internalBuffer = malloc(size);

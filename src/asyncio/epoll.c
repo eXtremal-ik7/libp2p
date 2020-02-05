@@ -334,7 +334,7 @@ aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 
 asyncOpRoot *epollNewAsyncOp()
 {
-  asyncOp *op = __tagged_alloc(sizeof(asyncOp));
+  asyncOp *op = malloc(sizeof(asyncOp));
   if (op) {
     op->internalBuffer = 0;
     op->internalBufferSize = 0;

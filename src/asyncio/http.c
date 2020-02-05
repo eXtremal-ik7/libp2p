@@ -18,7 +18,7 @@ static AsyncOpStatus httpParseStart(asyncOpRoot *opptr);
 
 static asyncOpRoot *alloc()
 {
-  HTTPOp *op = (HTTPOp*)__tagged_alloc(sizeof(HTTPOp));
+  HTTPOp *op = (HTTPOp*)malloc(sizeof(HTTPOp));
   op->internalBuffer = 0;
   op->dataSize = 0;
   op->internalBufferSize = 0;

@@ -49,7 +49,7 @@ static inline AsyncOpStatus p2pStatusFromError(p2pErrorTy error)
 
 static asyncOpRoot *alloc()
 {
-  return static_cast<asyncOpRoot*>(__tagged_alloc(sizeof(p2pOp)));
+  return static_cast<asyncOpRoot*>(malloc(sizeof(p2pOp)));
 }
 
 static void resumeRwCb(AsyncOpStatus status, aioObject*, size_t, void *arg)

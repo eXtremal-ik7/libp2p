@@ -104,7 +104,7 @@ static AsyncOpStatus startZmtpRecv(asyncOpRoot *opptr);
 
 static asyncOpRoot *alloc()
 {
-  return static_cast<asyncOpRoot*>(__tagged_alloc(sizeof(zmtpOp)));
+  return static_cast<asyncOpRoot*>(malloc(sizeof(zmtpOp)));
 }
 
 static void resumeConnectCb(AsyncOpStatus status, aioObject*, void *arg)

@@ -1,5 +1,6 @@
 #include "asyncioImpl.h"
 #include "atomic.h"
+#include "asyncio/ringBuffer.h"
 
 #include <sys/ioctl.h>
 #include <sys/types.h>
@@ -12,14 +13,11 @@
 #include <string.h>
 #include <unistd.h>
 
+extern __tls RingBuffer localQueue;
+
 static const char *socketPool = "aioObject";
 
 #define MAX_EVENTS 256
-
-enum pipeDescrs {
-  Read = 0,
-  Write
-};
 
 typedef struct kqueueBase {
   asyncBase B;
@@ -34,7 +32,7 @@ typedef struct aioTimer {
 } aioTimer;
 
 void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType);
-void kqueueWakeup(asyncBase *base);
+void kqueueEnqueue(asyncBase *base, asyncOpRoot *op);
 void kqueuePostEmptyOperation(asyncBase *base);
 void kqueueNextFinishedOperation(asyncBase *base);
 aioObject *kqueueNewAioObject(asyncBase *base, IoObjectTy type, void *data);
@@ -54,7 +52,7 @@ AsyncOpStatus kqueueAsyncWriteMsg(asyncOpRoot *op);
 
 static struct asyncImpl kqueueImpl = {
   combiner,
-  kqueueWakeup,
+  kqueueEnqueue,
   kqueuePostEmptyOperation,
   kqueueNextFinishedOperation,
   kqueueNewAioObject,
@@ -110,24 +108,18 @@ asyncBase *kqueueNewAsyncBase()
   return (asyncBase *)base;
 }
 
-void kqueueWakeup(asyncBase *base)
+void kqueueEnqueue(asyncBase *base, asyncOpRoot *op)
 {
   kqueueBase *localBase = (kqueueBase*)base;
-  kqueueControl(localBase->kqueueFd, EV_ENABLE, EVFILT_USER, 1, 0);
+  if (concurrentRingBufferEnqueue(&base->globalQueue, op))
+    kqueueControl(localBase->kqueueFd, EV_ENABLE, EVFILT_USER, 1, 0);
+  else
+    ringBufferEnqueue(&localQueue, op);
 }
 
 void kqueuePostEmptyOperation(asyncBase *base)
 {
-  kqueueBase *localBase = (kqueueBase*)base;
-  unsigned count = base->messageLoopThreadCounter;
-  unsigned i;
-  for (i = 0; i < count; i++) {
-    asyncOpRoot *op = kqueueNewAsyncOp();
-    op->opCode = actEmpty;
-    fnPush(base, op);
-  }
-
-  kqueueControl(localBase->kqueueFd, EV_ENABLE, EVFILT_USER, 1, 0);
+  kqueueEnqueue(base, 0);
 }
 
 void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
@@ -221,18 +213,17 @@ void kqueueNextFinishedOperation(asyncBase *base)
   while (1) {
     do {
       if (!executeGlobalQueue(base)) {
-        unsigned remainingThreads = __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, 0u-1);
-        if (remainingThreads == 1) {
-          // Try finish all operations
-          executeGlobalQueue(base);
-        }
+        // Found quit marker
+        unsigned threadsRunning = __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, 0u-1) - 1;
+        if (threadsRunning)
+          kqueueEnqueue(base, 0);
 
-        kqueueControl(localBase->kqueueFd, EV_ENABLE, EVFILT_USER, 1, 0);
+        ringBufferFree(&localQueue);
         return;
       }
 
       struct timespec timeout;
-      timeout.tv_sec = base->globalQueue ? 0 : 1;
+      timeout.tv_sec = 1;
       timeout.tv_nsec = 0;
       nfds = kevent(localBase->kqueueFd, 0, 0, events, MAX_EVENTS, &timeout);
 
@@ -251,17 +242,16 @@ void kqueueNextFinishedOperation(asyncBase *base)
         aioTimer *timer = (aioTimer*)object;
         asyncOpRoot *op = timer->op;
         if (op->opCode == actUserEvent) {
-            aioUserEvent *event = (aioUserEvent*)op;
-            if (!(eventIncrementReference(event, TAG_EVENT_TIMER) & 0xF000000000000000ULL)) {
-              // TODO: compare timer and event tag
-              if (event->counter > 0 && --event->counter == 0) {
-                kqueueStopTimer(op);
-              }
+          aioUserEvent *event = (aioUserEvent*)op;
+          if (eventTryActivate(event)) {
+            // TODO: compare timer and event tag
+            if (event->counter > 0 && --event->counter == 0)
+              kqueueStopTimer(op);
 
-              op->finishMethod(op);
-            }
-
-            eventDecrementReference(event, TAG_EVENT_TIMER);
+            eventDeactivate(event);
+            op->finishMethod(op);
+            eventDecrementReference(event, 1);
+          }
         } else {
           opCancel(op, opEncodeTag(op, timerId), aosTimeout);
         }
@@ -311,7 +301,7 @@ aioObject *kqueueNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 
 asyncOpRoot *kqueueNewAsyncOp()
 {
-  asyncOp *op = __tagged_alloc(sizeof(asyncOp));
+  asyncOp *op = malloc(sizeof(asyncOp));
   if (op) {
     op->internalBuffer = 0;
     op->internalBufferSize = 0;
@@ -383,9 +373,7 @@ void kqueueStopTimer(asyncOpRoot *op)
 
 void kqueueActivate(aioUserEvent *op)
 {
-  kqueueBase *localBase = (kqueueBase*)op->base;
-  fnPush(&localBase->B, &op->root);
-  kqueueControl(localBase->kqueueFd, EV_ENABLE, EVFILT_USER, 1, 0);
+  kqueueEnqueue(op->base, &op->root);
 }
 
 
