@@ -18,6 +18,7 @@
 
 __tls unsigned currentFinishedSync;
 __tls unsigned messageLoopThreadId;
+__tls RingBuffer localQueue;
 
 static const char *asyncOpLinkListPool = "asyncOpLinkList";
 static const char *asyncOpActionPool = "asyncOpAction";
@@ -50,36 +51,6 @@ void eqPushBack(List *list, asyncOpRoot *op)
     list->tail = op;
   } else {
     list->head = list->tail = op;
-  }
-}
-
-void fnPush(asyncBase *base, asyncOpRoot *op)
-{
-  assert(((uintptr_t)op & TAGGED_POINTER_DATA_MASK) == 0 && "Non-aligned operation pointer");
-  op->next = (asyncOpRoot*)UINTPTR_MAX;
-  op->next = __atomic_exchange_n(&base->globalQueue, __tagged_pointer_make(op, opGetGeneration(op)), __ATOMIC_SEQ_CST);
-  base->methodImpl.wakeup(base);
-}
-
-asyncOpRoot *fnPop(asyncBase *base)
-{
-  asyncOpRoot *taggedPtr;
-  asyncOpRoot *op;
-  asyncOpRoot *next;
-  tag_t tag;
-
-  for (;;) {
-    taggedPtr = base->globalQueue;
-    if (!taggedPtr)
-      return 0;
-
-    __tagged_pointer_decode(taggedPtr, (void**)&op, &tag);
-    while (__atomic_load_n(&op->next, __ATOMIC_SEQ_CST) == (asyncOpRoot*)UINTPTR_MAX)
-      continue;
-
-    if (__pointer_atomic_compare_and_swap(&base->globalQueue, taggedPtr, op->next)) {
-      return op;
-    }
   }
 }
 
@@ -197,7 +168,7 @@ int pageMapRemove(pageMap *map, asyncOpListLink *link)
 
 tag_t objectIncrementReference(aioObjectRoot *object, tag_t count)
 {
-  return __tag_atomic_fetch_and_add(&object->refs, 1);
+  return __tag_atomic_fetch_and_add(&object->refs, count);
 }
 
 tag_t objectDecrementReference(aioObjectRoot *object, tag_t count)
@@ -217,13 +188,38 @@ tag_t eventIncrementReference(aioUserEvent *event, tag_t tag)
   return __tag_atomic_fetch_and_add(&event->tag, tag);
 }
 
-void eventDecrementReference(aioUserEvent *event, tag_t tag)
+tag_t eventDecrementReference(aioUserEvent *event, tag_t tag)
 {
-  if ((__tag_atomic_fetch_and_add(&event->tag, (tag_t)0 - tag) & TAG_EVENT_MASK) == (tag & TAG_EVENT_MASK)) {
+  tag_t result = __tag_atomic_fetch_and_add(&event->tag, (tag_t)0 - tag) & TAG_EVENT_MASK;
+  if (result == (tag & TAG_EVENT_MASK)) {
     objectRelease(&event->root, event->root.poolId);
     if (event->destructorCb)
       event->destructorCb(event, event->destructorCbArg);
   }
+
+  return result;
+}
+
+int eventTryActivate(aioUserEvent *event)
+{
+  if (!event->isSemaphore) {
+    tag_t result = __tag_atomic_fetch_and_add(&event->tag, TAG_EVENT_OP + 1);
+    if ((result & TAG_EVENT_OP_MASK) == 0) {
+      return 1;
+    } else {
+      __tag_atomic_fetch_and_add(&event->tag, -(TAG_EVENT_OP + 1));
+      return 0;
+    }
+  } else {
+    __tag_atomic_fetch_and_add(&event->tag, 1);
+    return 1;
+  }
+}
+
+void eventDeactivate(aioUserEvent *event)
+{
+  if (!event->isSemaphore)
+    __tag_atomic_fetch_and_add(&event->tag, (tag_t)0-TAG_EVENT_OP);
 }
 
 void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op)
@@ -362,7 +358,8 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
   op->tag = ((opGetGeneration(op)+1) << TAG_STATUS_SIZE) | aosPending;
   op->executeMethod = startMethod;
   op->cancelMethod = cancelMethod;
-  op->finishMethod = (flags & afCoroutine) ? coroutineCurrent() : finishMethod;
+  // TODO: better type control
+  op->finishMethod = (flags & afCoroutine) ? (aioFinishProc*)coroutineCurrent() : finishMethod;
   op->executeQueue.prev = 0;
   op->executeQueue.next = 0;
   op->next = 0;
@@ -472,7 +469,7 @@ void opRelease(asyncOpRoot *op, AsyncOpStatus status, List *executeList)
 
   if (executeList)
     eqRemove(executeList, op);
-  fnPush(op->object->base, op);
+  addToGlobalQueue(op);
 }
 
 void executeOperationList(List *list)
@@ -575,23 +572,27 @@ void resumeParent(asyncOpRoot *op, AsyncOpStatus status)
 
 void addToGlobalQueue(asyncOpRoot *op)
 {
-  fnPush(op->object->base, op);
+  op->object->base->methodImpl.enqueue(op->object->base, op);
 }
 
 int executeGlobalQueue(asyncBase *base)
-{
+{ 
   asyncOpRoot *op;
-  while ( (op = fnPop(base)) ) {
+  while (ringBufferDequeue(&localQueue, (void**)&op))
+    concurrentRingBufferEnqueue(&base->globalQueue, op);
+  while (concurrentRingBufferDequeue(&base->globalQueue, (void**)&op)) {
+    if (!op)
+      return 0;
+
     switch (op->opCode) {
       case actUserEvent : {
         aioUserEvent *event = (aioUserEvent*)op;
+        eventDeactivate(event);
         op->finishMethod(op);
-        eventDecrementReference(event, TAG_EVENT_OP);
+        eventDecrementReference(event, 1);
         break;
       }
-      case actEmpty : {
-        return 0;
-      }
+
       default : {
         currentFinishedSync = 0;
         if (op->flags & afCoroutine) {

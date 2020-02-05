@@ -13,6 +13,10 @@ if (BTC_ENABLED)
   set(Sources ${Sources} btc.cpp)
 endif()
 
+if (RLPX_ENABLED)
+    set(Sources ${Sources} rlpx.cpp)
+endif()
+
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
   add_definitions(-fPIC)
 endif ()

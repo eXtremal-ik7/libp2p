@@ -52,14 +52,14 @@ public:
     s._m = nullptr;
   }
   
-  size_t offsetOf() { return _p - _m; }
-  size_t sizeOf() { return _size; }
-  size_t remaining() { return _size - offsetOf(); }
-  int eof() { return _eof; }
+  size_t offsetOf() const { return _p - _m; }
+  size_t sizeOf() const { return _size; }
+  size_t remaining() const { return _size - offsetOf(); }
+  int eof() const { return _eof; }
   
-  void *data() { return _m; }
-  template<typename T> T *data() { return (T*)_m; }
-  template<typename T> T *ptr() { return (T*)_p; }
+  void *data() const { return _m; }
+  template<typename T> T *data() const { return (T*)_m; }
+  template<typename T> T *ptr() const { return (T*)_p; }
   
   void *alloc(size_t size) {
     _eof = 0;

@@ -17,6 +17,8 @@
 #include <sys/epoll.h>
 #include <sys/timerfd.h>
 
+extern __tls RingBuffer localQueue;
+
 static const char *socketPool = "aioObject";
 
 #define MAX_EVENTS 256
@@ -37,7 +39,7 @@ typedef struct aioTimer {
 __NO_PADDING_END
 
 static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType);
-void epollWakeup(asyncBase *base);
+void epollEnqueue(asyncBase *base, asyncOpRoot *op);
 void epollPostEmptyOperation(asyncBase *base);
 void epollNextFinishedOperation(asyncBase *base);
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data);
@@ -57,7 +59,7 @@ AsyncOpStatus epollAsyncWriteMsg(asyncOpRoot *op);
 
 static struct asyncImpl epollImpl = {
   combiner,
-  epollWakeup,
+  epollEnqueue,
   epollPostEmptyOperation,
   epollNextFinishedOperation,
   epollNewAioObject,
@@ -119,24 +121,18 @@ asyncBase *epollNewAsyncBase()
   return (asyncBase *)base;
 }
 
-void epollWakeup(asyncBase *base)
+void epollEnqueue(asyncBase *base, asyncOpRoot *op)
 {
   epollBase *localBase = (epollBase*)base;
-  eventfd_write(localBase->eventFd, 1);
+  if (concurrentRingBufferEnqueue(&base->globalQueue, op))
+    eventfd_write(localBase->eventFd, 1);
+  else
+    ringBufferEnqueue(&localQueue, op);
 }
 
 void epollPostEmptyOperation(asyncBase *base)
 {
-  epollBase *localBase = (epollBase*)base;
-  unsigned count = base->messageLoopThreadCounter;
-  unsigned i;
-  for (i = 0; i < count; i++) {
-    asyncOpRoot *op = epollNewAsyncOp();
-    op->opCode = actEmpty;
-    fnPush(base, op);
-  }
-
-  eventfd_write(localBase->eventFd, 1);
+  epollEnqueue(base, 0);
 }
 
 static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
@@ -234,21 +230,21 @@ void epollNextFinishedOperation(asyncBase *base)
   struct epoll_event events[MAX_EVENTS];
   epollBase *localBase = (epollBase *)base;
   messageLoopThreadId = __sync_fetch_and_add(&base->messageLoopThreadCounter, 1);
+  ringBufferInit(&localQueue, 128);
 
   while (1) {
     do {
       if (!executeGlobalQueue(base)) {
-        unsigned remainingThreads = __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, 0u-1);
-        if (remainingThreads == 1) {
-          // Try finish all operations
-          executeGlobalQueue(base);
-        }
+        // Found quit marker
+        unsigned threadsRunning = __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, 0u-1) - 1;
+        if (threadsRunning)
+          epollEnqueue(base, 0);
 
-        eventfd_write(localBase->eventFd, 1);
+        ringBufferFree(&localQueue);
         return;
       }
 
-      nfds = epoll_wait(localBase->epollFd, events, MAX_EVENTS, base->globalQueue ? 0 : 500);
+      nfds = epoll_wait(localBase->epollFd, events, MAX_EVENTS, 500);
       time_t currentTime = time(0);
       if (currentTime % base->messageLoopThreadCounter == messageLoopThreadId)
         processTimeoutQueue(base, currentTime);
@@ -269,7 +265,7 @@ void epollNextFinishedOperation(asyncBase *base)
           asyncOpRoot *op = timer->op;
           if (op->opCode == actUserEvent) {
             aioUserEvent *event = (aioUserEvent*)op;
-            if (!(eventIncrementReference(event, TAG_EVENT_TIMER) & 0xF000000000000000ULL)) {
+            if (eventTryActivate(event)) {
               // TODO: compare timer and event tag
               if (event->counter > 0 && --event->counter == 0) {
                 epollStopTimer(op);
@@ -282,10 +278,10 @@ void epollNextFinishedOperation(asyncBase *base)
                              __tagged_pointer_make(timer, opGetGeneration(op)));
               }
 
+              eventDeactivate(event);
               op->finishMethod(op);
+              eventDecrementReference(event, 1);
             }
-
-            eventDecrementReference(event, TAG_EVENT_TIMER);
           } else {
             opCancel(op, opEncodeTag(op, timerId), aosTimeout);
           }
@@ -419,9 +415,7 @@ void epollStopTimer(asyncOpRoot *op)
 
 void epollActivate(aioUserEvent *op)
 {
-  epollBase *localBase = (epollBase *)op->base;
-  fnPush(&localBase->B, &op->root);
-  eventfd_write(localBase->eventFd, 1);
+  epollEnqueue(op->base, &op->root);
 }
 
 

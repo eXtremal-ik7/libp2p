@@ -199,10 +199,10 @@ asyncBase *createAsyncBase(AsyncMethod method)
   base->opsCount = 0;
 #endif
   pageMapInit(&base->timerMap);
+  concurrentRingBufferInit(&base->globalQueue, 65536);
   base->timerMapLock = 0;
   base->lastCheckPoint = time(0);
   base->messageLoopThreadCounter = 0;
-  base->globalQueue = 0;
   return base;
 }
 
@@ -225,7 +225,7 @@ void setSocketBuffer(aioObject *socket, size_t bufferSize)
   }
 }
 
-aioUserEvent *newUserEvent(asyncBase *base, aioEventCb callback, void *arg)
+aioUserEvent *newUserEvent(asyncBase *base, int isSemaphore, aioEventCb callback, void *arg)
 {
   aioUserEvent *event = (aioUserEvent*)objectGet(eventPoolId);
   if (!event) {
@@ -240,6 +240,7 @@ aioUserEvent *newUserEvent(asyncBase *base, aioEventCb callback, void *arg)
   event->root.arg = arg;
   event->root.tag = ((opGetGeneration(&event->root)+1) << TAG_STATUS_SIZE) | aosPending;
   event->base = base;
+  event->isSemaphore = isSemaphore;
   event->counter = 0;
   event->tag = 1;
   event->destructorCb = 0;
@@ -284,12 +285,8 @@ void userEventStopTimer(aioUserEvent *event)
 
 void userEventActivate(aioUserEvent *event)
 {
-  // Allow only single user activation
-  tag_t result = eventIncrementReference(event, TAG_EVENT_OP);
-  if ((result & (TAG_EVENT_OP_MASK | TAG_EVENT_DELETE_MASK)) == TAG_EVENT_OP)
+  if (eventTryActivate(event))
     event->base->methodImpl.activate(event);
-  else
-    eventDecrementReference(event, TAG_EVENT_OP);
 }
 
 void deleteUserEvent(aioUserEvent *event)

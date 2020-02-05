@@ -108,7 +108,7 @@ int pipeCreate(struct pipeTy *pipePtr, int isAsync)
 
     HANDLE hPipe = CreateNamedPipe(pipeName,
                                    PIPE_ACCESS_DUPLEX | (isAsync ? FILE_FLAG_OVERLAPPED : 0),
-                                   PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | (isAsync ? PIPE_NOWAIT : PIPE_WAIT),
+                                   PIPE_TYPE_BYTE | PIPE_READMODE_BYTE,
                                    PIPE_UNLIMITED_INSTANCES,
                                    4096,
                                    4096,
@@ -124,14 +124,13 @@ int pipeCreate(struct pipeTy *pipePtr, int isAsync)
                                0,
                                NULL,
                                OPEN_EXISTING,
-                               0,
+                               FILE_FLAG_OVERLAPPED,
                                NULL);
 
     if (hPipe2 == INVALID_HANDLE_VALUE) {
       CloseHandle(hPipe);
       continue;
     }
-
 
     pipePtr->read = hPipe;
     pipePtr->write = hPipe2;
@@ -151,48 +150,10 @@ int deviceSyncRead(iodevTy hDevice, void *buffer, size_t size, int waitAll, size
 {
   *bytesTransferred = 0;
   return 0;
-//  printf("deviceSyncRead entry\n");
-//  DWORD bytesNum = 0;
-//  if (!waitAll) {
-//    // TODO: correct processing >4Gb data blocks
-//    if (ReadFile(hDevice, buffer, (DWORD)size, &bytesNum, 0) && bytesNum > 0) {
-//      *bytesTransferred = bytesNum;
-//        printf("deviceSyncRead exit\n");
-//      return 1;
-//    } else {
-//        printf("deviceSyncRead exit\n");
-//      return 0;
-//    }
-//  } else {
-//    size_t transferred = 0;
-//    // TODO: correct processing >4Gb data blocks
-//    while (transferred != size && ReadFile(hDevice, (uint8_t*)buffer + transferred, (DWORD)(size - transferred), &bytesNum, 0))
-//      transferred += (size_t)bytesNum;
-//    *bytesTransferred = transferred;
-//      printf("deviceSyncRead exit\n");
-//    return transferred == size;
-//  }
 }
 
 int deviceSyncWrite(iodevTy hDevice, const void *buffer, size_t size, int waitAll, size_t *bytesTransferred)
 {
   *bytesTransferred = 0;
   return 0;
-//  DWORD bytesNum = 0;
-//  if (!waitAll) {
-//    // TODO: correct processing >4Gb data blocks
-//    if (WriteFile(hDevice, buffer, (DWORD)size, &bytesNum, 0) && bytesNum > 0) {
-//      *bytesTransferred = bytesNum;
-//      return 1;
-//    } else {
-//      return 0;
-//    }
-//  } else {
-//    size_t transferred = 0;
-//    // TODO: correct processing >4Gb data blocks
-//    while (transferred != size && WriteFile(hDevice, (uint8_t*)buffer + transferred, (DWORD)(size - transferred), &bytesNum, 0))
-//      transferred += (size_t)bytesNum;
-//    *bytesTransferred = transferred;
-//    return transferred == size;
-//  }
 }

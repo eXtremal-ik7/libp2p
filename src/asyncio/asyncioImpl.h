@@ -4,6 +4,7 @@ extern "C" {
 
 #include "asyncio/api.h"
 #include "asyncio/objectPool.h"
+#include "asyncio/ringBuffer.h"
 
 typedef enum IoActionTy {
   actAccept = OPCODE_READ,
@@ -13,11 +14,10 @@ typedef enum IoActionTy {
   actWrite,
   actWriteMsg,
   actUserEvent = OPCODE_OTHER,
-  actEmpty
 } IoActionTy;
 
 typedef void combinerTy(aioObjectRoot*, tag_t, asyncOpRoot*, AsyncOpActionTy);
-typedef void wakeupOperationTy(asyncBase*);
+typedef void enqueueOperationTy(asyncBase*, asyncOpRoot*);
 typedef void postEmptyOperationTy(asyncBase*);
 typedef void nextFinishedOperationTy(asyncBase*);
 typedef aioObject *newAioObjectTy(asyncBase*, IoObjectTy, void*);
@@ -29,7 +29,7 @@ typedef void activateTy(aioUserEvent*);
 
 struct asyncImpl {
   combinerTy *combiner;
-  wakeupOperationTy *wakeup;
+  enqueueOperationTy *enqueue;
   postEmptyOperationTy *postEmptyOperation;
   nextFinishedOperationTy *nextFinishedOperation;
   newAioObjectTy *newAioObject;
@@ -48,15 +48,15 @@ struct asyncImpl {
   aioExecuteProc *writeMsg;
 };
 
-
 struct asyncBase {
   enum AsyncMethod method;
   struct asyncImpl methodImpl;
+  struct ConcurrentRingBuffer globalQueue;
   struct pageMap timerMap;
   time_t lastCheckPoint;
   volatile unsigned messageLoopThreadCounter;
   volatile unsigned timerMapLock;
-  asyncOpRoot *globalQueue;
+
 #ifndef NDEBUG
   int opsCount;
 #endif
@@ -97,6 +97,7 @@ struct aioUserEvent {
   tag_t tag;
   asyncBase *base;
   int counter;
+  int isSemaphore;
   userEventDestructorCb *destructorCb;
   void *destructorCbArg;
 };

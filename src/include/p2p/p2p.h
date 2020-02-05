@@ -49,8 +49,8 @@ public:
   
   p2pPeer(asyncBase *base, p2pNode *node, const HostAddress *address) :
     _base(base), _node(node), _address(*address), _connected(false), connection(nullptr) {
-    _event = newUserEvent(base, clientNetworkWaitEnd, this);
-    _checkTimeoutEvent = newUserEvent(base, checkTimeout, this);
+    _event = newUserEvent(base, 0, clientNetworkWaitEnd, this);
+    _checkTimeoutEvent = newUserEvent(base, 0, checkTimeout, this);
     userEventStartTimer(_checkTimeoutEvent, 1000000, -1);
   }
 

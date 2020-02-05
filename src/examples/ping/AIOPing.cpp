@@ -237,8 +237,8 @@ int main(int argc, char **argv)
   client.data.icmp_seq = 0;
 
   asyncBase *base = createAsyncBase(amOSDefault);
-  aioUserEvent *pingTimer = newUserEvent(base, pingTimerCb, &client);
-  aioUserEvent *printTimer = newUserEvent(base, printTimerCb, &client);
+  aioUserEvent *pingTimer = newUserEvent(base, 0, pingTimerCb, &client);
+  aioUserEvent *printTimer = newUserEvent(base, 0, printTimerCb, &client);
   client.rawSocket = newSocketIo(base, S);
 
   aioReadMsg(client.rawSocket, client.buffer, sizeof(client.buffer), afNone, 0, readCb, &client);

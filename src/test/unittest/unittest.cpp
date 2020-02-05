@@ -322,7 +322,6 @@ void test_timeout_readcb(AsyncOpStatus status, aioObject *socket, HostAddress ad
 
 TEST(basic, test_timeout)
 {
-  return;
   TestContext context(gBase);
   context.serverSocket = startUDPServer(gBase, nullptr, &context, context.serverBuffer, sizeof(context.serverBuffer), gPort);
   ASSERT_NE(context.serverSocket, nullptr);
@@ -372,7 +371,7 @@ TEST(basic, test_delete_object)
   for (int i = 0; i < 1000; i++)
     aioReadMsg(context.serverSocket, context.serverBuffer, sizeof(context.serverBuffer), afNone, 3*1000000, test_delete_object_readcb, &context);
 
-  aioUserEvent *event = newUserEvent(gBase, test_delete_object_eventcb, &context);
+  aioUserEvent *event = newUserEvent(gBase, 0, test_delete_object_eventcb, &context);
   userEventStartTimer(event, 5000, 1);
   asyncLoop(gBase);
   deleteUserEvent(event);
@@ -394,7 +393,7 @@ void test_userevent_cb(aioUserEvent *event, void *arg)
 TEST(basic, test_userevent)
 {
   TestContext context(gBase);
-  aioUserEvent *event = newUserEvent(gBase, test_userevent_cb, &context);
+  aioUserEvent *event = newUserEvent(gBase, 1, test_userevent_cb, &context);
   userEventStartTimer(event, 400, 256);
   userEventActivate(event);
   std::thread threads[4];

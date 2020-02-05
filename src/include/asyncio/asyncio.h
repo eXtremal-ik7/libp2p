@@ -24,7 +24,7 @@ asyncBase *aioGetBase(aioObject *object);
 
 void setSocketBuffer(aioObject *socket, size_t bufferSize);
 
-aioUserEvent *newUserEvent(asyncBase *base, aioEventCb callback, void *arg);
+aioUserEvent *newUserEvent(asyncBase* base, int isSemaphore, aioEventCb callback, void* arg);
 void userEventStartTimer(aioUserEvent *event, uint64_t usTimeout, int counter);
 void userEventStopTimer(aioUserEvent *event);
 void userEventActivate(aioUserEvent *event);

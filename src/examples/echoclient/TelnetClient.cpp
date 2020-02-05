@@ -112,7 +112,7 @@ int main(int argc, char **argv)
 
   ClientData data;  
   aioObject *socketOp = newSocketIo(base, hSocket);
-  aioUserEvent *stdInputOp = newUserEvent(base, pingTimerCb, &data);
+  aioUserEvent *stdInputOp = newUserEvent(base, 0, pingTimerCb, &data);
 
   address.family = AF_INET;
   address.ipv4 = inet_addr(argv[2]);

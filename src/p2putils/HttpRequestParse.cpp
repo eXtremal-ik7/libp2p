@@ -3,7 +3,7 @@
 #include "p2putils/uriParse.h"
 #include "FSMTable.h"
 #include <string.h>
-#include <stdio.h> //TMP
+#include <algorithm>
 
 static StateElement *methodNames = nullptr;
 static StateElement *headerNames = nullptr;

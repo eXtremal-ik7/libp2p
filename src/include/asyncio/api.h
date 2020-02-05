@@ -131,16 +131,15 @@ extern __tls unsigned messageLoopThreadId;
 
 // Event tag area
 #if defined(OS_32)
-#define TAG_EVENT_OP          TAG(0x00000001UL)
-#define TAG_EVENT_TIMER       TAG(0x00010000UL)
+#define TAG_EVENT_OP          TAG(0x00010000UL)
 #define TAG_EVENT_DELETE      TAG(0x10000000UL)
+#define TAG_EVENT_OP_MASK     TAG(0xFFFF0000UL)
 #define TAG_EVENT_MASK        TAG(0x0FFFFFFFUL)
 #define TAG_EVENT_DELETE_MASK TAG(0xF0000000UL)
 #elif defined(OS_64)
-#define TAG_EVENT_OP          TAG(0x0000000000000001ULL)
-#define TAG_EVENT_TIMER       TAG(0x0000000100000000ULL)
+#define TAG_EVENT_OP          TAG(0x0000000100000000ULL)
 #define TAG_EVENT_DELETE      TAG(0x1000000000000000ULL)
-#define TAG_EVENT_OP_MASK     TAG(0x00000000FFFFFFFFULL)
+#define TAG_EVENT_OP_MASK     TAG(0xFFFFFFFF00000000ULL)
 #define TAG_EVENT_MASK        TAG(0x0FFFFFFFFFFFFFFFULL)
 #define TAG_EVENT_DELETE_MASK TAG(0xF000000000000000ULL)
 #else
@@ -154,7 +153,9 @@ extern __tls unsigned messageLoopThreadId;
 tag_t objectIncrementReference(aioObjectRoot *object, tag_t count);
 tag_t objectDecrementReference(aioObjectRoot *object, tag_t count);
 tag_t eventIncrementReference(aioUserEvent *event, tag_t tag);
-void eventDecrementReference(aioUserEvent *event, tag_t tag);
+tag_t eventDecrementReference(aioUserEvent *event, tag_t tag);
+int eventTryActivate(aioUserEvent *event);
+void eventDeactivate(aioUserEvent *event);
 
 void *__tagged_alloc(size_t size);
 void *__tagged_pointer_make(void *ptr, tag_t data);
@@ -162,7 +163,6 @@ void __tagged_pointer_decode(void *ptr, void **outPtr, tag_t *outData);
 
 void eqRemove(List *list, asyncOpRoot *op);
 void eqPushBack(List *list, asyncOpRoot *op);
-void fnPush(asyncBase *base, asyncOpRoot *op);
 
 __NO_UNUSED_FUNCTION_BEGIN
 static inline tag_t __tag_get_opcount(tag_t tag)

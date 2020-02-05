@@ -14,8 +14,6 @@ typedef struct coroutineTy {
   void *arg;
   int finished;
   unsigned counter;
-  coroutineCbTy *cbProc;
-  void *cbArg;
 } coroutineTy;
 
 static VOID __stdcall fiberEntryPoint(LPVOID lpParameter)
@@ -23,6 +21,7 @@ static VOID __stdcall fiberEntryPoint(LPVOID lpParameter)
   coroutineTy *coro = (coroutineTy*)lpParameter;
   coro->entryPoint(coro->arg);
   coro->finished = 1;
+  __uint_atomic_fetch_and_add(&coro->counter, -1);
   currentCoroutine = coro->prev;
   SwitchToFiber(currentCoroutine->fiber);
 }
@@ -48,6 +47,8 @@ coroutineTy *coroutineNew(coroutineProcTy entry, void *arg, unsigned stackSize)
   coroutine->fiber = CreateFiber(stackSize, fiberEntryPoint, coroutine);
   coroutine->entryPoint = entry;
   coroutine->arg = arg;
+  coroutine->finished = 0;
+  coroutine->counter = 0;
   return coroutine;
 }
 
@@ -59,48 +60,48 @@ void coroutineDelete(coroutineTy *coroutine)
 
 int coroutineCall(coroutineTy *coroutine)
 {
-  assert(__uint_atomic_fetch_and_add(&coroutine->counter, 1) == 0 &&
-         "Call coroutine from multiple threads detected!");
+  if (!coroutineFinished(coroutine)) {
+    if (__uint_atomic_fetch_and_add(&coroutine->counter, 2) != 0) {
+      // Don't call active coroutine
+      return 1;
+    }
 
-  if (!currentCoroutine) {
-    mainCoroutine = currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
-    currentCoroutine->fiber = ConvertThreadToFiber(0);    
-  }
-  
-  coroutine->prev = currentCoroutine;
-  currentCoroutine = coroutine;
-  SwitchToFiber(coroutine->fiber);
+    if (!currentCoroutine) {
+      mainCoroutine = currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
+      currentCoroutine->fiber = ConvertThreadToFiber(0);
+    }
 
-  if (coroutine->cbProc) {
-    coroutine->cbProc(coroutine->cbArg);
-    coroutine->cbProc = 0;
-  }
+    do {
+      coroutine->prev = currentCoroutine;
+      currentCoroutine = coroutine;
+      SwitchToFiber(coroutine->fiber);
+    } while (__uint_atomic_fetch_and_add(&coroutine->counter, -1) != 1);
 
-  int finished = coroutine->finished;
-  if (finished) {
-    DeleteFiber(coroutine->fiber);
-    free(coroutine);
+    int finished = coroutine->finished;
+    if (finished) {
+      DeleteFiber(coroutine->fiber);
+      free(coroutine);
+    }
+
+    return finished;
+  } else {
+    return 1;
   }
-  
-  return finished;
 }
 
 void coroutineYield()
 {
-  if (currentCoroutine->prev) {
+  if (currentCoroutine && currentCoroutine->prev) {
     coroutineTy *old = currentCoroutine;
+    unsigned counter = __uint_atomic_fetch_and_add(&old->counter, -1);
+    assert(counter >= 2 && "Double yield detected");
+    if (counter != 2) {
+      // Other thread tried call this coroutine before
+      __uint_atomic_fetch_and_add(&old->counter, -1);
+      return;
+    }
+    
     currentCoroutine = currentCoroutine->prev;
-    assert(__uint_atomic_fetch_and_add(&old->counter, -1) == 1 &&
-           "Multiple yield from one coroutine detected!");
     SwitchToFiber(currentCoroutine->fiber);
   }
-}
-
-void coroutineSetYieldCallback(coroutineCbTy proc, void *arg)
-{
-  // Create main fiber if it not exists
-  if (currentCoroutine == 0)
-    mainCoroutine = currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
-  currentCoroutine->cbProc = proc;
-  currentCoroutine->cbArg = arg;
 }

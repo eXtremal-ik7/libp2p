@@ -6,6 +6,7 @@ set(Sources
   asyncioImpl.c
   objectPool.c
   dynamicBuffer.c
+  ringBuffer.c
   timer.c
 )
 

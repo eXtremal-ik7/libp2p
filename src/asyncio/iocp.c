@@ -6,6 +6,8 @@
 #include "atomic.h"
 #include <time.h>
 
+extern __tls RingBuffer localQueue;
+
 static const char *socketPool = "aioObject";
 
 typedef struct iocpOp iocpOp;
@@ -33,6 +35,7 @@ typedef struct aioTimer {
 } aioTimer;
 
 void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType);
+void iocpEnqueue(asyncBase *base, asyncOpRoot *op);
 void postEmptyOperation(asyncBase *base);
 void iocpNextFinishedOperation(asyncBase *base);
 aioObject *iocpNewAioObject(asyncBase *base, IoObjectTy type, void *data);
@@ -52,6 +55,7 @@ AsyncOpStatus iocpAsyncWriteMsg(asyncOpRoot *op);
 
 static struct asyncImpl iocpImpl = {
   combiner,
+  iocpEnqueue,
   postEmptyOperation,
   iocpNextFinishedOperation,
   iocpNewAioObject,
@@ -126,7 +130,9 @@ static VOID CALLBACK userEventTimerCb(LPVOID lpArgToCompletionRoutine, DWORD dwT
   int needReactivate = 1;
   aioUserEvent *event = (aioUserEvent*)timer->op;
   iocpBase *localBase = (iocpBase*)event->base;
-  PostQueuedCompletionStatus(localBase->completionPort, 0, (ULONG_PTR)event, 0);
+
+  if (eventTryActivate(event))
+    iocpActivate(event);
 
   if (event->counter > 0) {
     if (--event->counter == 0)
@@ -149,10 +155,8 @@ static VOID CALLBACK ioFinishedTimerCb(LPVOID lpArgToCompletionRoutine, DWORD dw
   tag_t timerTag;
   __tagged_pointer_decode(lpArgToCompletionRoutine, (void**)&timer, &timerTag);
 
-  if (opSetStatus(timer->op, opEncodeTag(timer->op, timerTag), aosTimeout)) {
-    iocpBase *localBase = (iocpBase*)timer->op->object->base;
-    PostQueuedCompletionStatus(localBase->completionPort, 0, (ULONG_PTR)timer->op, 0);
-  }
+  if (opSetStatus(timer->op, opEncodeTag(timer->op, timerTag), aosTimeout))
+    combinerCall(timer->op->object, 1, timer->op, aaCancel);
 }
 
 void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
@@ -162,8 +166,8 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
 
   while (currentTag) {
     if (currentTag & TAG_CANCELIO) {
-      cancelOperationList(&object->readQueue, &threadLocalQueue, aosCanceled);
-      cancelOperationList(&object->writeQueue, &threadLocalQueue, aosCanceled);
+      cancelOperationList(&object->readQueue, aosCanceled);
+      cancelOperationList(&object->writeQueue, aosCanceled);
     }
 
     // Check for delete
@@ -179,19 +183,19 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
     tag_t needStart = 0;
     if ((pendingOperationsNum = __tag_get_opcount(currentTag))) {
       if (newOp) {
-        processAction(newOp, actionType, &threadLocalQueue, &needStart);
+        processAction(newOp, actionType, &needStart);
         enqueuedOperationsNum = 1;
         newOp = 0;
       }
 
       while (enqueuedOperationsNum < pendingOperationsNum)
-        processOperationList(object, &threadLocalQueue, &needStart, &enqueuedOperationsNum);
+        processOperationList(object, &needStart, &enqueuedOperationsNum);
     }
 
     if (needStart & TAG_READ_MASK)
-      executeOperationList(&object->readQueue, &threadLocalQueue);
+      executeOperationList(&object->readQueue);
     if (needStart & TAG_WRITE_MASK)
-      executeOperationList(&object->writeQueue, &threadLocalQueue);
+      executeOperationList(&object->writeQueue);
 
     // Try exit combiner
     tag_t processed = __tag_make_processed(currentTag, enqueuedOperationsNum);
@@ -199,6 +203,13 @@ void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy
     currentTag -= processed;
   }
 }
+
+
+void iocpEnqueue(asyncBase *base, asyncOpRoot *op)
+{
+  PostQueuedCompletionStatus(((iocpBase*)base)->completionPort, 0, (ULONG_PTR)op, 0);
+}
+
 
 void postEmptyOperation(asyncBase *base)
 {
@@ -248,13 +259,8 @@ void iocpNextFinishedOperation(asyncBase *base)
 
   while (1) {
     ULONG N, i;
-    executeThreadLocalQueue();
-    BOOL status = GetQueuedCompletionStatusEx(localBase->completionPort,
-      entries,
-      maxEntriesNum,
-      &N,
-      threadLocalQueue.head ? 0 : 500,
-      FALSE);
+
+    BOOL status = GetQueuedCompletionStatusEx(localBase->completionPort, entries, maxEntriesNum, &N, 500, FALSE);
 
     time_t currentTime = time(0);
     if (currentTime % base->messageLoopThreadCounter == messageLoopThreadId)
@@ -268,10 +274,23 @@ void iocpNextFinishedOperation(asyncBase *base)
       OVERLAPPED_ENTRY *entry = &entries[i];
       if (entry->lpCompletionKey) {
         asyncOpRoot *op = (asyncOpRoot*)entry->lpCompletionKey;
-        if (op->opCode == actUserEvent)
+        if (op->opCode == actUserEvent) {
+          aioUserEvent *event = (aioUserEvent*)op;
+          eventDeactivate(event);
           op->finishMethod(op);
-        else
-          combinerCall(op->object, 1, op, aaCancel);
+          eventDecrementReference(event, 1);
+        } else {
+          currentFinishedSync = 0;
+          if (op->flags & afCoroutine) {
+            coroutineCall((coroutineTy*)op->finishMethod);
+          } else {
+            aioObjectRoot* object = op->object;
+            objectRelease(op, op->poolId);
+            if (op->callback)
+              op->finishMethod(op);
+            objectDecrementReference(object, 1);
+          }
+        }
       } else if (entry->lpOverlapped) {
         iocpOp *op = (iocpOp*)(((uint8_t*)entry->lpOverlapped) - offsetof(struct iocpOp, overlapped));
         AsyncOpStatus result = iocpGetOverlappedResult(op);
@@ -316,8 +335,6 @@ void iocpNextFinishedOperation(asyncBase *base)
         opSetStatus(&op->info.root, opGetGeneration(&op->info.root), result);
         combinerCall(op->info.root.object, 1, &op->info.root, aaFinish);
       } else {
-        while (threadLocalQueue.head)
-          executeThreadLocalQueue();
         unsigned threadsRunning = __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, -1) - 1;
         if (threadsRunning)
           PostQueuedCompletionStatus(((iocpBase*)base)->completionPort, 0, 0, 0);
@@ -443,8 +460,7 @@ void iocpStopTimer(asyncOpRoot *op)
 
 void iocpActivate(aioUserEvent *event)
 {
-  iocpBase *localBase = (iocpBase*)event->base;
-  PostQueuedCompletionStatus(localBase->completionPort, 0, (ULONG_PTR)&event->root, 0);
+  iocpEnqueue(event->base, &event->root);
 }
 
 
@@ -535,7 +551,7 @@ AsyncOpStatus iocpAsyncRead(asyncOpRoot *opptr)
     wsabuf.len = (ULONG)(op->info.transactionSize - op->info.bytesTransferred);
     memset(&op->overlapped, 0, sizeof(op->overlapped));
     if (object->root.type == ioObjectDevice) {
-      int result = ReadFile(object->hDevice, op->info.buffer + op->info.bytesTransferred, op->info.transactionSize - op->info.bytesTransferred, 0, &op->overlapped);
+      int result = ReadFile(object->hDevice, (CHAR*)op->info.buffer + op->info.bytesTransferred, op->info.transactionSize - op->info.bytesTransferred, 0, &op->overlapped);
       if (result == TRUE || GetLastError() == WSA_IO_PENDING)
         return aosPending;
       else
@@ -560,7 +576,7 @@ AsyncOpStatus iocpAsyncWrite(asyncOpRoot *opptr)
   // TODO: correct processing >4Gb data blocks
   memset(&op->overlapped, 0, sizeof(op->overlapped));
   if (object->root.type == ioObjectDevice) {
-    BOOL result = WriteFile(object->hDevice, op->info.buffer + op->info.bytesTransferred, op->info.transactionSize - op->info.bytesTransferred, 0, &op->overlapped);
+    BOOL result = WriteFile(object->hDevice, (CHAR*)op->info.buffer + op->info.bytesTransferred, op->info.transactionSize - op->info.bytesTransferred, 0, &op->overlapped);
     if (result == TRUE || GetLastError() == WSA_IO_PENDING)
       return aosPending;
     else
