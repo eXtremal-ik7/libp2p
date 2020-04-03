@@ -3,8 +3,8 @@
 const char *p2pStream::jumpOverString()
 {
   uint64_t length = readbe<uint64_t>();
-  const char *s = jumpOver<char>(length);
-  const char *e = jumpOver<char>(1);
+  const char *s = seek<const char>(length);
+  const char *e = seek<const char>(1);
   if (e && *e == 0)
     return s;
   return nullptr;

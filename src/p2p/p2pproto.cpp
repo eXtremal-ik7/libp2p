@@ -394,7 +394,7 @@ static AsyncOpStatus recvStreamProc(asyncOpRoot *opptr)
       case stTransferring : {
         op->rwState = stFinished;
         if (op->header.size <= op->bufferSize)  {
-          childOp = implRead(connection->socket, op->stream->alloc(op->header.size), op->header.size, afWaitAll, 0, resumeRwCb, opptr, &bytes);
+          childOp = implRead(connection->socket, op->stream->reserve(op->header.size), op->header.size, afWaitAll, 0, resumeRwCb, opptr, &bytes);
         } else {
           return aosBufferTooSmall;
         }
@@ -427,7 +427,7 @@ asyncOpRoot *implp2pRecvStream(p2pConnection *connection, p2pStream &stream, siz
     }
 
     if (header->size <= maxMsgSize) {
-      childOp = implRead(connection->socket, stream.alloc(header->size), header->size, afWaitAll, 0, resumeRwCb, nullptr, &bytes);
+      childOp = implRead(connection->socket, stream.reserve(header->size), header->size, afWaitAll, 0, resumeRwCb, nullptr, &bytes);
       if (childOp) {
         state = stFinished;
         break;

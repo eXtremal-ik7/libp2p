@@ -168,7 +168,9 @@ int pageMapRemove(pageMap *map, asyncOpListLink *link)
 
 tag_t objectIncrementReference(aioObjectRoot *object, tag_t count)
 {
-  return __tag_atomic_fetch_and_add(&object->refs, count);
+  tag_t result = __tag_atomic_fetch_and_add(&object->refs, count);
+  assert(result != 0 && "Removed object access detected");
+  return result;
 }
 
 tag_t objectDecrementReference(aioObjectRoot *object, tag_t count)
@@ -176,6 +178,7 @@ tag_t objectDecrementReference(aioObjectRoot *object, tag_t count)
   tag_t result = __tag_atomic_fetch_and_add(&object->refs, (tag_t)0-count);
   if (result == count) {
     // try delete
+    assert(!(object->tag & TAG_DELETE) && "Double free detected");
     if (__tag_atomic_fetch_and_add(&object->tag, TAG_DELETE) == 0)
       object->base->methodImpl.combiner(object, TAG_DELETE, 0, aaNone);
   }

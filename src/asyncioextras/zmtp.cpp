@@ -446,7 +446,7 @@ static AsyncOpStatus startZmtpRecv(asyncOpRoot *opptr)
           op->transferred = static_cast<size_t>(xntoh<uint64_t>(reinterpret_cast<uint64_t*>(socket->buffer+1)[0]));
 
         if (op->transferred <= op->size)
-          childOp = implRead(socket->plainSocket, op->stream ? op->stream->alloc(op->transferred) : op->data, op->transferred, afWaitAll, 0, resumeRwCb, opptr, &bytes);
+          childOp = implRead(socket->plainSocket, op->stream ? op->stream->reserve(op->transferred) : op->data, op->transferred, afWaitAll, 0, resumeRwCb, opptr, &bytes);
         else
           return aosBufferTooSmall;
         break;
@@ -498,7 +498,7 @@ static asyncOpRoot *implZmtpRecvStream(zmtpSocket *socket, zmtpStream &msg, size
       transferred = static_cast<size_t>(xntoh<uint64_t>(reinterpret_cast<uint64_t*>(socket->buffer+1)[0]));
 
     if (transferred <= limit) {
-      if ( (childOp = implRead(socket->plainSocket, msg.alloc(transferred), transferred, afWaitAll, 0, resumeRwCb, nullptr, &bytes)) ) {
+      if ( (childOp = implRead(socket->plainSocket, msg.reserve(transferred), transferred, afWaitAll, 0, resumeRwCb, nullptr, &bytes)) ) {
         state = (type & zmtpMsgFlagMore) ? stRecvReadType : stFinished;
         break;
       }

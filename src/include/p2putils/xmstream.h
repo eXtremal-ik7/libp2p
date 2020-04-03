@@ -4,6 +4,7 @@
 #include "p2putils/strExtras.h"
 #include <stdint.h>
 #include <string.h>
+#include <iostream>
 
 class xmstream {
 private:
@@ -18,13 +19,13 @@ private:
 public:
   xmstream(void *data, size_t size) : _m((uint8_t*)data), _p((uint8_t*)data), _size(size), _msize(size), _eof(0), _own(0) {}
   xmstream(size_t size = 64) : _size(0), _msize(size), _eof(0), _own(1) {
-    _m = (uint8_t*)malloc(size);
+    _m = static_cast<uint8_t*>(operator new(size));
     _p = _m;
   }
   
   ~xmstream() {
     if (_own)
-      free(_m);
+      operator delete(_m);
   }
 
   xmstream(const xmstream &s) {
@@ -33,7 +34,7 @@ public:
     _own = s._own;
     _eof = s._eof;
     if (_own) {
-      _m = static_cast<uint8_t*>(malloc(_msize));
+      _m = static_cast<uint8_t*>(operator new(_msize));
       memcpy(_m, s._m, _size);
     } else {
       _m = s._m;
@@ -54,31 +55,39 @@ public:
   
   size_t offsetOf() const { return _p - _m; }
   size_t sizeOf() const { return _size; }
+  size_t capacity() const { return _msize; }
+  bool own() const { return _own; }
   size_t remaining() const { return _size - offsetOf(); }
   int eof() const { return _eof; }
   
   void *data() const { return _m; }
   template<typename T> T *data() const { return (T*)_m; }
   template<typename T> T *ptr() const { return (T*)_p; }
+
+  void *capture() {
+    void *data = _m;
+    _m = nullptr;
+    _msize = 0;
+    _own = 0;
+    return data;
+  }
   
-  void *alloc(size_t size) {
+  void *reserve(size_t size) {
     _eof = 0;
     size_t offset = offsetOf();
     size_t required = offset + size;
     if (required > _msize) {
-      size_t newSize = _msize;
+      size_t newSize = _msize ? _msize : required;
       do {
         newSize *= 2;
       } while (newSize < required);
       
       _msize = newSize;
-      if (_own) {
-        _m = (uint8_t*)realloc(_m, _msize);
-      } else {
-        uint8_t *newData = (uint8_t*)malloc(_msize);
-        memcpy(newData, _m, _size);
-        _m = newData;
-      }
+      uint8_t *newData = static_cast<uint8_t*>(operator new(_msize));
+      memcpy(newData, _m, _size);
+      if (_own)
+        operator delete(_m);
+      _m = newData;
       
       _size = required;
       uint8_t *p = _m + offset;
@@ -93,7 +102,7 @@ public:
     }
   }
   
-  template<typename T> T *alloc(size_t size) { return (T*)alloc(size); }
+  template<typename T> T *reserve(size_t num) { return static_cast<T*>(reserve(num*sizeof(T))); }
   
   // pointer move functions
   void reset() {
@@ -101,22 +110,14 @@ public:
     _size = 0;
     _eof = 0;
   }
-  
-  void seekCur(size_t offset) {
-    if (offset <= remaining()) {
-      _p += offset;
-    } else {
-      _p = _m + _size;
-      _eof = 1;
-    }
-  }
 
   void seekSet(size_t offset) {
     _p = _m + ((offset < _size) ? offset : _size);
   }
   
   // read functions
-  template<typename T> T *jumpOver(size_t size) {
+  template<typename T=uint8_t> T *seek(size_t num) {
+    size_t size = sizeof(T)*num;
     if (size <= remaining()) {
       T *p = (T*)_p;
       _p += size;
@@ -127,35 +128,45 @@ public:
       return 0;
     }
   }
+
+  template<typename T=uint8_t> T *seekEnd(size_t num, bool setEof = false) {
+    size_t size = sizeof(T)*num;
+    size_t diff = std::min(size, _size);
+    _p = _m + size - diff;
+    if (num == 0 && setEof)
+      _eof = true;
+    return reinterpret_cast<T*>(_p);
+  }
   
   void read(void *data, size_t size) {
-    if (void *p = jumpOver<void>(size))
+    if (void *p = seek(size))
       memcpy(data, p, size);
   }
   
   template<typename T> T read() {
-    T *p = jumpOver<T>(sizeof(T));
+    T *p = seek<T>(1);
     return p ? *p : T();
   }
   
   template<typename T> T readle() {
-    T *p = jumpOver<T>(sizeof(T));
+    T *p = seek<T>(1);
     return p ? xletoh<T>(*p) : T();
   }
 
   template<typename T> T readbe() {
-    T *p = jumpOver<T>(sizeof(T));
+    T *p = seek<T>(1);
     return p ? xbetoh<T>(*p) : T();
   }
   
   // write functions
-  void write(const void *data, size_t size) { memcpy(alloc<void>(size), data, size); }
-  template<typename T>
-    void write(const T& data) { *(T*)alloc<T>(sizeof(T)) = data; }
-  template<typename T>
-    void writele(T data) { *(T*)alloc<T>(sizeof(T)) = xhtole(data); }
-  template<typename T>
-    void writebe(T data) { *(T*)alloc<T>(sizeof(T)) = xhtobe(data); }
+  void write(const void *data, size_t size) { memcpy(reserve(size), data, size); }
+  template<typename T> void write(const T& data) { *reserve<T>(1) = data; }
+  template<typename T> void writele(T data) { *reserve<T>(1) = xhtole(data); }
+  template<typename T> void writebe(T data) { *reserve<T>(1) = xhtobe(data); }
+
+  void write(const char *data) {
+    write(data, std::char_traits<char>::length(data));
+  }
 };
 
 #endif //__XMSTREAM_H_

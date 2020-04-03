@@ -292,7 +292,7 @@ void userEventActivate(aioUserEvent *event)
 void deleteUserEvent(aioUserEvent *event)
 {
   event->base->methodImpl.stopTimer(&event->root);
-  eventDecrementReference(event, TAG_EVENT_OP - TAG_EVENT_DELETE);
+  eventDecrementReference(event, 1 - TAG_EVENT_DELETE);
 }
 
 asyncOpRoot *implRead(aioObject *object,

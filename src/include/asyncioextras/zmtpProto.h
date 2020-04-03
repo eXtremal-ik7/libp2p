@@ -11,10 +11,10 @@ private:
   
   bool readKeyValue(RawData *key, RawData *value) {
     key->size = read<uint8_t>();
-    if ( !(key->data = jumpOver<uint8_t>(key->size)) )
+    if ( !(key->data = seek(key->size)) )
       return false;
     value->size = readbe<uint32_t>();
-    if ( !(value->data = jumpOver<uint8_t>(value->size)) )
+    if ( !(value->data = seek(value->size)) )
       return false;
     return true;
   }
@@ -35,9 +35,9 @@ public:
   
   bool readCommand(RawData *name, RawData *data) {
     name->size = read<uint8_t>();
-    if ( (name->data = jumpOver<uint8_t>(name->size)) ) {
+    if ( (name->data = seek(name->size)) ) {
       data->size = remaining();
-      data->data = jumpOver<uint8_t>(data->size);
+      data->data = seek(data->size);
       return true;
     }
     
