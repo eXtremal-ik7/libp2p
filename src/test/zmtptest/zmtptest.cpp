@@ -57,7 +57,8 @@ struct SenderContext {
   decltype (std::chrono::steady_clock::now()) startPoint;
   std::unique_ptr<uint8_t[]> data;
   uint64_t counter;
-  SenderContext(Configuration *cfgArg) : cfg(cfgArg), sent(0) {
+  std::atomic<unsigned> deleted;
+  SenderContext(Configuration *cfgArg) : cfg(cfgArg), sent(0), deleted(0) {
     data.reset(new uint8_t[gPacketSize]);
   }
 };
@@ -72,7 +73,8 @@ struct ReceiverContext {
   aioObject *listener;
   zmtpStream stream;
   uint64_t counter;
-  ReceiverContext(Configuration *cfgArg) : cfg(cfgArg), received(0), milliSecondsElapsed(0) {}
+  std::atomic<unsigned> deleted;
+  ReceiverContext(Configuration *cfgArg) : cfg(cfgArg), received(0), milliSecondsElapsed(0), deleted(0) {}
 };
 __NO_PADDING_END
 
@@ -142,7 +144,7 @@ static void senderAsyncSendCb(AsyncOpStatus status, zmtpSocket *socket, void *ar
       ctx->counter = 0;
       auto endPoint = std::chrono::steady_clock::now();
       auto diff = std::chrono::duration_cast<std::chrono::seconds>(endPoint - ctx->startPoint).count();
-      if (diff >= gInterval) {
+      if (diff >= gInterval && ctx->deleted.fetch_add(1) == 0) {
         zmtpSocketDelete(socket);
         postQuitOperation(ctx->base);
         return;
@@ -158,7 +160,7 @@ static void senderAsyncSendCb(AsyncOpStatus status, zmtpSocket *socket, void *ar
         ctx->counter = 0;
         auto endPoint = std::chrono::steady_clock::now();
         auto diff = std::chrono::duration_cast<std::chrono::seconds>(endPoint - ctx->startPoint).count();
-        if (diff >= 10) {
+        if (diff >= 10 && ctx->deleted.fetch_add(1) == 0) {
           zmtpSocketDelete(socket);
           postQuitOperation(ctx->base);
         }
@@ -167,8 +169,10 @@ static void senderAsyncSendCb(AsyncOpStatus status, zmtpSocket *socket, void *ar
 
   } else {
     fprintf(stderr, "senderAsync: zmtp send failed code %i\n", status);
-    zmtpSocketDelete(socket);
-    postQuitOperation(ctx->base);
+    if (ctx->deleted.fetch_add(1) == 0) {
+      zmtpSocketDelete(socket);
+      postQuitOperation(ctx->base);
+    }
   }
 }
 
@@ -180,8 +184,10 @@ static void senderAsyncConnectCb(AsyncOpStatus status, zmtpSocket *client, void 
     aioZmtpSend(client, ctx->data.get(), gPacketSize, zmtpMessage, afNone, 1000000, senderAsyncSendCb, ctx);
   } else {
     fprintf(stderr, "senderAsync: zmtp connect failed code %i\n", status);
-    zmtpSocketDelete(client);
-    postQuitOperation(ctx->base);
+    if (ctx->deleted.fetch_add(1) == 0) {
+      zmtpSocketDelete(client);
+      postQuitOperation(ctx->base);
+    }
   }
 }
 
@@ -425,12 +431,16 @@ static void receiverAsyncRecvCb(AsyncOpStatus status, zmtpSocket *socket, zmtpUs
     if (ctx->received == 0)
       fprintf(stderr, "receiverAsync: zmtp receive timeout\n");
     ctx->milliSecondsElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(ctx->endPoint-ctx->startPoint).count();
-    zmtpSocketDelete(socket);
-    postQuitOperation(ctx->base);
+    if (ctx->deleted.fetch_add(1) == 0) {
+      zmtpSocketDelete(socket);
+      postQuitOperation(ctx->base);
+    }
   } else {
     fprintf(stderr, "receiverAsync: zmtp receive failed code %i\n", status);
-    zmtpSocketDelete(socket);
-    postQuitOperation(ctx->base);
+    if (ctx->deleted.fetch_add(1) == 0) {
+      zmtpSocketDelete(socket);
+      postQuitOperation(ctx->base);
+    }
   }
 }
 
@@ -442,8 +452,10 @@ static void receiverAsyncZmtpAcceptCb(AsyncOpStatus status, zmtpSocket *socket, 
     aioZmtpRecv(socket, ctx->stream, gPacketSize, afNone, 1000000, receiverAsyncRecvCb, ctx);
   } else {
     fprintf(stderr, "receiverAsync: zmtp accept failed code %i\n", status);
-    zmtpSocketDelete(socket);
-    postQuitOperation(ctx->base);
+    if (ctx->deleted.fetch_add(1) == 0) {
+      zmtpSocketDelete(socket);
+      postQuitOperation(ctx->base);
+    }
   }
 }
 

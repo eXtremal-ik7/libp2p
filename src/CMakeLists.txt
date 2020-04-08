@@ -25,6 +25,8 @@ if (SSL_ENABLED)
   find_package(OpenSSL REQUIRED)
 endif()
 
+set(CMAKE_DEBUG_POSTFIX d)
+
 if (WIN32)
   if(MSVC)
     SET (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc")

@@ -166,6 +166,8 @@ ParserResultTy httpRequestParse(HttpRequestParserState *state, httpRequestParseC
         component.data.data = source->raw.data;
         component.data.size = source->raw.size;
         return uriArg->callback(&component, uriArg->arg);
+      } else {
+        return 1;
       }
     }, &uriArg);
     if (localResult != ParserResultOk)
@@ -192,6 +194,8 @@ ParserResultTy httpRequestParse(HttpRequestParserState *state, httpRequestParseC
         component.data2.data = source->raw2.data;
         component.data2.size = source->raw2.size;
         return uriArg->callback(&component, uriArg->arg);
+      } else {
+        return 1;
       }
     }, &uriArg);
     if (localResult != ParserResultOk)
@@ -211,6 +215,8 @@ ParserResultTy httpRequestParse(HttpRequestParserState *state, httpRequestParseC
           component.data.data = source->raw.data;
           component.data.size = source->raw.size;
           return uriArg->callback(&component, uriArg->arg);
+        } else {
+          return 1;
         }
       }, &uriArg);
       if (localResult != ParserResultOk)
