@@ -8,6 +8,7 @@ if (ZMTP_ENABLED)
   set(Sources ${Sources} zmtp.cpp)
 endif()
 
+
 if (BTC_ENABLED)
   include_directories(${OPENSSL_INCLUDE_DIR})
   set(Sources ${Sources} btc.cpp)

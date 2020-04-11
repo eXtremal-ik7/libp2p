@@ -1,3 +1,4 @@
+hunter_add_package(GTest)
 find_package(GTest REQUIRED)
 
 if(MSVC)
@@ -10,7 +11,7 @@ include_directories(${GTEST_INCLUDE_DIRS})
 
 if (ZMTP_ENABLED)
   set(SOURCES ${SOURCES} zmtptest.cpp)
-  set(LIBRARIES ${LIBRARIES} ${ZMQ_LIBRARY})
+  set(LIBRARIES ${LIBRARIES} ZeroMQ::libzmq-static)
   include_directories(${ZMQ_INCLUDE_DIRECTORY})
 endif()
 

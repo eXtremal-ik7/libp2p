@@ -22,11 +22,21 @@ aioObjectRoot *rlpxSocketHandle(rlpxSocket *socket);
 aioObject *rlpxGetPlainSocket(rlpxSocket *socket);
 
 void aioRlpxAccept(rlpxSocket *socket, AsyncFlags flags, uint64_t timeout, rlpxAcceptCb callback, void *arg);
-void aioRlpxConnect(rlpxSocket *socket, const HostAddress *address, AsyncFlags flags, uint64_t timeout, rlpxConnectCb callback, void *arg);
+void aioRlpxConnect(rlpxSocket *socket, HostAddress address, AsyncFlags flags, uint64_t timeout, rlpxConnectCb callback, void *arg);
 ssize_t aioRlpxRecv(rlpxSocket *socket, xmstream &stream, size_t sizeLimit, AsyncFlags flags, uint64_t timeout, rlpxRecvCb callback, void *arg);
 ssize_t aioRlpxSend(rlpxSocket *socket, void *data, size_t size, AsyncFlags flags, uint64_t timeout, rlpxSendCb callback, void *arg);
 
 int ioRlpxAccept(rlpxSocket *socket, AsyncFlags flags, uint64_t timeout);
-int ioRlpxConnect(rlpxSocket *socket, const HostAddress *address, AsyncFlags flags, uint64_t timeout);
+int ioRlpxConnect(rlpxSocket *socket, HostAddress address, AsyncFlags flags, uint64_t timeout);
 ssize_t ioRlpxRecv(rlpxSocket *socket, xmstream &stream, size_t sizeLimit, AsyncFlags flags, uint64_t timeout);
 ssize_t ioRlpxSend(rlpxSocket *socket, void *data, size_t size, AsyncFlags flags, uint64_t timeout);
+
+#pragma pack(push, 1)
+struct RlpxAuthBody {
+  uint8_t Signature[65];
+  uint8_t HePubKey[32];
+  uint8_t PubKey[64];
+  uint8_t InitiatorNonce[32];
+  uint8_t Zero;
+};
+#pragma pack(pop)

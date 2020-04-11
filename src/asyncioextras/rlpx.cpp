@@ -13,20 +13,41 @@ enum rlpxOpTy {
   rlpxOpSend
 };
 
+enum RlpxOperationState {
+  StInitialize = 0,
+
+  // Connect
+  StConnectWriteAuth,
+
+  stFinished
+};
+
 __NO_PADDING_BEGIN
 struct rlpxSocket {
   aioObjectRoot root;
   aioObject *plainSocket;
 };
 
-struct rlpxOp {
+struct RlpxOperation {
   asyncOpRoot root;
+  HostAddress address;
+  RlpxOperationState state;
 };
 __NO_PADDING_END
 
 static asyncOpRoot *alloc()
 {
-  return static_cast<asyncOpRoot*>(__tagged_alloc(sizeof(rlpxOp)));
+  return static_cast<asyncOpRoot*>(malloc(sizeof(RlpxOperation)));
+}
+
+static void resumeConnectCb(AsyncOpStatus status, aioObject*, void *arg)
+{
+  resumeParent(static_cast<asyncOpRoot*>(arg), status);
+}
+
+static void resumeRwCb(AsyncOpStatus status, aioObject*, size_t, void *arg)
+{
+  resumeParent(static_cast<asyncOpRoot*>(arg), status);
 }
 
 static int cancel(asyncOpRoot *opptr)
@@ -41,7 +62,12 @@ static void acceptFinish(asyncOpRoot *opptr)
   reinterpret_cast<rlpxAcceptCb*>(opptr->callback)(opGetStatus(opptr), reinterpret_cast<rlpxSocket*>(opptr->object), opptr->arg);
 }
 
-rlpxOp *initOp(aioExecuteProc *start,
+static void connectFinish(asyncOpRoot *opptr)
+{
+  reinterpret_cast<rlpxConnectCb*>(opptr->callback)(opGetStatus(opptr), reinterpret_cast<rlpxSocket*>(opptr->object), opptr->arg);
+}
+
+RlpxOperation *initOp(aioExecuteProc *start,
                aioFinishProc *finish,
                rlpxSocket *socket,
                AsyncFlags flags,
@@ -52,11 +78,11 @@ rlpxOp *initOp(aioExecuteProc *start,
 {
   asyncOpRoot *opptr =
     initAsyncOpRoot(poolId, timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
-  rlpxOp *op = reinterpret_cast<rlpxOp*>(opptr);
+  RlpxOperation *op = reinterpret_cast<RlpxOperation*>(opptr);
   return op;
 }
 
-rlpxOp *initReadOp(aioExecuteProc *start,
+RlpxOperation *initReadOp(aioExecuteProc *start,
                    aioFinishProc *finish,
                    rlpxSocket *socket,
                    AsyncFlags flags,
@@ -67,11 +93,11 @@ rlpxOp *initReadOp(aioExecuteProc *start,
 {
   asyncOpRoot *opptr =
     initAsyncOpRoot(poolId, timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
-  rlpxOp *op = reinterpret_cast<rlpxOp*>(opptr);
+  RlpxOperation *op = reinterpret_cast<RlpxOperation*>(opptr);
   return op;
 }
 
-rlpxOp *initWriteOp(aioExecuteProc *start,
+RlpxOperation *initWriteOp(aioExecuteProc *start,
                     aioFinishProc *finish,
                     rlpxSocket *socket,
                     AsyncFlags flags,
@@ -84,7 +110,7 @@ rlpxOp *initWriteOp(aioExecuteProc *start,
 {
   asyncOpRoot *opptr =
     initAsyncOpRoot(poolId, timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
-  rlpxOp *op = reinterpret_cast<rlpxOp*>(opptr);
+  RlpxOperation *op = reinterpret_cast<RlpxOperation*>(opptr);
   return op;
 }
 
@@ -92,6 +118,25 @@ static void rlpxSocketDestructor(aioObjectRoot *object)
 {
   deleteAioObject(reinterpret_cast<rlpxSocket*>(object)->plainSocket);
   objectRelease(object, rplxSocketPool);
+}
+
+static AsyncOpStatus startRlpxConnect(asyncOpRoot *opptr)
+{
+  RlpxOperation *op = reinterpret_cast<RlpxOperation*>(opptr);
+  rlpxSocket *socket = reinterpret_cast<rlpxSocket*>(opptr->object);
+  asyncOpRoot *childOp = nullptr;
+  while (!childOp) {
+    switch (op->state) {
+      case StInitialize : {
+        op->state = StConnectWriteAuth;
+        aioConnect(socket->plainSocket, &op->address, 0, resumeConnectCb, op);
+        return aosPending;
+      }
+      case StConnectWriteAuth : {
+        // auth = auth-size || ecies.encrypt([sig, initiator-pubk, initiator-nonce, auth-vsn, ...])
+      }
+    }
+  }
 }
 
 rlpxSocket *rlpxSocketNew(asyncBase *base, aioObject *plainSocket)
@@ -126,42 +171,44 @@ static AsyncOpStatus startRlpxAccept(asyncOpRoot *opptr)
 
 void aioRlpxAccept(rlpxSocket *socket, AsyncFlags flags, uint64_t timeout, rlpxAcceptCb callback, void *arg)
 {
-  rlpxOp *op =
+  RlpxOperation *op =
     initOp(startRlpxAccept, acceptFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, rlpxOpAccept);
   opStart(&op->root);
 }
 
-void aioRlpxConnect(rlpxSocket *socket, const HostAddress *address, AsyncFlags flags, uint64_t timeout, rlpxConnectCb callback, void *arg)
+void aioRlpxConnect(rlpxSocket *socket, HostAddress address, AsyncFlags flags, uint64_t timeout, rlpxConnectCb callback, void *arg)
 {
+  RlpxOperation *op = initOp(startRlpxConnect, connectFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, rlpxOpConnect);
+  op->address = address;
 
 }
 
 ssize_t aioRlpxRecv(rlpxSocket *socket, xmstream &stream, size_t sizeLimit, AsyncFlags flags, uint64_t timeout, rlpxRecvCb callback, void *arg)
 {
-
+  return 0;
 }
 
 ssize_t aioRlpxSend(rlpxSocket *socket, void *data, size_t size, AsyncFlags flags, uint64_t timeout, rlpxSendCb callback, void *arg)
 {
-
+  return 0;
 }
 
 int ioRlpxAccept(rlpxSocket *socket, AsyncFlags flags, uint64_t timeout)
 {
-
+  return 0;
 }
 
-int ioRlpxConnect(rlpxSocket *socket, const HostAddress *address, AsyncFlags flags, uint64_t timeout)
+int ioRlpxConnect(rlpxSocket *socket, HostAddress address, AsyncFlags flags, uint64_t timeout)
 {
-
+  return 0;
 }
 
 ssize_t ioRlpxRecv(rlpxSocket *socket, xmstream &stream, size_t sizeLimit, AsyncFlags flags, uint64_t timeout)
 {
-
+  return 0;
 }
 
 ssize_t ioRlpxSend(rlpxSocket *socket, void *data, size_t size, AsyncFlags flags, uint64_t timeout)
 {
-
+  return 0;
 }
