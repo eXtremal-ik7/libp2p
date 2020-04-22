@@ -413,7 +413,7 @@ AsyncOpStatus kqueueAsyncAccept(asyncOpRoot *opptr)
   if (op->acceptSocket != -1) {
     int current = fcntl(op->acceptSocket, F_GETFL);
     fcntl(op->acceptSocket, F_SETFL, O_NONBLOCK | current);
-    op->host.family = 0;
+    op->host.family = clientAddr.sin_family;
     op->host.ipv4 = clientAddr.sin_addr.s_addr;
     op->host.port = clientAddr.sin_port;
     return aosSuccess;
