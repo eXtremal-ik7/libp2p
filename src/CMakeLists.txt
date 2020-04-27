@@ -43,7 +43,7 @@ set(CMAKE_DEBUG_POSTFIX d)
 if (WIN32)
   if(MSVC)
     SET (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHsc")
-    include_directories(${CMAKE_SOURCE_DIR}/msvc/include)
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/msvc/include)
   endif(MSVC)
   set(OS_WINDOWS 1)
   add_definitions(
@@ -84,14 +84,14 @@ endif(MSVC)
 include(TestBigEndian)
 TEST_BIG_ENDIAN(IS_BIGENDIAN)
 configure_file(
-  ${CMAKE_SOURCE_DIR}/include/config.h.in
-  ${CMAKE_BINARY_DIR}/include/config.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/config.h.in
+  ${CMAKE_CURRENT_BINARY_DIR}/include/config.h
 )
 
 include_directories(
-  ${CMAKE_SOURCE_DIR}/include
-  ${CMAKE_SOURCE_DIR}/config4cpp/include
-  ${CMAKE_BINARY_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/config4cpp/include
+  ${CMAKE_CURRENT_BINARY_DIR}/include
 )
 
 add_subdirectory(asyncio)
