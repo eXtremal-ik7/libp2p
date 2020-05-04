@@ -89,7 +89,7 @@ int concurrentRingBufferEnqueue(ConcurrentRingBuffer *buffer, void *data)
     size_t seq = element->sequence;
     intptr_t diff = (intptr_t)seq - (intptr_t)pos;
     if (diff == 0) {
-      if (__tag_atomic_compare_and_swap(&buffer->enqueuePos, pos, pos+1))
+      if (__uintptr_atomic_compare_and_swap(&buffer->enqueuePos, pos, pos+1))
         break;
     } else if (diff < 0) {
       // Queue is full
@@ -113,7 +113,7 @@ int concurrentRingBufferDequeue(ConcurrentRingBuffer *buffer, void **data)
     size_t seq = element->sequence;
     intptr_t diff = (intptr_t)seq - (intptr_t)(pos+1);
     if (diff == 0) {
-      if (__tag_atomic_compare_and_swap(&buffer->dequeuePos, pos, pos+1))
+      if (__uintptr_atomic_compare_and_swap(&buffer->dequeuePos, pos, pos+1))
         break;
     } else if (diff < 0) {
       // Queue is empty

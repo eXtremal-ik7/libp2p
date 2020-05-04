@@ -43,7 +43,8 @@ typedef struct selectBase {
   fdStruct *fdMap;
 } selectBase;
 
-static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType);
+void selectCombinerTaskHandler(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy opMethod);
+void selectEnqueue(asyncBase *base, asyncOpRoot *op);
 void selectPostEmptyOperation(asyncBase *base);
 void selectNextFinishedOperation(asyncBase *base);
 aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data);
@@ -51,7 +52,7 @@ asyncOpRoot *selectNewAsyncOp(void);
 int selectCancelAsyncOp(asyncOpRoot *opptr);
 void selectDeleteObject(aioObject *object);
 void selectInitializeTimer(asyncBase *base, asyncOpRoot *op);
-void selectStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic);
+void selectStartTimer(asyncOpRoot *op);
 void selectStopTimer(asyncOpRoot *op);
 void selectActivate(aioUserEvent *op);
 AsyncOpStatus selectAsyncConnect(asyncOpRoot *opptr);
@@ -63,7 +64,8 @@ AsyncOpStatus selectAsyncWriteMsg(asyncOpRoot *op);
 
 
 static struct asyncImpl selectImpl = {
-  combiner,
+  selectCombinerTaskHandler,
+  selectEnqueue,
   selectPostEmptyOperation,
   selectNextFinishedOperation,
   selectNewAioObject,
@@ -118,7 +120,8 @@ static void timerCb(int sig, siginfo_t *si, void *uc)
       event->counter--;
   }
   
-  write(base->pipeFd[1], &op, sizeof(op));
+  if (write(base->pipeFd[1], &op, sizeof(op)) <= 0)
+    fprintf(stderr, "ERROR(timerCb): write call error");
 }
 
 
@@ -151,7 +154,11 @@ __NO_EXPAND_RECURSIVE_MACRO_BEGIN
   if (base) {
     struct sigaction sAction;
 
-    pipe(base->pipeFd);    
+    if (pipe(base->pipeFd) != 0) {
+      free(base);
+      return 0;
+    }
+
     base->fdMap = (fdStruct*)calloc((size_t)getdtablesize(), sizeof(fdStruct));
     base->B.methodImpl = selectImpl;
 
@@ -178,20 +185,25 @@ __NO_EXPAND_RECURSIVE_MACRO_END
 }
 
 
-static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
+void selectCombinerTaskHandler(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy opMethod)
 {
   __UNUSED(object);
-  __UNUSED(tag);
   __UNUSED(op);
-  __UNUSED(actionType);
+  __UNUSED(opMethod);
 }
 
+void selectEnqueue(asyncBase *base, asyncOpRoot *op)
+{
+  __UNUSED(base);
+  __UNUSED(op);
+}
 
 void selectPostEmptyOperation(asyncBase *base)
 {
   void *p = 0;
-  selectBase *localBase = (selectBase*)base;  
-  write(localBase->pipeFd[1], &p, sizeof(p));
+  selectBase *localBase = (selectBase*)base;
+  if (write(localBase->pipeFd[1], &p, sizeof(p)) <= 0)
+    fprintf(stderr, "ERROR(selectPostEmptyOperation): write call error");
 }
 
 
@@ -234,7 +246,8 @@ void selectNextFinishedOperation(asyncBase *base)
       asyncOpRoot *op;
       int i;
       for (i = 0; i < available/(int)sizeof(op); i++) {
-        read(localBase->pipeFd[0], &op, sizeof(op));
+        if (read(localBase->pipeFd[0], &op, sizeof(op)) <= 0)
+          fprintf(stderr, "ERROR(selectNextFinishedOperation): read call error");
         if (!op)
           return;
     
@@ -312,9 +325,9 @@ void selectInitializeTimer(asyncBase *base, asyncOpRoot *op)
   op->timerId = (void*)timerId;
 }
 
-void selectStartTimer(asyncOpRoot *op, uint64_t usTimeout, int periodic)
+void selectStartTimer(asyncOpRoot *op)
 {
-  startTimer(op, usTimeout, periodic);
+  startTimer(op, 0, 0);
 }
 
 
@@ -327,7 +340,8 @@ void selectStopTimer(asyncOpRoot *op)
 void selectActivate(aioUserEvent *event)
 {
   selectBase *localBase = (selectBase*)event->base;
-  write(localBase->pipeFd[Write], &event, sizeof(void*));
+  if (write(localBase->pipeFd[Write], &event, sizeof(void*)) <= 0)
+    fprintf(stderr, "ERROR(selectActivate): read call error");
 }
 
 

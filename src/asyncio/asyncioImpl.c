@@ -11,17 +11,11 @@
 
 #define PAGE_MAP_SIZE (1u << 16)
 
-#define TAGGED_POINTER_DATA_SIZE 6
-#define TAGGED_POINTER_ALIGNMENT (((intptr_t)1) << TAGGED_POINTER_DATA_SIZE)
-#define TAGGED_POINTER_DATA_MASK (TAGGED_POINTER_ALIGNMENT-1)
-#define TAGGED_POINTER_PTR_MASK (~TAGGED_POINTER_DATA_MASK)
-
 __tls unsigned currentFinishedSync;
 __tls unsigned messageLoopThreadId;
 __tls RingBuffer localQueue;
 
 static const char *asyncOpLinkListPool = "asyncOpLinkList";
-static const char *asyncOpActionPool = "asyncOpAction";
 
 void eqRemove(List *list, asyncOpRoot *op)
 {
@@ -71,22 +65,22 @@ static inline void *pageMapAlloc()
   return calloc(PAGE_MAP_SIZE, sizeof(void*));
 }
 
-void *__tagged_alloc(size_t size)
+void *alignedMalloc(size_t size, size_t alignment)
 {
 #ifdef OS_COMMONUNIX
   void *memptr;
-  return posix_memalign(&memptr, TAGGED_POINTER_ALIGNMENT, size) == 0 ? memptr: 0;
+  return posix_memalign(&memptr, alignment, size) == 0 ? memptr: 0;
 #else
-  return _aligned_malloc(size, TAGGED_POINTER_ALIGNMENT);
+  return _aligned_malloc(size, alignment);
 #endif
 }
 
-void *__tagged_pointer_make(void *ptr, tag_t data)
+void *__tagged_pointer_make(void *ptr, uintptr_t data)
 {
   return (void*)(((intptr_t)ptr) + ((intptr_t)(data & TAGGED_POINTER_DATA_MASK)));
 }
 
-void __tagged_pointer_decode(void *ptr, void **outPtr, tag_t *outData)
+void __tagged_pointer_decode(void *ptr, void **outPtr, uintptr_t *outData)
 {
   intptr_t p = (intptr_t)ptr;
   *outPtr = (void*)(p & TAGGED_POINTER_PTR_MASK);
@@ -166,34 +160,30 @@ int pageMapRemove(pageMap *map, asyncOpListLink *link)
   return removed;
 }
 
-tag_t objectIncrementReference(aioObjectRoot *object, tag_t count)
+uintptr_t objectIncrementReference(aioObjectRoot *object, uintptr_t count)
 {
-  tag_t result = __tag_atomic_fetch_and_add(&object->refs, count);
+  uintptr_t result = __uintptr_atomic_fetch_and_add(&object->refs, count);
   assert(result != 0 && "Removed object access detected");
   return result;
 }
 
-tag_t objectDecrementReference(aioObjectRoot *object, tag_t count)
+uintptr_t objectDecrementReference(aioObjectRoot *object, uintptr_t count)
 {
-  tag_t result = __tag_atomic_fetch_and_add(&object->refs, (tag_t)0-count);
-  if (result == count) {
-    // try delete
-    assert(!(object->tag & TAG_DELETE) && "Double free detected");
-    if (__tag_atomic_fetch_and_add(&object->tag, TAG_DELETE) == 0)
-      object->base->methodImpl.combiner(object, TAG_DELETE, 0, aaNone);
-  }
+  uintptr_t result = __uintptr_atomic_fetch_and_add(&object->refs, (uintptr_t)0-count);
+  if (result == count)
+    combinerPushCounter(object, COMBINER_TAG_DELETE);
 
   return result;
 }
 
-tag_t eventIncrementReference(aioUserEvent *event, tag_t tag)
+uintptr_t eventIncrementReference(aioUserEvent *event, uintptr_t tag)
 {
-  return __tag_atomic_fetch_and_add(&event->tag, tag);
+  return __uintptr_atomic_fetch_and_add(&event->tag, tag);
 }
 
-tag_t eventDecrementReference(aioUserEvent *event, tag_t tag)
+uintptr_t eventDecrementReference(aioUserEvent *event, uintptr_t tag)
 {
-  tag_t result = __tag_atomic_fetch_and_add(&event->tag, (tag_t)0 - tag) & TAG_EVENT_MASK;
+  uintptr_t result = __uintptr_atomic_fetch_and_add(&event->tag, (uintptr_t)0 - tag) & TAG_EVENT_MASK;
   if (result == (tag & TAG_EVENT_MASK)) {
     objectRelease(&event->root, event->root.poolId);
     if (event->destructorCb)
@@ -206,15 +196,15 @@ tag_t eventDecrementReference(aioUserEvent *event, tag_t tag)
 int eventTryActivate(aioUserEvent *event)
 {
   if (!event->isSemaphore) {
-    tag_t result = __tag_atomic_fetch_and_add(&event->tag, TAG_EVENT_OP + 1);
+    uintptr_t result = __uintptr_atomic_fetch_and_add(&event->tag, TAG_EVENT_OP + 1);
     if ((result & TAG_EVENT_OP_MASK) == 0) {
       return 1;
     } else {
-      __tag_atomic_fetch_and_add(&event->tag, -(TAG_EVENT_OP + 1));
+      __uintptr_atomic_fetch_and_add(&event->tag, STATIC_CAST(uintptr_t, 0)-(TAG_EVENT_OP + 1));
       return 0;
     }
   } else {
-    __tag_atomic_fetch_and_add(&event->tag, 1);
+    __uintptr_atomic_fetch_and_add(&event->tag, 1);
     return 1;
   }
 }
@@ -222,7 +212,7 @@ int eventTryActivate(aioUserEvent *event)
 void eventDeactivate(aioUserEvent *event)
 {
   if (!event->isSemaphore)
-    __tag_atomic_fetch_and_add(&event->tag, (tag_t)0-TAG_EVENT_OP);
+    __uintptr_atomic_fetch_and_add(&event->tag, (uintptr_t)0-TAG_EVENT_OP);
 }
 
 void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op)
@@ -235,7 +225,6 @@ void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op)
   pageMapAdd(&base->timerMap, timerLink);
   op->timerId = timerLink;
 }
-
 
 void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op)
 {
@@ -270,17 +259,16 @@ void processTimeoutQueue(asyncBase *base, time_t currentTime)
 
 void initObjectRoot(aioObjectRoot *object, asyncBase *base, IoObjectTy type, aioObjectDestructor destructor)
 {
-  object->tag = 0;
+  object->Head = taggedAsyncOpNull();
   object->readQueue.head = object->readQueue.tail = 0;
   object->writeQueue.head = object->writeQueue.tail = 0;
-  object->announcementQueue.head = object->announcementQueue.tail = 0;
-  object->announcementQueue.lock = 0;
   object->base = base;
   object->type = type;
   object->refs = 1;
   object->destructor = destructor;
   object->destructorCb = 0;
   object->destructorCbArg = 0;
+  object->CancelIoFlag = 0;
 }
 
 void objectSetDestructorCb(aioObjectRoot *object, aioObjectDestructorCb callback, void *arg)
@@ -297,8 +285,8 @@ void eventSetDestructorCb(aioUserEvent *event, userEventDestructorCb callback, v
 
 void cancelIo(aioObjectRoot *object)
 {
-  if (__tag_atomic_fetch_and_add(&object->tag, TAG_CANCELIO) == 0)
-    object->base->methodImpl.combiner(object, TAG_CANCELIO, 0, aaNone);
+  if (__uint_atomic_fetch_and_add(&object->CancelIoFlag, 1) == 0)
+    combinerPushCounter(object, COMBINER_TAG_ACCESS);
 }
 
 void objectDelete(aioObjectRoot *object)
@@ -307,7 +295,7 @@ void objectDelete(aioObjectRoot *object)
   objectDecrementReference(object, 1);
 }
 
-tag_t opGetGeneration(asyncOpRoot *op)
+uintptr_t opGetGeneration(asyncOpRoot *op)
 {
   return op->tag >> TAG_STATUS_SIZE;
 }
@@ -317,21 +305,21 @@ AsyncOpStatus opGetStatus(asyncOpRoot *op)
   return op->tag & TAG_STATUS_MASK;
 }
 
-int opSetStatus(asyncOpRoot *op, tag_t generation, AsyncOpStatus status)
+int opSetStatus(asyncOpRoot *op, uintptr_t generation, AsyncOpStatus status)
 {
-  return __tag_atomic_compare_and_swap(&op->tag,
-                                      (generation<<TAG_STATUS_SIZE) | aosPending,
-                                      (generation<<TAG_STATUS_SIZE) | (tag_t)status);
+  return __uintptr_atomic_compare_and_swap(&op->tag,
+                                          (generation<<TAG_STATUS_SIZE) | aosPending,
+                                          (generation<<TAG_STATUS_SIZE) | (uintptr_t)status);
 }
 
 void opForceStatus(asyncOpRoot *op, AsyncOpStatus status)
 {
-  op->tag = (op->tag & TAG_GENERATION_MASK) | (tag_t)status;
+  op->tag = (op->tag & TAG_GENERATION_MASK) | (uintptr_t)status;
 }
 
-tag_t opEncodeTag(asyncOpRoot *op, tag_t tag)
+uintptr_t opEncodeTag(asyncOpRoot *op, uintptr_t tag)
 {
-  return ((op->tag >> TAG_STATUS_SIZE) & ~((tag_t)TAGGED_POINTER_DATA_MASK)) | (tag & (tag_t)TAGGED_POINTER_DATA_MASK);
+  return ((op->tag >> TAG_STATUS_SIZE) & ~((uintptr_t)TAGGED_POINTER_DATA_MASK)) | (tag & (uintptr_t)TAGGED_POINTER_DATA_MASK);
 }
 
 asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
@@ -365,7 +353,7 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
   op->finishMethod = (flags & afCoroutine) ? (aioFinishProc*)coroutineCurrent() : finishMethod;
   op->executeQueue.prev = 0;
   op->executeQueue.next = 0;
-  op->next = 0;
+  op->next = taggedAsyncOpNull();
   op->object = object;
   op->flags = flags;
   op->opCode = opCode;
@@ -394,17 +382,17 @@ static void opRun(asyncOpRoot *op, List *list)
   }
 }
 
-void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, tag_t *needStart)
+void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, uint32_t *needStart)
 {
   List *list = 0;
-  tag_t tag = 0;
+  uint32_t tag = 0;
   aioObjectRoot *object = opptr->object;
   if (opptr->opCode & OPCODE_WRITE) {
     list = &object->writeQueue;
-    tag = TAG_WRITE;
+    tag = IO_EVENT_WRITE;
   } else {
     list = &object->readQueue;
-    tag = TAG_READ;
+    tag = IO_EVENT_READ;
   }
 
   switch (actionType) {
@@ -442,23 +430,6 @@ void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, tag_t *needSt
   }
 
   *needStart |= (list->head && list->head->running == arWaiting) ? tag : 0;
-}
-
-void processOperationList(aioObjectRoot *object, tag_t *needStart, tag_t *enqueued)
-{
-  asyncOpAction *action;
-  __spinlock_acquire(&object->announcementQueue.lock);
-  action = object->announcementQueue.head;
-  object->announcementQueue.head = 0;
-  object->announcementQueue.tail = 0;
-  __spinlock_release(&object->announcementQueue.lock);
-
-  while (action) {
-    processAction(action->op, action->actionType, needStart);
-    objectRelease(action, asyncOpActionPool);
-    action = action->next;
-    (*enqueued)++;
-  }
 }
 
 void opRelease(asyncOpRoot *op, AsyncOpStatus status, List *executeList)
@@ -519,57 +490,19 @@ void cancelOperationList(List *list, AsyncOpStatus status)
   list->tail = 0;
 }
 
-void combinerAddAction(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy actionType)
-{
-  asyncOpAction *action = objectGet(asyncOpActionPool);
-  if (!action)
-    action = malloc(sizeof(asyncOpAction));
-  action->op = op;
-  action->actionType = actionType;
-  action->next = 0;
-
-  __spinlock_acquire(&object->announcementQueue.lock);
-  if (object->announcementQueue.tail == 0) {
-    object->announcementQueue.head = action;
-    object->announcementQueue.tail = action;
-  } else {
-    object->announcementQueue.tail->next = action;
-    object->announcementQueue.tail = action;
-  }
-  __spinlock_release(&object->announcementQueue.lock);
-}
-
-void combinerCall(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
-{
-  if (__tag_atomic_fetch_and_add(&object->tag, tag) == 0)
-    object->base->methodImpl.combiner(object, tag, op, actionType);
-  else
-    combinerAddAction(object, op, actionType);
-}
-
-void combinerCallWithoutLock(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy action)
-{
-  object->base->methodImpl.combiner(object, tag, op, action);
-}
-
-void opStart(asyncOpRoot *op)
-{
-  combinerCall(op->object, 1, op, aaStart);
-}
-
-void opCancel(asyncOpRoot *op, tag_t generation, AsyncOpStatus status)
+void opCancel(asyncOpRoot *op, uintptr_t generation, AsyncOpStatus status)
 {
   if (opSetStatus(op, generation, status))
-    combinerCall(op->object, 1, op, aaCancel);
+    combinerPushOperation(op, aaCancel);
 }
 
 void resumeParent(asyncOpRoot *op, AsyncOpStatus status)
 {
   if (status == aosSuccess) {
-    combinerCall(op->object, 1, op, aaContinue);
+    combinerPushOperation(op, aaContinue);
   } else {
     opSetStatus(op, opGetGeneration(op), status);
-    combinerCall(op->object, 1, op, aaFinish);
+    combinerPushOperation(op, aaFinish);
   }
 }
 
@@ -630,5 +563,69 @@ int copyFromBuffer(void *dst, size_t *offset, struct ioBuffer *src, size_t size)
     src->offset = 0;
     src->dataSize = 0;
     return 0;
+  }
+}
+
+asyncOpRoot *allocAsyncOp(size_t size)
+{
+  return alignedMalloc(size, 1u << COMBINER_TAG_SIZE);
+}
+
+static inline void combinerTaskHandlerCommon(aioObjectRoot *object, uint32_t tag)
+{
+  if (object->CancelIoFlag) {
+    object->CancelIoFlag = 0;
+    cancelOperationList(&object->readQueue, aosCanceled);
+    cancelOperationList(&object->writeQueue, aosCanceled);
+  }
+
+  if (tag & COMBINER_TAG_DELETE) {
+    cancelOperationList(&object->readQueue, aosCanceled);
+    cancelOperationList(&object->writeQueue, aosCanceled);
+    object->destructor(object);
+    if (object->destructorCb)
+      object->destructorCb(object, object->destructorCbArg);
+    return;
+  }
+}
+
+void combiner(aioObjectRoot *object, AsyncOpTaggedPtr stackTop, AsyncOpTaggedPtr forRun)
+{
+  AsyncOpTaggedPtr stubOp = taggedAsyncOpStub();
+  combinerTaskHandlerTy *combinerTaskHandler = object->base->methodImpl.combinerTaskHandler;
+
+  if (forRun.data) {
+    asyncOpRoot *op;
+    AsyncOpActionTy opMethod;
+    uint32_t tag;
+    taggedAsyncOpDecode(forRun, &op, &opMethod, &tag);
+    combinerTaskHandlerCommon(object, tag);
+    combinerTaskHandler(object, op, opMethod);
+  }
+
+  for (;;) {
+    AsyncOpTaggedPtr currentHead;
+    while ( (currentHead.data = object->Head.data) == stackTop.data ) {
+      if (__uintptr_atomic_compare_and_swap(&object->Head.data, stackTop.data, 0))
+        return;
+    }
+
+    while (!__uintptr_atomic_compare_and_swap(&object->Head.data, currentHead.data, stackTop.data))
+      currentHead = object->Head;
+
+    // Run dequeued tasks
+    while (currentHead.data && currentHead.data != stackTop.data) {
+      asyncOpRoot *current;
+      AsyncOpActionTy opMethod;
+      uint32_t tag;
+      taggedAsyncOpDecode(currentHead, &current, &opMethod, &tag);
+
+      if (current == (asyncOpRoot*)stubOp.data)
+        current = 0;
+      AsyncOpTaggedPtr next = current ? current->next : taggedAsyncOpNull();
+      combinerTaskHandlerCommon(object, tag);
+      combinerTaskHandler(object, current, opMethod);
+      currentHead = next;
+    }
   }
 }

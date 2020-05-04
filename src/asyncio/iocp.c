@@ -34,7 +34,7 @@ typedef struct aioTimer {
   HANDLE hTimer;
 } aioTimer;
 
-void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType);
+void combinerTaskHandler(aioObjectRoot* object, asyncOpRoot* op, AsyncOpActionTy opMethod);
 void iocpEnqueue(asyncBase *base, asyncOpRoot *op);
 void postEmptyOperation(asyncBase *base);
 void iocpNextFinishedOperation(asyncBase *base);
@@ -54,7 +54,7 @@ AsyncOpStatus iocpAsyncReadMsg(asyncOpRoot *op);
 AsyncOpStatus iocpAsyncWriteMsg(asyncOpRoot *op);
 
 static struct asyncImpl iocpImpl = {
-  combiner,
+  combinerTaskHandler,
   iocpEnqueue,
   postEmptyOperation,
   iocpNextFinishedOperation,
@@ -124,7 +124,7 @@ static VOID CALLBACK userEventTimerCb(LPVOID lpArgToCompletionRoutine, DWORD dwT
   __UNUSED(dwTimerLowValue);
   __UNUSED(dwTimerHighValue);
   aioTimer *timer;
-  tag_t timerTag;
+  uintptr_t timerTag;
   __tagged_pointer_decode(lpArgToCompletionRoutine, (void**)&timer, &timerTag);
 
   int needReactivate = 1;
@@ -152,55 +152,22 @@ static VOID CALLBACK ioFinishedTimerCb(LPVOID lpArgToCompletionRoutine, DWORD dw
   __UNUSED(dwTimerLowValue);
   __UNUSED(dwTimerHighValue);
   aioTimer *timer;
-  tag_t timerTag;
+  uintptr_t timerTag;
   __tagged_pointer_decode(lpArgToCompletionRoutine, (void**)&timer, &timerTag);
 
   if (opSetStatus(timer->op, opEncodeTag(timer->op, timerTag), aosTimeout))
-    combinerCall(timer->op->object, 1, timer->op, aaCancel);
+    combinerPushOperation(timer->op, aaCancel);
 }
 
-void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
+void combinerTaskHandler(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy opMethod)
 {
-  tag_t currentTag = tag;
-  asyncOpRoot *newOp = op;
-
-  while (currentTag) {
-    if (currentTag & TAG_CANCELIO) {
-      cancelOperationList(&object->readQueue, aosCanceled);
-      cancelOperationList(&object->writeQueue, aosCanceled);
-    }
-
-    // Check for delete
-    if (currentTag & TAG_DELETE) {
-      // Perform delete and exit combiner
-      object->destructor(object);
-      return;
-    }
-
-    // Check for pending operations
-    tag_t pendingOperationsNum;
-    tag_t enqueuedOperationsNum = 0;
-    tag_t needStart = 0;
-    if ((pendingOperationsNum = __tag_get_opcount(currentTag))) {
-      if (newOp) {
-        processAction(newOp, actionType, &needStart);
-        enqueuedOperationsNum = 1;
-        newOp = 0;
-      }
-
-      while (enqueuedOperationsNum < pendingOperationsNum)
-        processOperationList(object, &needStart, &enqueuedOperationsNum);
-    }
-
-    if (needStart & TAG_READ_MASK)
+  uint32_t needStart = 0;
+  if (op) {
+    processAction(op, opMethod, &needStart);
+    if (needStart & IO_EVENT_READ)
       executeOperationList(&object->readQueue);
-    if (needStart & TAG_WRITE_MASK)
+    if (needStart & IO_EVENT_WRITE)
       executeOperationList(&object->writeQueue);
-
-    // Try exit combiner
-    tag_t processed = __tag_make_processed(currentTag, enqueuedOperationsNum);
-    currentTag = __tag_atomic_fetch_and_add(&object->tag, ((tag_t)0)-processed);
-    currentTag -= processed;
   }
 }
 
@@ -316,12 +283,12 @@ void iocpNextFinishedOperation(asyncBase *base)
               op->info.host.family = remoteAddr->sin_family;
               op->info.host.ipv4 = remoteAddr->sin_addr.s_addr;
               op->info.host.port = remoteAddr->sin_port;
-            } else {
+            } else { 
               result = aosUnknownError;
             }
           } else if (op->info.root.opCode == actRead || op->info.root.opCode == actWrite) {
             if (isBuffered || ((op->info.root.flags & afWaitAll) && op->info.bytesTransferred < op->info.transactionSize)) {
-              combinerCall(op->info.root.object, 1, &op->info.root, aaContinue);
+              combinerPushOperation(&op->info.root, aaContinue);
               continue;
             }
           } else if (op->info.root.opCode == actReadMsg) {
@@ -333,7 +300,7 @@ void iocpNextFinishedOperation(asyncBase *base)
         }
 
         opSetStatus(&op->info.root, opGetGeneration(&op->info.root), result);
-        combinerCall(op->info.root.object, 1, &op->info.root, aaFinish);
+        combinerPushOperation(&op->info.root, aaFinish);
       } else {
         unsigned threadsRunning = __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, -1) - 1;
         if (threadsRunning)
@@ -378,7 +345,7 @@ aioObject *iocpNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 asyncOpRoot *iocpNewAsyncOp()
 {
   iocpOp *op;
-  op = malloc(sizeof(iocpOp));
+  op = alignedMalloc(sizeof(iocpOp), 1u << COMBINER_TAG_SIZE);
   if (op)
     memset(op, 0, sizeof(iocpOp));
 
@@ -422,7 +389,7 @@ void iocpDeleteObject(aioObject *object)
 void iocpInitializeTimer(asyncBase *base, asyncOpRoot *op)
 {
   __UNUSED(base);
-  aioTimer *timer = __tagged_alloc(sizeof(aioTimer));
+  aioTimer *timer = alignedMalloc(sizeof(aioTimer), TAGGED_POINTER_ALIGNMENT);
   timer->op = op;
   timer->hTimer = CreateWaitableTimer(NULL, FALSE, NULL);
   op->timerId = timer;
@@ -532,7 +499,8 @@ AsyncOpStatus iocpAsyncRead(asyncOpRoot *opptr)
   if (op->info.transactionSize <= object->buffer.totalSize) {
     memset(&op->overlapped, 0, sizeof(op->overlapped));
     if (object->root.type == ioObjectDevice) {
-      int result = ReadFile(object->hDevice, sb->ptr, sb->totalSize, 0, &op->overlapped);
+      // TODO: check totalSize > 4Gb
+      int result = ReadFile(object->hDevice, sb->ptr, (DWORD)sb->totalSize, 0, &op->overlapped);
       if (result == TRUE || GetLastError() == WSA_IO_PENDING)
         return aosPending;
       else
@@ -551,7 +519,8 @@ AsyncOpStatus iocpAsyncRead(asyncOpRoot *opptr)
     wsabuf.len = (ULONG)(op->info.transactionSize - op->info.bytesTransferred);
     memset(&op->overlapped, 0, sizeof(op->overlapped));
     if (object->root.type == ioObjectDevice) {
-      int result = ReadFile(object->hDevice, (CHAR*)op->info.buffer + op->info.bytesTransferred, op->info.transactionSize - op->info.bytesTransferred, 0, &op->overlapped);
+      // TODO: check totalSize > 4Gb
+      int result = ReadFile(object->hDevice, (CHAR*)op->info.buffer + op->info.bytesTransferred, (DWORD)(op->info.transactionSize - op->info.bytesTransferred), 0, &op->overlapped);
       if (result == TRUE || GetLastError() == WSA_IO_PENDING)
         return aosPending;
       else
@@ -576,7 +545,8 @@ AsyncOpStatus iocpAsyncWrite(asyncOpRoot *opptr)
   // TODO: correct processing >4Gb data blocks
   memset(&op->overlapped, 0, sizeof(op->overlapped));
   if (object->root.type == ioObjectDevice) {
-    BOOL result = WriteFile(object->hDevice, (CHAR*)op->info.buffer + op->info.bytesTransferred, op->info.transactionSize - op->info.bytesTransferred, 0, &op->overlapped);
+    // TODO: check totalSize > 4Gb
+    BOOL result = WriteFile(object->hDevice, (CHAR*)op->info.buffer + op->info.bytesTransferred, (DWORD)(op->info.transactionSize - op->info.bytesTransferred), 0, &op->overlapped);
     if (result == TRUE || GetLastError() == WSA_IO_PENDING)
       return aosPending;
     else

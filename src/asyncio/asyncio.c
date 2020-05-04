@@ -24,6 +24,29 @@ asyncBase *epollNewAsyncBase(void);
 asyncBase *kqueueNewAsyncBase(void);
 #endif
 
+struct Context {
+  aioExecuteProc *StartProc;
+  aioFinishProc *FinishProc;
+  void *Buffer;
+  size_t TransactionSize;
+  size_t BytesTransferred;
+  ssize_t Result;
+};
+
+static inline void fillContext(struct Context *context,
+                               aioExecuteProc *startProc,
+                               aioFinishProc *finishProc,
+                               void *buffer,
+                               size_t transactionSize)
+{
+  context->StartProc = startProc;
+  context->FinishProc = finishProc;
+  context->Buffer = buffer;
+  context->TransactionSize = transactionSize;
+  context->BytesTransferred = 0;
+  context->Result = -aosPending;
+}
+
 static void connectFinish(asyncOpRoot* opptr)
 {
   ((aioConnectCb*)opptr->callback)(opGetStatus(opptr), (aioObject*)opptr->object, opptr->arg);
@@ -52,81 +75,47 @@ static void eventFinish(asyncOpRoot *root)
   ((aioEventCb*)root->callback)((aioUserEvent*)root, root->arg);
 }
 
-static asyncOp *initReadAsyncOp(aioExecuteProc *startProc,
-                                aioFinishProc *finishProc,
-                                aioObject *object,
-                                void *callback,
-                                void *arg,
-                                AsyncFlags flags,
-                                int opCode,
-                                uint64_t timeout,
-                                void *buffer,
-                                size_t transactionSize)
+static asyncOpRoot *newAsyncOp(aioObjectRoot *object,
+                               AsyncFlags flags,
+                               uint64_t usTimeout,
+                               void *callback,
+                               void *arg,
+                               int opCode,
+                               void *contextPtr)
 {
+  struct Context *context = (struct Context*)contextPtr;
   asyncOp *op = (asyncOp*)initAsyncOpRoot(poolId,
                                           timerPoolId,
-                                          object->root.base->methodImpl.newAsyncOp,
-                                          startProc,
-                                          object->root.base->methodImpl.cancelAsyncOp,
-                                          finishProc,
-                                          &object->root,
+                                          object->base->methodImpl.newAsyncOp,
+                                          context->StartProc,
+                                          object->base->methodImpl.cancelAsyncOp,
+                                          context->FinishProc,
+                                          object,
                                           callback,
                                           arg,
                                           flags,
                                           opCode,
-                                          timeout);
+                                          usTimeout);
 
   op->state = 0;
-  op->buffer = buffer;
-  op->transactionSize = transactionSize;
+  op->transactionSize = context->TransactionSize;
   op->bytesTransferred = 0;
-  return op;
-}
-
-static asyncOp *initWriteAsyncOp(aioExecuteProc *startProc,
-                                 aioFinishProc *finishProc,
-                                 aioObject *object,
-                                 void *callback,
-                                 void *arg,
-                                 AsyncFlags flags,
-                                 int opCode,
-                                 uint64_t timeout,
-                                 const void *buffer,
-                                 size_t transactionSize)
-{
-  asyncOp *op = (asyncOp*)initAsyncOpRoot(poolId,
-                                          timerPoolId,
-                                          object->root.base->methodImpl.newAsyncOp,
-                                          startProc,
-                                          object->root.base->methodImpl.cancelAsyncOp,
-                                          finishProc,
-                                          &object->root,
-                                          callback,
-                                          arg,
-                                          flags,
-                                          opCode,
-                                          timeout);
-
-  op->state = 0;
-  op->transactionSize = transactionSize;
-  op->bytesTransferred = 0;
-
-  if (!(flags & afNoCopy)) {
+  if (context->TransactionSize && (opCode & OPCODE_WRITE) && !(flags & afNoCopy)) {
     if (op->internalBuffer == 0) {
-      op->internalBuffer = malloc(transactionSize);
-      op->internalBufferSize = transactionSize;
-    } else if (op->internalBufferSize < transactionSize) {
-      op->internalBufferSize = transactionSize;
-      op->internalBuffer = realloc(op->internalBuffer, transactionSize);
+      op->internalBuffer = malloc(context->TransactionSize);
+      op->internalBufferSize = context->TransactionSize;
+    } else if (op->internalBufferSize < context->TransactionSize) {
+      op->internalBufferSize = context->TransactionSize;
+      op->internalBuffer = realloc(op->internalBuffer, context->TransactionSize);
     }
 
-    memcpy(op->internalBuffer, buffer, transactionSize);
+    memcpy(op->internalBuffer, context->Buffer, context->TransactionSize);
     op->buffer = op->internalBuffer;
   } else {
-    op->buffer = (void*)(uintptr_t)buffer;
+    op->buffer = context->Buffer;
   }
 
-  return op;
+  return &op->root;
 }
 
 static void coroutineEventCb(aioObject *event, void *arg)
@@ -315,6 +304,8 @@ asyncOpRoot *implRead(aioObject *object,
   if (copyFromBuffer(buffer, bytesTransferred, sb, size))
     return 0;
 
+  struct Context context;
+  fillContext(&context, object->root.base->methodImpl.read, rwFinish, buffer, size);
   if (size < sb->totalSize) {
     size_t bytes;
     while (*bytesTransferred <= size) {
@@ -326,7 +317,7 @@ asyncOpRoot *implRead(aioObject *object,
         if (copyFromBuffer(buffer, bytesTransferred, sb, size) || !(flags & afWaitAll))
           break;
       } else {
-        asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)callback, arg, flags|extraFlags, actRead, usTimeout, buffer, size);
+        asyncOp *op = (asyncOp*)newAsyncOp(&object->root, flags | extraFlags, usTimeout, (void*)callback, arg, actRead, &context);
         op->bytesTransferred = *bytesTransferred;
         return &op->root;
       }
@@ -342,7 +333,7 @@ asyncOpRoot *implRead(aioObject *object,
     if (result) {
       return 0;
     } else {
-      asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)callback, arg, flags|extraFlags, actRead, usTimeout, buffer, size);
+      asyncOp *op = (asyncOp*)newAsyncOp(&object->root, flags | extraFlags, usTimeout, (void*)callback, arg, actRead, &context);
       op->bytesTransferred = *bytesTransferred;
       return &op->root;
     }
@@ -378,10 +369,24 @@ asyncOpRoot *implWrite(aioObject *object,
     *bytesTransferred = bytes;
     return 0;
   } else {
-    asyncOp *op = initWriteAsyncOp(object->root.base->methodImpl.write, rwFinish, object, (void*)callback, arg, flags|extraFlags, actWrite, usTimeout, buffer, size);
+    struct Context context;
+    fillContext(&context, object->root.base->methodImpl.write, rwFinish, (void*)((uintptr_t)buffer), size);
+    asyncOp *op = (asyncOp*)newAsyncOp(&object->root, flags | extraFlags, usTimeout, (void*)callback, arg, actWrite, &context);
     op->bytesTransferred = bytes;
     return &op->root;
   }
+}
+
+static asyncOpRoot *implReadProxy(aioObjectRoot *object, AsyncFlags flags, uint64_t usTimeout, void *callback, void *arg, void *contextPtr)
+{
+  struct Context *context = (struct Context*)contextPtr;
+  return implRead((aioObject*)object, context->Buffer, context->TransactionSize, flags, usTimeout, (aioCb*)callback, arg, &context->BytesTransferred);
+}
+
+static asyncOpRoot *implWriteProxy(aioObjectRoot *object, AsyncFlags flags, uint64_t usTimeout, void *callback, void *arg, void *contextPtr)
+{
+  struct Context *context = (struct Context*)contextPtr;
+  return implWrite((aioObject*)object, context->Buffer, context->TransactionSize, flags, usTimeout, (aioCb*)callback, arg, &context->BytesTransferred);
 }
 
 void aioConnect(aioObject *object,
@@ -390,9 +395,11 @@ void aioConnect(aioObject *object,
                 aioConnectCb callback,
                 void *arg)
 {
-  asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.connect, connectFinish, object, (void*)callback, arg, afNone, actConnect, usTimeout, 0, 0);
+  struct Context context;
+  fillContext(&context, object->root.base->methodImpl.connect, connectFinish, 0, 0);
+  asyncOp *op = (asyncOp*)newAsyncOp(&object->root, afNone, usTimeout, (void*)callback, arg, actConnect, &context);
   op->host = *address;
-  opStart(&op->root);
+  combinerPushOperation(&op->root, aaStart);
 }
 
 
@@ -406,10 +413,23 @@ void aioAccept(aioObject *object,
 #else
   AsyncFlags flags = afRunning;
 #endif
-  asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.accept, acceptFinish, object, (void*)callback, arg, flags, actAccept, usTimeout, 0, 0);
-  opStart(&op->root);
+  struct Context context;
+  fillContext(&context, object->root.base->methodImpl.accept, acceptFinish, 0, 0);
+  asyncOpRoot *op = newAsyncOp(&object->root, flags, usTimeout, (void*)callback, arg, actAccept, &context);
+  combinerPushOperation(op, aaStart);
 }
 
+static void makeResult(void *contextPtr)
+{
+  struct Context *context = (struct Context*)contextPtr;
+  context->Result = (ssize_t)context->BytesTransferred;
+}
+
+static void initOp(asyncOpRoot *op, void *contextPtr)
+{
+  struct Context *context = (struct Context*)contextPtr;
+  ((asyncOp*)op)->bytesTransferred = context->BytesTransferred;
+}
 
 ssize_t aioRead(aioObject *object,
                 void *buffer,
@@ -419,45 +439,10 @@ ssize_t aioRead(aioObject *object,
                 aioCb callback,
                 void *arg)
 {
-#define MAKE_OP initReadAsyncOp(object->root.base->methodImpl.read, rwFinish, object, (void*)callback, arg, flags, actRead, usTimeout, buffer, size)
-  if (__tag_atomic_fetch_and_add(&object->root.tag, 1) == 0) {
-    if (!object->root.readQueue.head) {
-      size_t bytesTransferred;
-      asyncOpRoot *op = implRead(object, buffer, size, flags, usTimeout, callback, arg, &bytesTransferred);
-      if (!op) {
-        tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
-        if (tag)
-          combinerCallWithoutLock(&object->root, tag, 0, aaNone);
-        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
-          return (ssize_t)bytesTransferred;
-        } else {
-          asyncOp *op = MAKE_OP;
-          op->bytesTransferred = bytesTransferred;
-          opForceStatus(&op->root, aosSuccess);
-          addToGlobalQueue(&op->root);
-        }
-      } else {
-        if (opGetStatus(op) == aosPending) {
-          combinerCallWithoutLock(&object->root, 1, op, aaStart);
-        } else {
-          tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
-          if (tag)
-            combinerCallWithoutLock(&object->root, tag, 0, aaNone);
-          addToGlobalQueue(op);
-        }
-      }
-    } else {
-      eqPushBack(&object->root.readQueue, &MAKE_OP->root);
-      tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
-      if (tag)
-        combinerCallWithoutLock(&object->root, tag, 0, aaNone);
-    }
-  } else {
-    combinerAddAction(&object->root, &MAKE_OP->root, aaStart);
-  }
-
-  return -(ssize_t)aosPending;
-#undef MAKE_OP
+  struct Context context;
+  fillContext(&context, object->root.base->methodImpl.read, rwFinish, buffer, size);
+  runAioOperation(&object->root, newAsyncOp, implReadProxy, makeResult, initOp, flags, usTimeout, (void*)callback, arg, actRead, &context);
+  return context.Result;
 }
 
 ssize_t aioWrite(aioObject *object,
@@ -468,45 +453,10 @@ ssize_t aioWrite(aioObject *object,
                  aioCb callback,
                  void *arg)
 {
-#define MAKE_OP initWriteAsyncOp(object->root.base->methodImpl.write, rwFinish, object, (void*)callback, arg, flags, actWrite, usTimeout, buffer, size)
-  if (__tag_atomic_fetch_and_add(&object->root.tag, 1) == 0) {
-    if (!object->root.writeQueue.head) {
-      size_t bytesTransferred;
-      asyncOpRoot *op = implWrite(object, buffer, size, flags, usTimeout, callback, arg, &bytesTransferred);
-      if (!op) {
-        tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
-        if (tag)
-          combinerCallWithoutLock(&object->root, tag, 0, aaNone);
-        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
-          return (ssize_t)bytesTransferred;
-        } else {
-          asyncOp *op = MAKE_OP;
-          op->bytesTransferred = bytesTransferred;
-          opForceStatus(&op->root, aosSuccess);
-          addToGlobalQueue(&op->root);
-        }
-      } else {
-        if (opGetStatus(op) == aosPending) {
-          combinerCallWithoutLock(&object->root, 1, op, aaStart);
-        } else {
-          tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
-          if (tag)
-            combinerCallWithoutLock(&object->root, tag, 0, aaNone);
-          addToGlobalQueue(op);
-        }
-      }
-    } else {
-      eqPushBack(&object->root.writeQueue, &MAKE_OP->root);
-      tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
-      if (tag)
-        combinerCallWithoutLock(&object->root, tag, 0, aaNone);
-    }
-  } else {
-    combinerAddAction(&object->root, &MAKE_OP->root, aaStart);
-  }
-
-  return -(ssize_t)aosPending;
-#undef MAKE_OP
+  struct Context context;
+  fillContext(&context, object->root.base->methodImpl.write, rwFinish, (void*)((uintptr_t)buffer), size);
+  runAioOperation(&object->root, newAsyncOp, implWriteProxy, makeResult, initOp, flags, usTimeout, (void*)callback, arg, actWrite, &context);
+  return context.Result;
 }
 
 ssize_t aioReadMsg(aioObject *object,
@@ -524,6 +474,9 @@ ssize_t aioReadMsg(aioObject *object,
 #else
   ssize_t result = recvfrom(object->hSocket, buffer, size, 0, (struct sockaddr*)&source, &addrlen);
 #endif
+
+  struct Context context;
+  fillContext(&context, object->root.base->methodImpl.readMsg, readMsgFinish, buffer, size);
   if (result >= 0) {
     // Data received synchronously
     HostAddress host;
@@ -534,15 +487,15 @@ ssize_t aioReadMsg(aioObject *object,
     if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
       return result;
     } else {
-      asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.readMsg, readMsgFinish, object, (void*)callback, arg, flags, actReadMsg, usTimeout, buffer, size);
+      asyncOp *op = (asyncOp*)newAsyncOp(&object->root, flags, usTimeout, (void*)callback, arg, actReadMsg, &context);
       op->bytesTransferred = (size_t)result;
       op->host = host;
       opForceStatus(&op->root, aosSuccess);
       addToGlobalQueue(&op->root);
     }
   } else {
-    asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.readMsg, readMsgFinish, object, (void*)callback, arg, flags, actReadMsg, usTimeout, buffer, size);
-    opStart(&op->root);
+    asyncOpRoot *op = newAsyncOp(&object->root, flags, usTimeout, (void*)callback, arg, actReadMsg, &context);
+    combinerPushOperation(op, aaStart);
   }
 
   return -(ssize_t)aosPending;
@@ -569,20 +522,23 @@ ssize_t aioWriteMsg(aioObject *object,
 #else
   ssize_t result = sendto(object->hSocket, buffer, size, 0, (struct sockaddr *)&remoteAddress, sizeof(remoteAddress));
 #endif
+
+  struct Context context;
+  fillContext(&context, object->root.base->methodImpl.writeMsg, rwFinish, (void*)((uintptr_t)buffer), size);
   if (result >= 0) {
     currentFinishedSync++;
     if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
       return result;
     } else {
-      asyncOp *op = initWriteAsyncOp(object->root.base->methodImpl.writeMsg, rwFinish, object, (void*)callback, arg, flags, actWriteMsg, usTimeout, buffer, size);
+      asyncOp *op = (asyncOp*)newAsyncOp(&object->root, flags, usTimeout, (void*)callback, arg, actWriteMsg, &context);
       op->bytesTransferred = (size_t)result;
       opForceStatus(&op->root, aosSuccess);
       addToGlobalQueue(&op->root);
     }
   } else {
-    asyncOp *op = initWriteAsyncOp(object->root.base->methodImpl.writeMsg, rwFinish, object, (void*)callback, arg, flags, actWriteMsg, usTimeout, buffer, size);
+    asyncOp *op = (asyncOp*)newAsyncOp(&object->root, flags, usTimeout, (void*)callback, arg, actWriteMsg, &context);
     op->host = *address;
-    opStart(&op->root);
+    combinerPushOperation(&op->root, aaStart);
   }
 
   return -(ssize_t)aosPending;
@@ -591,9 +547,11 @@ ssize_t aioWriteMsg(aioObject *object,
 
 int ioConnect(aioObject *object, const HostAddress *address, uint64_t usTimeout)
 {
-  asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.connect, 0, object, 0, 0, afCoroutine, actConnect, usTimeout, 0, 0);
+  struct Context context;
+  fillContext(&context, object->root.base->methodImpl.connect, connectFinish, 0, 0);
+  asyncOp *op = (asyncOp*)newAsyncOp(&object->root, afCoroutine, usTimeout, 0, 0, actConnect, &context);
   op->host = *address;
-  opStart(&op->root);
+  combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
   objectRelease(&op->root, op->root.poolId);
@@ -609,8 +567,10 @@ socketTy ioAccept(aioObject *object, uint64_t usTimeout)
 #else
   AsyncFlags flags = afRunning;
 #endif
-  asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.accept, 0, object, 0, 0, flags | afCoroutine, actAccept, usTimeout, 0, 0);
-  opStart(&op->root);
+  struct Context context;
+  fillContext(&context, object->root.base->methodImpl.accept, acceptFinish, 0, 0);
+  asyncOp *op = (asyncOp*)newAsyncOp(&object->root, flags | afCoroutine, usTimeout, 0, 0, actAccept, &context);
+  combinerPushOperation(&op->root, aaStart);
 
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
@@ -623,99 +583,19 @@ socketTy ioAccept(aioObject *object, uint64_t usTimeout)
 
 ssize_t ioRead(aioObject *object, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-#define MAKE_OP initReadAsyncOp(object->root.base->methodImpl.read, 0, object, 0, 0, flags | afCoroutine, actRead, usTimeout, buffer, size)
-  asyncOp *op;
-  if (__tag_atomic_fetch_and_add(&object->root.tag, 1) == 0) {
-    if (!object->root.readQueue.head) {
-      size_t bytesTransferred;
-      op = (asyncOp*)implRead(object, buffer, size, flags | afCoroutine, usTimeout, 0, 0, &bytesTransferred);
-      if (!op) {
-        tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
-        if (tag)
-          combinerCallWithoutLock(&object->root, tag, 0, aaNone);
-        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && !tag) {
-          return (ssize_t)bytesTransferred;
-        } else {
-          asyncOp *op = MAKE_OP;
-          op->bytesTransferred = bytesTransferred;
-          opForceStatus(&op->root, aosSuccess);
-          addToGlobalQueue(&op->root);
-        }
-      } else {
-        if (opGetStatus(&op->root) == aosPending) {
-          combinerCallWithoutLock(&object->root, 1, &op->root, aaStart);
-        } else {
-          tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
-          if (tag)
-            combinerCallWithoutLock(&object->root, tag, 0, aaNone);
-          addToGlobalQueue(&op->root);
-        }
-      }
-    } else {
-      op = MAKE_OP;
-      eqPushBack(&object->root.readQueue, &op->root);
-      tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
-      if (tag)
-        combinerCallWithoutLock(&object->root, tag, 0, aaNone);
-    }
-  } else {
-    op = MAKE_OP;
-    combinerAddAction(&object->root, &op->root, aaStart);
-  }
-
-  coroutineYield();
-  return coroutineRwFinish(op, object);
-#undef MAKE_OP
+  struct Context context;
+  fillContext(&context, object->root.base->methodImpl.read, 0, buffer, size);
+  asyncOpRoot *op = runIoOperation(&object->root, newAsyncOp, implReadProxy, initOp, flags, usTimeout, actRead, &context);
+  return op ? coroutineRwFinish((asyncOp*)op, object) : (ssize_t)context.BytesTransferred;
 }
 
 
 ssize_t ioWrite(aioObject *object, const void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-#define MAKE_OP initWriteAsyncOp(object->root.base->methodImpl.write, 0, object, 0, 0, flags | afCoroutine, actWrite, usTimeout, buffer, size)
-  asyncOp *op;
-
-  if (__tag_atomic_fetch_and_add(&object->root.tag, 1) == 0) {
-    if (!object->root.writeQueue.head) {
-      size_t bytesTransferred;
-      op = (asyncOp*)implWrite(object, buffer, size, flags | afCoroutine, usTimeout, 0, 0, &bytesTransferred);
-      if (!op) {
-        tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
-        if (tag)
-          combinerCallWithoutLock(&object->root, tag, 0, aaNone);
-        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && !tag) {
-          return (ssize_t)bytesTransferred;
-        } else {
-          flags = afNone;
-          asyncOp *op = MAKE_OP;
-          op->bytesTransferred = bytesTransferred;
-          opForceStatus(&op->root, aosSuccess);
-          addToGlobalQueue(&op->root);
-        }
-      } else {
-        if (opGetStatus(&op->root) == aosPending) {
-          combinerCallWithoutLock(&object->root, 1, &op->root, aaStart);
-        } else {
-          tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
-          if (tag)
-            combinerCallWithoutLock(&object->root, tag, 0, aaNone);
-          addToGlobalQueue(&op->root);
-        }
-      }
-    } else {
-      op = MAKE_OP;
-      eqPushBack(&object->root.writeQueue, &op->root);
-      tag_t tag = __tag_atomic_fetch_and_add(&object->root.tag, (tag_t)0 - 1) - 1;
-      if (tag)
-        combinerCallWithoutLock(&object->root, tag, 0, aaNone);
-    }
-  } else {
-    op = MAKE_OP;
-    combinerAddAction(&object->root, &op->root, aaStart);
-  }
-
-  coroutineYield();
-  return coroutineRwFinish(op, object);
-#undef MAKE_OP
+  struct Context context;
+  fillContext(&context, object->root.base->methodImpl.write, 0, (void*)((uintptr_t)buffer), size);
+  asyncOpRoot *op = runIoOperation(&object->root, newAsyncOp, implWriteProxy, initOp, flags, usTimeout, actWrite, &context);
+  return op ? coroutineRwFinish((asyncOp*)op, object) : (ssize_t)context.BytesTransferred;
 }
 
 ssize_t ioReadMsg(aioObject *object, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
@@ -728,10 +608,13 @@ ssize_t ioReadMsg(aioObject *object, void *buffer, size_t size, AsyncFlags flags
 #else
   ssize_t result = recvfrom(object->hSocket, buffer, size, 0, (struct sockaddr*)&source, &addrlen);
 #endif
+
+  struct Context context;
+  fillContext(&context, object->root.base->methodImpl.readMsg, 0, buffer, size);
   if (result >= 0) {
     // Data received synchronously
     if (++currentFinishedSync >= MAX_SYNCHRONOUS_FINISHED_OPERATION) {
-      asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.readMsg, 0, object, 0, 0, flags | afCoroutine, actReadMsg, usTimeout, buffer, size);
+      asyncOp *op = (asyncOp*)newAsyncOp(&object->root, flags | afCoroutine, usTimeout, 0, 0, actReadMsg, &context);
       op->bytesTransferred = (size_t)result;
       opForceStatus(&op->root, aosSuccess);
       addToGlobalQueue(&op->root);
@@ -742,8 +625,8 @@ ssize_t ioReadMsg(aioObject *object, void *buffer, size_t size, AsyncFlags flags
     }
   }
 
-  asyncOp *op = initReadAsyncOp(object->root.base->methodImpl.readMsg, 0, object, 0, 0, flags | afCoroutine, actReadMsg, usTimeout, buffer, size);
-  combinerCall(&object->root, 1, &op->root, aaStart);
+  asyncOp *op = (asyncOp*)newAsyncOp(&object->root, flags | afCoroutine, usTimeout, 0, 0, actReadMsg, &context);
+  combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   return coroutineRwFinish(op, object);
 }
@@ -760,10 +643,13 @@ ssize_t ioWriteMsg(aioObject *object, const HostAddress *address, const void *bu
 #else
   ssize_t result = sendto(object->hSocket, buffer, size, 0, (struct sockaddr *)&remoteAddress, sizeof(remoteAddress));
 #endif
+
+  struct Context context;
+  fillContext(&context, object->root.base->methodImpl.writeMsg, 0, (void*)((uintptr_t)buffer), size);
   if (result != -1) {
     // Data received synchronously
     if (++currentFinishedSync >= MAX_SYNCHRONOUS_FINISHED_OPERATION) {
-      asyncOp *op = initWriteAsyncOp(object->root.base->methodImpl.writeMsg, 0, object, 0, 0, flags | afCoroutine, actWriteMsg, usTimeout, buffer, size);
+      asyncOp *op = (asyncOp*)newAsyncOp(&object->root, flags | afCoroutine, usTimeout, 0, 0, actWriteMsg, &context);
       op->host = *address;
       addToGlobalQueue(&op->root);
       coroutineYield();
@@ -773,9 +659,9 @@ ssize_t ioWriteMsg(aioObject *object, const HostAddress *address, const void *bu
     }
   }
 
-  asyncOp *op = initWriteAsyncOp(object->root.base->methodImpl.writeMsg, 0, object, 0, 0, flags | afCoroutine, actWriteMsg, usTimeout, buffer, size);
+  asyncOp *op = (asyncOp*)newAsyncOp(&object->root, flags | afCoroutine, usTimeout, 0, 0, actWriteMsg, &context);
   op->host = *address;
-  combinerCall(&object->root, 1, &op->root, aaStart);
+  combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   return coroutineRwFinish(op, object);
 }

@@ -16,6 +16,29 @@ static const char *sslSocketPool = "SSLSocket";
 static const char *sslPoolId = "SSL";
 static const char *sslPoolTimerId = "SSLTimer";
 
+struct Context {
+  aioExecuteProc *StartProc;
+  aioFinishProc *FinishProc;
+  void *Buffer;
+  size_t TransactionSize;
+  size_t BytesTransferred;
+  ssize_t Result;
+};
+
+static inline void fillContext(struct Context *context,
+                               aioExecuteProc *startProc,
+                               aioFinishProc *finishProc,
+                               void *buffer,
+                               size_t transactionSize)
+{
+  context->StartProc = startProc;
+  context->FinishProc = finishProc;
+  context->Buffer = buffer;
+  context->TransactionSize = transactionSize;
+  context->BytesTransferred = 0;
+  context->Result = -aosPending;
+}
+
 typedef enum {
   sslStInitalize = 0,
   sslStProcessing
@@ -42,7 +65,7 @@ static void sslWriteWriteCb(AsyncOpStatus status, aioObject *object, size_t tran
 
 static asyncOpRoot *alloc()
 {
-  SSLOp *op = (SSLOp*)malloc(sizeof(SSLOp));
+  SSLOp *op = (SSLOp*)allocAsyncOp(sizeof(SSLOp));
   op->internalBuffer = 0;
   op->internalBufferSize = 0;
   return (asyncOpRoot*)op;
@@ -66,60 +89,55 @@ static void rwFinish(asyncOpRoot *opptr)
   ((sslCb*)opptr->callback)(opGetStatus(opptr), (SSLSocket*)opptr->object, op->bytesTransferred, opptr->arg);
 }
 
-static SSLOp *allocReadSSLOp(aioExecuteProc executeProc,
-                             aioFinishProc finishProc,
-                             SSLSocket *socket,
-                             void *callback,
-                             void *arg,
-                             void *buffer,
-                             size_t size,
-                             AsyncFlags flags,
-                             int opCode,
-                             uint64_t timeout)
+static asyncOpRoot *newReadAsyncOp(aioObjectRoot *object,
+                                   AsyncFlags flags,
+                                   uint64_t usTimeout,
+                                   void *callback,
+                                   void *arg,
+                                   int opCode,
+                                   void *contextPtr)
 {
+  struct Context *context = (struct Context*)contextPtr;
   SSLOp *op = (SSLOp*)
-    initAsyncOpRoot(sslPoolId, sslPoolTimerId, alloc, executeProc, cancel, finishProc, &socket->root, callback, arg, flags, opCode, timeout);
-
-  op->buffer = buffer;
-  op->transactionSize = size;
+    initAsyncOpRoot(sslPoolId, sslPoolTimerId, alloc, context->StartProc, cancel, context->FinishProc, object, callback, arg, flags, opCode, usTimeout);
+  op->buffer = context->Buffer;
+  op->transactionSize = context->TransactionSize;
   op->bytesTransferred = 0;
   op->state = sslStInitalize;
-  return op;
+  return &op->root;
 }
 
-static SSLOp *allocWriteSSLOp(aioExecuteProc executeProc,
-                              aioFinishProc finishProc,
-                              SSLSocket *socket,
-                              void *callback,
-                              void *arg,
-                              const void *buffer,
-                              size_t size,
-                              AsyncFlags flags,
-                              int opCode,
-                              uint64_t timeout)
+static asyncOpRoot *newWriteAsyncOp(aioObjectRoot *object,
+                                    AsyncFlags flags,
+                                    uint64_t usTimeout,
+                                    void *callback,
+                                    void *arg,
+                                    int opCode,
+                                    void *contextPtr)
 {
+  struct Context *context = (struct Context*)contextPtr;
   SSLOp *op = (SSLOp*)
-    initAsyncOpRoot(sslPoolId, sslPoolTimerId, alloc, executeProc, cancel, finishProc, &socket->root, callback, arg, flags, opCode, timeout);
+    initAsyncOpRoot(sslPoolId, sslPoolTimerId, alloc, context->StartProc, cancel, context->FinishProc, object, callback, arg, flags, opCode, usTimeout);
 
-  if (!(flags & afNoCopy) && size) {
+  if (!(flags & afNoCopy) && context->TransactionSize) {
     if (op->internalBuffer == 0) {
-      op->internalBuffer = malloc(size);
-      op->internalBufferSize = size;
-    } else if (op->internalBufferSize < size) {
-      op->internalBufferSize = size;
-      op->internalBuffer = realloc(op->internalBuffer, size);
+      op->internalBuffer = malloc(context->TransactionSize);
+      op->internalBufferSize = context->TransactionSize;
+    } else if (op->internalBufferSize < context->TransactionSize) {
+      op->internalBufferSize = context->TransactionSize;
+      op->internalBuffer = realloc(op->internalBuffer, context->TransactionSize);
     }
 
-    memcpy(op->internalBuffer, buffer, size);
+    memcpy(op->internalBuffer, context->Buffer, context->TransactionSize);
     op->buffer = op->internalBuffer;
   } else {
-    op->buffer = (void*)(uintptr_t)buffer;
+    op->buffer = context->Buffer;
   }
 
-  op->transactionSize = size;
+  op->transactionSize = context->TransactionSize;
   op->bytesTransferred = 0;
   op->state = sslStInitalize;
-  return op;
+  return &op->root;
 }
 
 static ssize_t coroutineRwFinish(SSLOp *op, SSLSocket *object)
@@ -227,7 +245,7 @@ static AsyncOpStatus readProc(asyncOpRoot *opptr)
       if (!readOp) {
         BIO_write(socket->bioIn, socket->sslReadBuffer, (int)bytes);
       } else {
-        opStart(readOp);
+        combinerPushOperation(readOp, aaStart);
         return aosPending;
       }
     }
@@ -287,9 +305,11 @@ void aioSslConnect(SSLSocket *socket,
                    void *arg)
 {
   SSL_set_connect_state(socket->ssl);
-  SSLOp *newOp = allocWriteSSLOp(connectProc, connectFinish, socket, (void*)callback, arg, tlsextHostName, tlsextHostName ? strlen(tlsextHostName)+1 : 0, afNone, sslOpConnect, usTimeout);
-  newOp->address = *address;
-  opStart(&newOp->root);
+  struct Context context;
+  fillContext(&context, connectProc, connectFinish, (void*)(uintptr_t)tlsextHostName, tlsextHostName ? strlen(tlsextHostName)+1 : 0);
+  SSLOp *op = (SSLOp*)newWriteAsyncOp(&socket->root, afNone, usTimeout, (void*)callback, arg, sslOpConnect, &context);
+  op->address = *address;
+  combinerPushOperation(&op->root, aaStart);
 }
 
 asyncOpRoot *implSslRead(SSLSocket *socket,
@@ -325,14 +345,34 @@ asyncOpRoot *implSslRead(SSLSocket *socket,
       if (!readOp) {
         BIO_write(socket->bioIn, socket->sslReadBuffer, (int)bytes);
       } else {
-        SSLOp *sslOp = allocReadSSLOp(readProc, rwFinish, socket, (void*)callback, arg, buffer, size, flags|afRunning, sslOpRead, usTimeout);
+        struct Context context;
+        fillContext(&context, readProc, rwFinish, buffer, size);
+        SSLOp *sslOp = (SSLOp*)newReadAsyncOp(&socket->root, flags | afRunning, usTimeout, (void*)callback, arg, sslOpRead, &context);
         sslOp->bytesTransferred = sslBytesTransferred;
         readOp->arg = sslOp;
-        opStart(readOp);
+        combinerPushOperation(readOp, aaStart);
         return &sslOp->root;
       }
     }
   }
+}
+
+static asyncOpRoot *implSslReadProxy(aioObjectRoot *object, AsyncFlags flags, uint64_t usTimeout, void *callback, void *arg, void *contextPtr)
+{
+  struct Context *context = (struct Context*)contextPtr;
+  return implSslRead((SSLSocket*)object, context->Buffer, context->TransactionSize, flags, usTimeout, (sslCb*)callback, arg, &context->BytesTransferred);
+}
+
+static void makeResult(void *contextPtr)
+{
+  struct Context *context = (struct Context*)contextPtr;
+  context->Result = (ssize_t)context->BytesTransferred;
+}
+
+static void initOp(asyncOpRoot *op, void *contextPtr)
+{
+  struct Context *context = (struct Context*)contextPtr;
+  ((asyncOp*)op)->bytesTransferred = context->BytesTransferred;
 }
 
 ssize_t aioSslRead(SSLSocket *socket,
@@ -343,45 +383,10 @@ ssize_t aioSslRead(SSLSocket *socket,
                    sslCb callback,
                    void *arg)
 {
-#define MAKE_OP allocReadSSLOp(readProc, rwFinish, socket, (void*)callback, arg, buffer, size, flags, sslOpRead, usTimeout)
-  if (__tag_atomic_fetch_and_add(&socket->root.tag, 1) == 0) {
-    if (!socket->root.readQueue.head) {
-      size_t bytesTransferred;
-      asyncOpRoot *op = implSslRead(socket, buffer, size, flags, usTimeout, callback, arg, &bytesTransferred);
-      if (!op) {
-        tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
-        if (tag)
-          combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
-        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
-          return (ssize_t)bytesTransferred;
-        } else {
-          SSLOp *op = MAKE_OP;
-          op->bytesTransferred = bytesTransferred;
-          opForceStatus(&op->root, aosSuccess);
-          addToGlobalQueue(&op->root);
-        }
-      } else {
-        if (opGetStatus(op) == aosPending) {
-          combinerCallWithoutLock(&socket->root, 1, op, aaStart);
-        } else {
-          tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
-          if (tag)
-            combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
-          addToGlobalQueue(op);
-        }
-      }
-    } else {
-      eqPushBack(&socket->root.readQueue, &MAKE_OP->root);
-      tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
-      if (tag)
-        combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
-    }
-  } else {
-    combinerAddAction(&socket->root, &MAKE_OP->root, aaStart);
-  }
-
-  return -(ssize_t)aosPending;
-#undef MAKE_OP
+  struct Context context;
+  fillContext(&context, readProc, rwFinish, buffer, size);
+  runAioOperation(&socket->root, newReadAsyncOp, implSslReadProxy, makeResult, initOp, flags, usTimeout, (void*)callback, arg, sslOpRead, &context);
+  return context.Result;
 }
 
 void sslWriteWriteCb(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
@@ -403,7 +408,7 @@ static AsyncOpStatus writeProc(asyncOpRoot *opptr)
     size_t writeSize = copyFromOut(socket);
     asyncOpRoot *writeOp = implWrite(socket->object, socket->sslWriteBuffer, writeSize, afWaitAll, 0, sslWriteWriteCb, op, &bytes);
     if (writeOp)
-      opStart(writeOp);
+      combinerPushOperation(writeOp, aaStart);
     return writeOp ? aosPending : aosSuccess;
   } else {
     return aosSuccess;
@@ -425,13 +430,20 @@ asyncOpRoot *implSslWrite(SSLSocket *socket,
   if (!op) {
     return 0;
   } else {
-    SSLOp *sslOp = allocWriteSSLOp(writeProc, rwFinish, socket, (void*)callback, arg, buffer, size, flags|afRunning, sslOpWrite, usTimeout);
+    struct Context context;
+    fillContext(&context, writeProc, rwFinish, (void*)(uintptr_t)buffer, size);
+    SSLOp *sslOp = (SSLOp*)newWriteAsyncOp(&socket->root, flags | afRunning, usTimeout, (void*)callback, arg, sslOpWrite, &context);
     sslOp->state = sslStProcessing;
     op->arg = sslOp;
-    opStart(op);
+    combinerPushOperation(op, aaStart);
     return &sslOp->root;
   }
+}
 
+static asyncOpRoot *implSslWriteProxy(aioObjectRoot *object, AsyncFlags flags, uint64_t usTimeout, void *callback, void *arg, void *contextPtr)
+{
+  struct Context *context = (struct Context*)contextPtr;
+  return implSslWrite((SSLSocket*)object, context->Buffer, context->TransactionSize, flags, usTimeout, (sslCb*)callback, arg);
 }
 
 ssize_t aioSslWrite(SSLSocket *socket,
@@ -442,52 +454,20 @@ ssize_t aioSslWrite(SSLSocket *socket,
                    sslCb callback,
                    void *arg)
 {
-#define MAKE_OP allocWriteSSLOp(writeProc, rwFinish, socket, (void*)callback, arg, buffer, size, flags, sslOpWrite, usTimeout)
-  if (__tag_atomic_fetch_and_add(&socket->root.tag, 1) == 0) {
-    if (!socket->root.writeQueue.head) {
-      asyncOpRoot *op = implSslWrite(socket, buffer, size, flags, usTimeout, callback, arg);
-      if (!op) {
-        tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
-        if (tag)
-          combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
-        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
-          return (ssize_t)size;
-        } else {
-          SSLOp *op = MAKE_OP;
-          op->bytesTransferred = size;
-          opForceStatus(&op->root, aosSuccess);
-          addToGlobalQueue(&op->root);
-        }
-      } else {
-        if (opGetStatus(op) == aosPending) {
-          combinerCallWithoutLock(&socket->root, 1, op, aaStart);
-        } else {
-          tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
-          if (tag)
-            combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
-          addToGlobalQueue(op);
-        }
-      }
-    } else {
-      eqPushBack(&socket->root.writeQueue, &MAKE_OP->root);
-      tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
-      if (tag)
-        combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
-    }
-  } else {
-    combinerAddAction(&socket->root, &MAKE_OP->root, aaStart);
-  }
-
-  return -(ssize_t)aosPending;
-#undef MAKE_OP
+  struct Context context;
+  fillContext(&context, writeProc, rwFinish, (void*)(uintptr_t)buffer, size);
+  runAioOperation(&socket->root, newWriteAsyncOp, implSslWriteProxy, makeResult, initOp, flags, usTimeout, (void*)callback, arg, sslOpWrite, &context);
+  return context.Result;
 }
 
 int ioSslConnect(SSLSocket *socket, const HostAddress *address, const char *tlsextHostName, uint64_t usTimeout)
 {
   SSL_set_connect_state(socket->ssl);
-  SSLOp *op = allocWriteSSLOp(connectProc, 0, socket, 0, 0, tlsextHostName, tlsextHostName ? strlen(tlsextHostName)+1 : 0, afCoroutine, sslOpConnect, usTimeout);
+  struct Context context;
+  fillContext(&context, connectProc, 0, (void*)(uintptr_t)tlsextHostName, tlsextHostName ? strlen(tlsextHostName)+1 : 0);
+  SSLOp *op = (SSLOp*)newWriteAsyncOp(&socket->root, afCoroutine, usTimeout, 0, 0, sslOpConnect, &context);
   op->address = *address;
-  combinerCall(&socket->root, 1, &op->root, aaStart);
+  combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
   objectRelease(&op->root, op->root.poolId);
@@ -497,93 +477,16 @@ int ioSslConnect(SSLSocket *socket, const HostAddress *address, const char *tlse
 
 ssize_t ioSslRead(SSLSocket *socket, void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-#define MAKE_OP allocReadSSLOp(readProc, 0, socket, 0, 0, buffer, size, flags | afCoroutine, sslOpRead, usTimeout)
-  SSLOp *op;
-  if (__tag_atomic_fetch_and_add(&socket->root.tag, 1) == 0) {
-    if (!socket->root.readQueue.head) {
-      size_t bytesTransferred;
-      op = (SSLOp*)implSslRead(socket, buffer, size, flags | afCoroutine, usTimeout, 0, 0, &bytesTransferred);
-      if (!op) {
-        tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
-        if (tag)
-          combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
-        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && !tag) {
-          return (ssize_t)bytesTransferred;
-        } else {
-          SSLOp *op = MAKE_OP;
-          op->bytesTransferred = bytesTransferred;
-          opForceStatus(&op->root, aosSuccess);
-          addToGlobalQueue(&op->root);
-        }
-      } else {
-        if (opGetStatus(&op->root) == aosPending) {
-          combinerCallWithoutLock(&socket->root, 1, &op->root, aaStart);
-        } else {
-          tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
-          if (tag)
-            combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
-          addToGlobalQueue(&op->root);
-        }
-      }
-    } else {
-      op = MAKE_OP;
-      eqPushBack(&socket->root.readQueue, &op->root);
-      tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
-      if (tag)
-        combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
-    }
-  } else {
-    op = MAKE_OP;
-    combinerAddAction(&socket->root, &op->root, aaStart);
-  }
-
-  coroutineYield();
-  return coroutineRwFinish(op, socket);
-#undef MAKE_OP
+  struct Context context;
+  fillContext(&context, readProc, 0, buffer, size);
+  asyncOpRoot *op = runIoOperation(&socket->root, newReadAsyncOp, implSslReadProxy, initOp, flags, usTimeout, sslOpRead, &context);
+  return op ? coroutineRwFinish((SSLOp*)op, socket) : (ssize_t)context.BytesTransferred;
 }
 
 ssize_t ioSslWrite(SSLSocket *socket, const void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout)
 {
-#define MAKE_OP allocWriteSSLOp(writeProc, rwFinish, socket, 0, 0, buffer, size, flags | afCoroutine, sslOpWrite, usTimeout)
-  SSLOp *op;
-  if (__tag_atomic_fetch_and_add(&socket->root.tag, 1) == 0) {
-    if (!socket->root.writeQueue.head) {
-      op = (SSLOp*)implSslWrite(socket, buffer, size, flags | afCoroutine, usTimeout, 0, 0);
-      if (!op) {
-        tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
-        if (tag)
-          combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
-        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && !tag) {
-          return (ssize_t)size;
-        } else {
-          op = MAKE_OP;
-          op->bytesTransferred = size;
-          opForceStatus(&op->root, aosSuccess);
-          addToGlobalQueue(&op->root);
-        }
-      } else {
-        if (opGetStatus(&op->root) == aosPending) {
-          combinerCallWithoutLock(&socket->root, 1, &op->root, aaStart);
-        } else {
-          tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
-          if (tag)
-            combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
-          addToGlobalQueue(&op->root);
-        }
-      }
-    } else {
-      op = MAKE_OP;
-      eqPushBack(&socket->root.writeQueue, &op->root);
-      tag_t tag = __tag_atomic_fetch_and_add(&socket->root.tag, (tag_t)0 - 1) - 1;
-      if (tag)
-        combinerCallWithoutLock(&socket->root, tag, 0, aaNone);
-    }
-  } else {
-    op = MAKE_OP;
-    combinerAddAction(&socket->root, &op->root, aaStart);
-  }
-
-  coroutineYield();
-  return coroutineRwFinish(op, socket);
-#undef MAKE_OP
+  struct Context context;
+  fillContext(&context, writeProc, 0, (void*)(uintptr_t)buffer, size);
+  asyncOpRoot *op = runIoOperation(&socket->root, newWriteAsyncOp, implSslWriteProxy, initOp, flags, usTimeout, sslOpWrite, &context);
+  return op ? coroutineRwFinish((SSLOp*)op, socket) : (ssize_t)context.BytesTransferred;
 }

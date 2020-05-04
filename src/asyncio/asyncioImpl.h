@@ -6,6 +6,11 @@ extern "C" {
 #include "asyncio/objectPool.h"
 #include "asyncio/ringBuffer.h"
 
+#define TAGGED_POINTER_DATA_SIZE 6
+#define TAGGED_POINTER_ALIGNMENT (((intptr_t)1) << TAGGED_POINTER_DATA_SIZE)
+#define TAGGED_POINTER_DATA_MASK (TAGGED_POINTER_ALIGNMENT-1)
+#define TAGGED_POINTER_PTR_MASK (~TAGGED_POINTER_DATA_MASK)
+
 typedef enum IoActionTy {
   actAccept = OPCODE_READ,
   actRead,
@@ -16,7 +21,7 @@ typedef enum IoActionTy {
   actUserEvent = OPCODE_OTHER,
 } IoActionTy;
 
-typedef void combinerTy(aioObjectRoot*, tag_t, asyncOpRoot*, AsyncOpActionTy);
+typedef void combinerTaskHandlerTy(aioObjectRoot*, asyncOpRoot*, AsyncOpActionTy);
 typedef void enqueueOperationTy(asyncBase*, asyncOpRoot*);
 typedef void postEmptyOperationTy(asyncBase*);
 typedef void nextFinishedOperationTy(asyncBase*);
@@ -28,7 +33,7 @@ typedef void stopTimerTy(asyncOpRoot*);
 typedef void activateTy(aioUserEvent*);
 
 struct asyncImpl {
-  combinerTy *combiner;
+  combinerTaskHandlerTy *combinerTaskHandler;
   enqueueOperationTy *enqueue;
   postEmptyOperationTy *postEmptyOperation;
   nextFinishedOperationTy *nextFinishedOperation;
@@ -76,6 +81,7 @@ struct aioObject {
     socketTy hSocket;
   };
 
+  volatile uint32_t IoEvents;
   struct ioBuffer buffer;
 };
 
@@ -94,7 +100,7 @@ struct asyncOp {
 
 struct aioUserEvent {
   asyncOpRoot root;
-  tag_t tag;
+  uintptr_t tag;
   asyncBase *base;
   int counter;
   int isSemaphore;

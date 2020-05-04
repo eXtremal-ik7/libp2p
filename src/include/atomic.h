@@ -5,46 +5,46 @@
 #include "macro.h"
 
 __NO_UNUSED_FUNCTION_BEGIN
-static inline tag_t __tag_atomic_fetch_and_add(tag_t volatile *tag, tag_t value)
+static inline unsigned __uint_atomic_fetch_and_add(unsigned volatile *ptr, unsigned value)
 {
 #ifndef _MSC_VER // Not Microsoft compiler
-  return __sync_fetch_and_add(tag, value);
+  return __sync_fetch_and_add(ptr, value);
+#else
+  return InterlockedExchangeAdd((volatile LONG*)ptr, value);
+#endif
+}
+
+static inline int __uint_atomic_compare_and_swap(unsigned volatile *ptr, unsigned v1, unsigned v2)
+{
+#ifndef _MSC_VER // Not Microsoft compiler
+  return __sync_bool_compare_and_swap(ptr, v1, v2);
+#else
+  return InterlockedCompareExchange((volatile LONG*)ptr, v2, v1) == v1;
+#endif
+}
+
+static inline uintptr_t __uintptr_atomic_fetch_and_add(uintptr_t volatile *ptr, uintptr_t value)
+{
+#ifndef _MSC_VER // Not Microsoft compiler
+  return __sync_fetch_and_add(ptr, value);
 #else
 #ifdef OS_32
-  return InterlockedExchangeAdd((volatile LONG*)tag, value);
+  return InterlockedExchangeAdd((volatile LONG*)ptr, value);
 #else
-  return InterlockedExchangeAdd64((volatile LONG64*)tag, value);
+  return InterlockedExchangeAdd64((volatile LONG64*)ptr, value);
 #endif
 #endif
 }
 
-static inline unsigned __uint_atomic_fetch_and_add(unsigned volatile *tag, unsigned value)
+static inline int __uintptr_atomic_compare_and_swap(uintptr_t volatile *ptr, uintptr_t v1, uintptr_t v2)
 {
 #ifndef _MSC_VER // Not Microsoft compiler
-  return __sync_fetch_and_add(tag, value);
-#else
-  return InterlockedExchangeAdd((volatile LONG*)tag, value);
-#endif
-}
-
-static inline int __uint_atomic_compare_and_swap(unsigned volatile *tag, unsigned v1, unsigned v2)
-{
-#ifndef _MSC_VER // Not Microsoft compiler
-  return __sync_bool_compare_and_swap(tag, v1, v2);
-#else
-  return InterlockedCompareExchange((volatile LONG*)tag, v2, v1) == v1;
-#endif
-}
-
-static inline int __tag_atomic_compare_and_swap(tag_t volatile *tag, tag_t v1, tag_t v2)
-{
-#ifndef _MSC_VER // Not Microsoft compiler
-  return __sync_bool_compare_and_swap(tag, v1, v2);
+  return __sync_bool_compare_and_swap(ptr, v1, v2);
 #else
 #ifdef OS_32
-  return InterlockedCompareExchange((volatile LONG*)tag, v2, v1) == v1;
+  return InterlockedCompareExchange((volatile LONG*)ptr, v2, v1) == v1;
 #else
-  return InterlockedCompareExchange64((volatile LONG64*)tag, v2, v1) == v1;
+  return InterlockedCompareExchange64((volatile LONG64*)ptr, v2, v1) == v1;
 #endif
 #endif
 }
@@ -57,7 +57,6 @@ static inline int __pointer_atomic_compare_and_swap(void *volatile *tag, void *v
   return InterlockedCompareExchangePointer(tag, v2, v1) == v1;
 #endif
 }
-
 
 static inline void __spinlock_acquire(unsigned *lock)
 {

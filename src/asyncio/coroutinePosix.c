@@ -45,29 +45,37 @@ static void fiberEntryPoint(coroutineTy *coroutine)
   switchContext(&coroutine->context, &currentCoroutine->context);
 }
 
-static void fiberInit(coroutineTy *coroutine, size_t stackSize)
+static int fiberInit(coroutineTy *coroutine, size_t stackSize)
 {
 #ifdef __i386__
   // x86 arch
   // EIP = fiberEntryPoint
   // ESP = stack + stackSize - 4
   // [ESP] = coroutine
-  posix_memalign(&coroutine->stack, 16, stackSize);
-  uintptr_t *esp = ((uintptr_t*)coroutine->stack) + (stackSize - 4)/sizeof(uintptr_t);
-  *esp = (uintptr_t)coroutine;
-  coroutine->context.registers[CTX_EIP_INDEX] = (uintptr_t)fiberEntryPoint;
-  coroutine->context.registers[CTX_ESP_INDEX] = (uintptr_t)esp;
-  x86InitFPU(&coroutine->context);
+  if (posix_memalign(&coroutine->stack, 16, stackSize) == 0) {
+    uintptr_t *esp = ((uintptr_t*)coroutine->stack) + (stackSize - 4)/sizeof(uintptr_t);
+    *esp = (uintptr_t)coroutine;
+    coroutine->context.registers[CTX_EIP_INDEX] = (uintptr_t)fiberEntryPoint;
+    coroutine->context.registers[CTX_ESP_INDEX] = (uintptr_t)esp;
+    x86InitFPU(&coroutine->context);
+    return 1;
+  } else {
+    return 0;
+  }
 #elif __x86_64__
   // x86_64 arch
   // RIP = fiberEntryPoint
   // RSP = stack + stackSize - 128 - 16
   // RDI = coroutine
-  posix_memalign(&coroutine->stack, 32, stackSize);
-  uintptr_t *rsp = ((uintptr_t*)coroutine->stack) + (stackSize - 128 - 8)/sizeof(uintptr_t);
-  coroutine->context.registers[CTX_RIP_INDEX] = (uintptr_t)fiberEntryPoint;
-  coroutine->context.registers[CTX_RSP_INDEX] = (uintptr_t)rsp;
-  x86InitFPU(&coroutine->context);
+  if (posix_memalign(&coroutine->stack, 32, stackSize) == 0) {
+    uintptr_t *rsp = ((uintptr_t*)coroutine->stack) + (stackSize - 128 - 8)/sizeof(uintptr_t);
+    coroutine->context.registers[CTX_RIP_INDEX] = (uintptr_t)fiberEntryPoint;
+    coroutine->context.registers[CTX_RSP_INDEX] = (uintptr_t)rsp;
+    x86InitFPU(&coroutine->context);
+    return 1;
+  } else {
+    return 0;
+  }
 #else
 #error "Platform not supported"
 #endif
@@ -95,21 +103,29 @@ coroutineTy *coroutineNew(coroutineProcTy entry, void *arg, unsigned stackSize)
   sigset_t all;
   sigfillset(&all);
   sigprocmask(SIG_SETMASK, &all, &old);  
+  coroutineTy *result = 0;
   
   // Create main fiber if it not exists
   if (currentCoroutine == 0)
     mainCoroutine = currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
   
   coroutineTy *coroutine;
-  posix_memalign((void**)&coroutine, 8, sizeof(coroutineTy));
-  fiberInit(coroutine, stackSize);
-  coroutine->entryPoint = entry;
-  coroutine->arg = arg;
-  coroutine->prev = currentCoroutine;
-  coroutine->finished = 0;
-  coroutine->counter = 0;
-  sigprocmask(SIG_SETMASK, &old, 0);  
-  return coroutine;
+  if (posix_memalign((void**)&coroutine, 8, sizeof(coroutineTy)) == 0) {
+    if (fiberInit(coroutine, stackSize)) {
+      coroutine->entryPoint = entry;
+      coroutine->arg = arg;
+      coroutine->prev = currentCoroutine;
+      coroutine->finished = 0;
+      coroutine->counter = 0;
+      sigprocmask(SIG_SETMASK, &old, 0);
+      return coroutine;
+    }
+  } else {
+    return 0;
+  }
+
+  sigprocmask(SIG_SETMASK, &old, 0);
+  return result;
 }
 
 void coroutineDelete(coroutineTy *coroutine)

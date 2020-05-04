@@ -7,8 +7,12 @@ extern "C" {
 
 #include <stddef.h>
 #include <stdint.h>
+#include "coroutine.h"
 #include "macro.h"
+#include "atomic.h"
+#include "objectPool.h"
 #include "asyncio/asyncioTypes.h"
+
 
 #define MAX_SYNCHRONOUS_FINISHED_OPERATION 32
 
@@ -55,7 +59,7 @@ typedef enum AsyncFlags {
 
 typedef enum AsyncOpActionTy {
   aaNone = 0,
-  aaStart,
+  aaStart = 0,
   aaCancel,
   aaFinish,
   aaContinue
@@ -92,13 +96,6 @@ typedef struct List {
   asyncOpRoot *tail;
 } List;
 
-typedef struct ListMt {
-  asyncOpAction *head;
-  asyncOpAction *tail;
-  unsigned lock;
-} ListMt;
-
-typedef void processOperationCb(asyncOpRoot*, AsyncOpActionTy, List*, tag_t*);
 typedef asyncOpRoot *newAsyncOpTy();
 typedef AsyncOpStatus aioExecuteProc(asyncOpRoot*);
 typedef int aioCancelProc(asyncOpRoot*);
@@ -111,74 +108,67 @@ extern __tls unsigned currentFinishedSync;
 extern __tls unsigned messageLoopThreadId;
 
 #ifndef __cplusplus
-#define TAG(x) ((tag_t)x)
+#define STATIC_CAST(x, y) ((x)(y))
+#define REINTERPRET_CAST(x, y) ((x)(y))
 #else
-#define TAG(x) static_cast<tag_t>(x)
+#define STATIC_CAST(x, y) static_cast<x>(y)
+#define REINTERPRET_CAST(x, y) reinterpret_cast<x>(y)
 #endif
 
 #define TAG_STATUS_SIZE 8
-#define TAG_STATUS_MASK ((((tag_t)1) << TAG_STATUS_SIZE)-1)
+#define TAG_STATUS_MASK ((STATIC_CAST(uintptr_t, 1) << TAG_STATUS_SIZE)-1)
 #define TAG_GENERATION_MASK (~TAG_STATUS_MASK)
 
-#define TAG_READ (TAG(1) << (sizeof(tag_t)*8 - 2))
-#define TAG_READ_MASK (TAG(3) << (sizeof(tag_t)*8 - 2))
-#define TAG_WRITE (TAG(1) << (sizeof(tag_t)*8 - 4))
-#define TAG_WRITE_MASK (TAG(3) << (sizeof(tag_t)*8 - 4))
-#define TAG_ERROR (TAG(1) << (sizeof(tag_t)*8 - 6))
-#define TAG_ERROR_MASK (TAG(3) << (sizeof(tag_t)*8 - 6))
-#define TAG_DELETE (TAG(1) << (sizeof(tag_t)*8 - 8))
-#define TAG_CANCELIO (TAG(1) << (sizeof(tag_t)*8 - 9))
+#define COMBINER_TAG_SIZE     5
+#define COMBINER_TAG_ACCESS   (1u)
+#define COMBINER_TAG_DELETE   (1u << 2)
+
+typedef struct AsyncOpTaggedPtr {
+  uintptr_t data;
+} AsyncOpTaggedPtr;
+
+#define IO_EVENT_READ     1u
+#define IO_EVENT_WRITE    2u
+#define IO_EVENT_ERROR    4u
 
 // Event tag area
 #if defined(OS_32)
-#define TAG_EVENT_OP          TAG(0x00010000UL)
-#define TAG_EVENT_DELETE      TAG(0x10000000UL)
-#define TAG_EVENT_OP_MASK     TAG(0xFFFF0000UL)
-#define TAG_EVENT_MASK        TAG(0x0FFFFFFFUL)
-#define TAG_EVENT_DELETE_MASK TAG(0xF0000000UL)
+#define TAG_EVENT_OP          STATIC_CAST(uintptr_t, 0x00010000U)
+#define TAG_EVENT_DELETE      STATIC_CAST(uintptr_t, 0x10000000U)
+#define TAG_EVENT_OP_MASK     STATIC_CAST(uintptr_t, 0xFFFF0000U)
+#define TAG_EVENT_MASK        STATIC_CAST(uintptr_t, 0x0FFFFFFFU)
+#define TAG_EVENT_DELETE_MASK STATIC_CAST(uintptr_t, 0xF0000000U)
 #elif defined(OS_64)
-#define TAG_EVENT_OP          TAG(0x0000000100000000ULL)
-#define TAG_EVENT_DELETE      TAG(0x1000000000000000ULL)
-#define TAG_EVENT_OP_MASK     TAG(0xFFFFFFFF00000000ULL)
-#define TAG_EVENT_MASK        TAG(0x0FFFFFFFFFFFFFFFULL)
-#define TAG_EVENT_DELETE_MASK TAG(0xF000000000000000ULL)
+#define TAG_EVENT_OP          STATIC_CAST(uintptr_t, 0x0000000100000000ULL)
+#define TAG_EVENT_DELETE      STATIC_CAST(uintptr_t, 0x1000000000000000ULL)
+#define TAG_EVENT_OP_MASK     STATIC_CAST(uintptr_t, 0xFFFFFFFF00000000ULL)
+#define TAG_EVENT_MASK        STATIC_CAST(uintptr_t, 0x0FFFFFFFFFFFFFFFULL)
+#define TAG_EVENT_DELETE_MASK STATIC_CAST(uintptr_t, 0xF000000000000000ULL)
 #else
 #error Configution incomplete
 #endif
 
 #define OPCODE_READ 0
-#define OPCODE_WRITE (1<<(sizeof(int)*8-4))
-#define OPCODE_OTHER (1<<(sizeof(int)*8-2))
+#define OPCODE_WRITE 0x01000000
+#define OPCODE_OTHER 0x02000000
 
-tag_t objectIncrementReference(aioObjectRoot *object, tag_t count);
-tag_t objectDecrementReference(aioObjectRoot *object, tag_t count);
-tag_t eventIncrementReference(aioUserEvent *event, tag_t tag);
-tag_t eventDecrementReference(aioUserEvent *event, tag_t tag);
+uintptr_t objectIncrementReference(aioObjectRoot *object, uintptr_t count);
+uintptr_t objectDecrementReference(aioObjectRoot *object, uintptr_t count);
+uintptr_t eventIncrementReference(aioUserEvent *event, uintptr_t tag);
+uintptr_t eventDecrementReference(aioUserEvent *event, uintptr_t tag);
 int eventTryActivate(aioUserEvent *event);
 void eventDeactivate(aioUserEvent *event);
 
-void *__tagged_alloc(size_t size);
-void *__tagged_pointer_make(void *ptr, tag_t data);
-void __tagged_pointer_decode(void *ptr, void **outPtr, tag_t *outData);
+void *alignedMalloc(size_t size, size_t alignment);
+void *__tagged_pointer_make(void *ptr, uintptr_t data);
+void __tagged_pointer_decode(void *ptr, void **outPtr, uintptr_t *outData);
 
 void eqRemove(List *list, asyncOpRoot *op);
 void eqPushBack(List *list, asyncOpRoot *op);
 
-__NO_UNUSED_FUNCTION_BEGIN
-static inline tag_t __tag_get_opcount(tag_t tag)
-{
-  return tag & ~(TAG_READ_MASK | TAG_WRITE_MASK | TAG_ERROR_MASK | TAG_DELETE | TAG_CANCELIO);
-}
-
-static inline tag_t __tag_make_processed(tag_t currentTag, tag_t enqueued)
-{
-  return (currentTag & (TAG_READ_MASK | TAG_WRITE_MASK | TAG_ERROR_MASK | TAG_DELETE | TAG_CANCELIO)) | enqueued;
-}
-__NO_UNUSED_FUNCTION_END
-
 typedef struct asyncOpListLink {
   asyncOpRoot *op;
-  tag_t tag;
+  uintptr_t tag;
   asyncOpListLink *prev;
   asyncOpListLink *next;
 } asyncOpListLink;
@@ -199,13 +189,16 @@ typedef struct pageMap {
   unsigned lock;
 } pageMap;
 
+
 struct aioObjectRoot {
+  AsyncOpTaggedPtr Head;
   asyncBase *base;
-  volatile tag_t tag;
-  tag_t refs;
+  uintptr_t refs;
   List readQueue;
   List writeQueue;
-  ListMt announcementQueue;
+  
+  volatile uint32_t CancelIoFlag;
+
   IoObjectTy type;
   aioObjectDestructor *destructor;
   aioObjectDestructorCb *destructorCb;
@@ -213,13 +206,13 @@ struct aioObjectRoot {
 };
 
 struct asyncOpRoot {
-  volatile tag_t tag;
+  volatile uintptr_t tag;
   const char *poolId;
   aioExecuteProc *executeMethod;
   aioCancelProc *cancelMethod;
   aioFinishProc *finishMethod;
   ListImpl executeQueue;
-  asyncOpRoot *next;
+  AsyncOpTaggedPtr next;
   aioObjectRoot *object;
   void *callback;
   void *arg;
@@ -240,28 +233,212 @@ void eventSetDestructorCb(aioUserEvent *event, userEventDestructorCb callback, v
 void cancelIo(aioObjectRoot *object);
 void objectDelete(aioObjectRoot *object);
 
-tag_t opGetGeneration(asyncOpRoot *op);
+uintptr_t opGetGeneration(asyncOpRoot *op);
 AsyncOpStatus opGetStatus(asyncOpRoot *op);
-int opSetStatus(asyncOpRoot *op, tag_t tag, AsyncOpStatus status);
+int opSetStatus(asyncOpRoot *op, uintptr_t tag, AsyncOpStatus status);
 void opForceStatus(asyncOpRoot *op, AsyncOpStatus status);
-tag_t opEncodeTag(asyncOpRoot *op, tag_t tag);
+uintptr_t opEncodeTag(asyncOpRoot *op, uintptr_t tag);
 
 void opRelease(asyncOpRoot *op, AsyncOpStatus status, List *executeList);
-void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, tag_t *needStart);
-void processOperationList(aioObjectRoot *object, tag_t *needStart, tag_t *enqueued);
+void processAction(asyncOpRoot *opptr, AsyncOpActionTy actionType, uint32_t *needStart);
 void executeOperationList(List *list);
 void cancelOperationList(List *list, AsyncOpStatus status);
 
-void combinerAddAction(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy actionType);
-void combinerCall(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType);
-void combinerCallWithoutLock(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy action);
-
-void opStart(asyncOpRoot *op);
-void opCancel(asyncOpRoot *op, tag_t generation, AsyncOpStatus status);
+void opCancel(asyncOpRoot *op, uintptr_t generation, AsyncOpStatus status);
 void resumeParent(asyncOpRoot *op, AsyncOpStatus status);
 
 void addToGlobalQueue(asyncOpRoot *op);
 int executeGlobalQueue(asyncBase *base);
+
+typedef asyncOpRoot *CreateAsyncOpProc(aioObjectRoot*, AsyncFlags, uint64_t, void*, void*, int, void*);
+typedef asyncOpRoot *SyncImplProc(aioObjectRoot*, AsyncFlags, uint64_t, void*, void*, void*);
+typedef void MakeResultProc(void*);
+typedef void InitOpProc(asyncOpRoot*, void*);
+
+asyncOpRoot *allocAsyncOp(size_t size);
+void combiner(aioObjectRoot *object, AsyncOpTaggedPtr stackTop, AsyncOpTaggedPtr forRun);
+
+__NO_UNUSED_FUNCTION_BEGIN
+static inline AsyncOpTaggedPtr taggedAsyncOpNull()
+{
+  AsyncOpTaggedPtr result;
+  result.data = 0;
+  return result;
+}
+
+static inline AsyncOpTaggedPtr taggedAsyncOpStub()
+{
+  AsyncOpTaggedPtr result;
+  result.data = (~STATIC_CAST(uintptr_t, 0)) ^ ((STATIC_CAST(uintptr_t, 1) << COMBINER_TAG_SIZE) -1);
+  return result;
+}
+
+static inline AsyncOpTaggedPtr taggedAsyncOpMake(asyncOpRoot *op, AsyncOpActionTy opMethod, uint32_t tag)
+{
+  AsyncOpTaggedPtr result;
+  result.data = REINTERPRET_CAST(uintptr_t, op) | (opMethod << 3) | tag;
+  return result;
+}
+
+static inline void taggedAsyncOpDecode(AsyncOpTaggedPtr ptr, asyncOpRoot **op, AsyncOpActionTy *opMethod, uint32_t *tag)
+{
+  uintptr_t COMBINER_TAG_MASK = (STATIC_CAST(uintptr_t, 1) << COMBINER_TAG_SIZE) - 1;
+  *op = (asyncOpRoot*)(ptr.data & (~COMBINER_TAG_MASK));
+  *opMethod = STATIC_CAST(AsyncOpActionTy, (ptr.data >> 3) & 0x3);
+  *tag = ptr.data & 0x7;
+}
+
+static inline asyncOpRoot *combinerAcquire(aioObjectRoot *object,
+                                           List *queue,
+                                           AsyncOpActionTy actionType,
+                                           CreateAsyncOpProc *newAsyncOp,
+                                           AsyncFlags flags,
+                                           uint64_t usTimeout,
+                                           void *callback,
+                                           void *arg,
+                                           int opCode,
+                                           void *contextPtr) {
+  AsyncOpTaggedPtr head;
+  AsyncOpTaggedPtr opTagged = taggedAsyncOpStub();
+  AsyncOpTaggedPtr allocatedTagged;
+  asyncOpRoot *allocated = 0;
+
+  do {
+    head = object->Head;
+    if (head.data) {
+      if (!allocated) {
+        allocated = newAsyncOp(object, flags, usTimeout, callback, arg, opCode, contextPtr);
+        allocatedTagged = taggedAsyncOpMake(allocated, actionType, 0);
+      }
+
+      allocated->next = head;
+      opTagged = allocatedTagged;
+    } else {
+      opTagged = taggedAsyncOpStub();
+    }
+  } while (!__uintptr_atomic_compare_and_swap(&object->Head.data, head.data, opTagged.data));
+
+  if (!head.data) {
+    // This thread entered a combiner
+    if (queue->head) {
+      // Object has operations in queue
+      // Put operation to queue end and try exit combiner
+      if (!allocated) {
+        allocated = newAsyncOp(object, flags, usTimeout, callback, arg, opCode, contextPtr);
+        allocatedTagged = taggedAsyncOpMake(allocated, actionType, 0);
+      }
+
+      combiner(object, taggedAsyncOpStub(), allocatedTagged);
+      return allocated;
+    } else {
+      if (allocated)
+        objectRelease(allocated, allocated->poolId);
+      return 0;
+    }
+  } else {
+    return allocated;
+  }
+}
+
+static inline void combinerPushOperation(asyncOpRoot *op, AsyncOpActionTy actionType) {
+  aioObjectRoot *object = op->object;
+  AsyncOpTaggedPtr opTagged = taggedAsyncOpMake(op, actionType, 0);
+  AsyncOpTaggedPtr newOp;
+  AsyncOpTaggedPtr head;
+  do {
+    head = object->Head;
+    if (head.data) {
+      newOp = opTagged;
+      op->next = head;
+    } else {
+      newOp = taggedAsyncOpStub();
+    }
+  } while (!__uintptr_atomic_compare_and_swap(&object->Head.data, head.data, newOp.data));
+
+  if (!head.data)
+    combiner(object, taggedAsyncOpStub(), opTagged);
+}
+
+static inline void combinerPushCounter(aioObjectRoot *object, uint32_t tag) {
+  if (__uintptr_atomic_fetch_and_add(&object->Head.data, tag) == 0)
+    combiner(object, taggedAsyncOpMake(0, aaNone, tag), taggedAsyncOpMake(0, aaNone, tag));
+}
+
+static inline void runAioOperation(aioObjectRoot *object,
+                                   CreateAsyncOpProc *createAsyncOp,
+                                   SyncImplProc *syncImpl,
+                                   MakeResultProc *makeResult,
+                                   InitOpProc *initOp,
+                                   AsyncFlags flags,
+                                   uint64_t usTimeout,
+                                   void *callback,
+                                   void *arg,
+                                   int opCode,
+                                   void *contextPtr)
+{
+  if (!combinerAcquire(object, !(opCode & OPCODE_WRITE) ? &object->readQueue : &object->writeQueue, aaStart, createAsyncOp, flags, usTimeout, callback, arg, opCode, contextPtr)) {
+    // Object locked by current operation
+    AsyncOpTaggedPtr forRun = taggedAsyncOpNull();
+    asyncOpRoot *op = syncImpl(object, flags, usTimeout, callback, arg, contextPtr);
+    if (!op) {
+      if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == 0 || flags & afActiveOnce)) {
+        makeResult(contextPtr);
+      } else {
+        asyncOpRoot *op = createAsyncOp(object, flags, usTimeout, callback, arg, opCode, contextPtr);
+        initOp(op, contextPtr);
+        opForceStatus(op, aosSuccess);
+        addToGlobalQueue(op);
+      }
+    } else if (opGetStatus(op) != aosPending) {
+      // Operation finished already
+      addToGlobalQueue(op);
+    } else {
+      forRun = taggedAsyncOpMake(op, aaStart, 0);
+    }
+
+    combiner(object, taggedAsyncOpStub(), forRun);
+  }
+}
+
+static inline asyncOpRoot *runIoOperation(aioObjectRoot *object,
+                                          CreateAsyncOpProc *createAsyncOp,
+                                          SyncImplProc *syncImpl,
+                                          InitOpProc *initOp,
+                                          AsyncFlags flags,
+                                          uint64_t usTimeout,
+                                          int opCode,
+                                          void *contextPtr)
+{
+  asyncOpRoot *op = combinerAcquire(object, !(opCode & OPCODE_WRITE) ? &object->readQueue : &object->writeQueue, aaStart, createAsyncOp, flags | afCoroutine, usTimeout, 0, 0, opCode, contextPtr);
+  if (!op) {
+    // Object locked by current operation
+    AsyncOpTaggedPtr forRun = taggedAsyncOpNull();
+    op = syncImpl(object, flags | afCoroutine, usTimeout, 0, 0, contextPtr);
+    if (!op) {
+      if (!(++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION)) {
+        op = createAsyncOp(object, afCoroutine, usTimeout, 0, 0, opCode, contextPtr);
+        initOp(op, contextPtr);
+        opForceStatus(op, aosSuccess);
+        addToGlobalQueue(op);
+      }
+    } else if (opGetStatus(op) != aosPending) {
+      // Operation finished already
+      addToGlobalQueue(op);
+    } else {
+      forRun = taggedAsyncOpMake(op, aaStart, 0);
+    }
+
+    combiner(object, taggedAsyncOpStub(), forRun);
+  }
+
+  if (op)
+    coroutineYield();
+  return op;
+}
+
+__NO_UNUSED_FUNCTION_END
+
+
 
 asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
                              const char *timerPool,
@@ -277,109 +454,6 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
                              uint64_t timeout);
 
 #ifdef __cplusplus
-}
-#endif
-
-#ifdef __cplusplus
-#include "atomic.h"
-#include "asyncio/coroutine.h"
-
-template<typename f1, typename f2, typename f3, typename f4>
-static inline void aioMethod(f1 createProc,
-                             f2 implCallProc,
-                             f3 makeResultProc,
-                             f4 initOpProc,
-                             aioObjectRoot *object,
-                             AsyncFlags flags,
-                             void *callback,
-                             int opCode)
-{
-  if (__tag_atomic_fetch_and_add(&object->tag, 1) == 0) {
-    List &list = !(opCode & OPCODE_WRITE) ? object->readQueue : object->writeQueue;
-    if (!list.head) {
-      asyncOpRoot *op = implCallProc();
-      if (!op) {
-        tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
-        if (tag)
-          combinerCallWithoutLock(object, tag, nullptr, aaNone);
-        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && (callback == nullptr || flags & afActiveOnce)) {
-          makeResultProc();
-        } else {
-          asyncOpRoot *op = createProc();
-          initOpProc(op);
-          opForceStatus(op, aosSuccess);
-          addToGlobalQueue(op);
-        }
-      } else {
-        if (opGetStatus(op) == aosPending) {
-          combinerCallWithoutLock(object, 1, op, aaStart);
-        } else {
-          tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
-          if (tag)
-            combinerCallWithoutLock(object, tag, nullptr, aaNone);
-          addToGlobalQueue(op);
-        }
-      }
-    } else {
-      eqPushBack(&list, createProc());
-      tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
-      if (tag)
-        combinerCallWithoutLock(object, tag, nullptr, aaNone);
-    }
-  } else {
-    combinerAddAction(object, createProc(), aaStart);
-  }
-}
-
-template<typename f1, typename f2, typename f3>
-static inline asyncOpRoot *ioMethod(f1 createProc,
-                                    f2 implCallProc,
-                                    f3 initOpProc,
-                                    aioObjectRoot *object,
-                                    int opCode)
-{
-  asyncOpRoot *op;
-  if (__tag_atomic_fetch_and_add(&object->tag, 1) == 0) {
-    List &list = !(opCode & OPCODE_WRITE) ? object->readQueue : object->writeQueue;
-    if (!list.head) {
-      op = implCallProc();
-      if (!op) {
-        tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
-        if (tag)
-          combinerCallWithoutLock(object, tag, nullptr, aaNone);
-        if (++currentFinishedSync < MAX_SYNCHRONOUS_FINISHED_OPERATION && !tag) {
-          // nothing to do
-        } else {
-          op = createProc();
-          initOpProc(op);
-          opForceStatus(op, aosSuccess);
-          addToGlobalQueue(op);
-        }
-      } else {
-        if (opGetStatus(op) == aosPending) {
-          combinerCallWithoutLock(object, 1, op, aaStart);
-        } else {
-          tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
-          if (tag)
-            combinerCallWithoutLock(object, tag, nullptr, aaNone);
-          addToGlobalQueue(op);
-        }
-      }
-    } else {
-      op = createProc();
-      eqPushBack(&list, op);
-      tag_t tag = __tag_atomic_fetch_and_add(&object->tag, static_cast<tag_t>(0) - 1) - 1;
-      if (tag)
-        combinerCallWithoutLock(object, tag, nullptr, aaNone);
-    }
-  } else {
-    op = createProc();
-    combinerAddAction(object, op, aaStart);
-  }
-
-  if (op)
-    coroutineYield();
-  return op;
 }
 #endif
 

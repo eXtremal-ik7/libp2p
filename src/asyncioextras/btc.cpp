@@ -10,6 +10,34 @@ static const char *btcSocketPool = "btcSocket";
 static const char *poolId = "btc";
 static const char *timerPoolId = "btcTimer";
 
+struct Context {
+  aioExecuteProc *StartProc;
+  aioFinishProc *FinishProc;
+  xmstream *Stream;
+  void *Buffer;
+  size_t TransactionSize;
+  char *CommandBuffer;
+  const char *Command;
+  size_t BytesTransferred;
+  ssize_t Result;
+  Context(aioExecuteProc *startProc,
+          aioFinishProc *finishProc,
+          xmstream *stream,
+          void *buffer,
+          size_t transactionSize,
+          char *commandBuffer,
+          const char *command) :
+    StartProc(startProc),
+    FinishProc(finishProc),
+    Stream(stream),
+    Buffer(buffer),
+    TransactionSize(transactionSize),
+    CommandBuffer(commandBuffer),
+    Command(command),
+    BytesTransferred(0),
+    Result(-aosPending) {}
+};
+
 #pragma pack(push, 1)
 struct MessageHeader {
   uint32_t magic;
@@ -95,12 +123,10 @@ static void decodeMessageHeader(MessageHeader *header)
 
 static asyncOpRoot *alloc()
 {
-  btcOp *op = static_cast<btcOp*>(malloc(sizeof(btcOp)));
+  btcOp *op = reinterpret_cast<btcOp*>(allocAsyncOp(sizeof(btcOp)));
   op->internalBuffer = nullptr;
   op->internalBufferSize = 0;
   return &op->root;
-
-//  return static_cast<asyncOpRoot*>();
 }
 
 static void resumeRwCb(AsyncOpStatus status, aioObject*, size_t, void *arg)
@@ -132,66 +158,58 @@ static void sendFinish(asyncOpRoot *opptr)
                                                 opptr->arg);
 }
 
-btcOp *initReadOp(aioExecuteProc *start,
-                   aioFinishProc *finish,
-                   BTCSocket *socket,
-                   AsyncFlags flags,
-                   uint64_t timeout,
-                   void *callback,
-                   void *arg,
-                   int opCode,
-                   xmstream *stream,
-                   size_t sizeLimit,
-                   char *commandPtr)
+static asyncOpRoot *newReadAsyncOp(aioObjectRoot *object,
+                                   AsyncFlags flags,
+                                   uint64_t usTimeout,
+                                   void *callback,
+                                   void *arg,
+                                   int opCode,
+                                   void *contextPtr)
 {
+  Context *context = static_cast<Context*>(contextPtr);
   asyncOpRoot *opptr =
-    initAsyncOpRoot(poolId, timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
+    initAsyncOpRoot(poolId, timerPoolId, alloc, context->StartProc, cancel, context->FinishProc, object, callback, arg, flags, opCode, usTimeout);
   btcOp *op = reinterpret_cast<btcOp*>(opptr);
   op->state = stInitialize;
-  op->size = sizeLimit;
-  op->stream = stream;
-  op->commandPtr = commandPtr;
-  return op;
+  op->size = context->TransactionSize;
+  op->stream = context->Stream;
+  op->commandPtr = context->CommandBuffer;
+  return &op->root;
 }
 
-btcOp *initWriteOp(aioExecuteProc *start,
-                    aioFinishProc *finish,
-                    BTCSocket *socket,
-                    AsyncFlags flags,
-                    uint64_t timeout,
-                    void *callback,
-                    void *arg,
-                    int opCode,
-                    const char *command,
-                    void *data,
-                    size_t size)
+static asyncOpRoot *newWriteAsyncOp(aioObjectRoot *object,
+                                    AsyncFlags flags,
+                                    uint64_t usTimeout,
+                                    void *callback,
+                                    void *arg,
+                                    int opCode,
+                                    void *contextPtr)
 {
+  Context *context = static_cast<Context*>(contextPtr);
   asyncOpRoot *opptr =
-    initAsyncOpRoot(poolId, timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
+    initAsyncOpRoot(poolId, timerPoolId, alloc, context->StartProc, cancel, context->FinishProc, object, callback, arg, flags, opCode, usTimeout);
   btcOp *op = reinterpret_cast<btcOp*>(opptr);
   op->state = stInitialize;
 
   if (!(flags & afNoCopy)) {
     if (op->internalBuffer == nullptr) {
-      op->internalBuffer = malloc(size);
-      op->internalBufferSize = size;
-    } else if (op->internalBufferSize < size) {
-      op->internalBufferSize = size;
-      op->internalBuffer = realloc(op->internalBuffer, size);
+      op->internalBuffer = malloc(context->TransactionSize);
+      op->internalBufferSize = context->TransactionSize;
+    } else if (op->internalBufferSize < context->TransactionSize) {
+      op->internalBufferSize = context->TransactionSize;
+      op->internalBuffer = realloc(op->internalBuffer, context->TransactionSize);
     }
 
-    memcpy(op->internalBuffer, data, size);
+    memcpy(op->internalBuffer, context->Buffer, context->TransactionSize);
     op->buffer = op->internalBuffer;
   } else {
-    op->buffer = (void*)(uintptr_t)data;
+    op->buffer = (void*)(uintptr_t)context->Buffer;
   }
 
-
-
-  op->size = size;
+  op->size = context->TransactionSize;
   op->stream = nullptr;
-  strncpy(op->command, command, sizeof(op->command));
-  return op;
+  strncpy(op->command, context->Command, sizeof(op->command));
+  return &op->root;
 }
 
 static AsyncOpStatus startBtcRecv(asyncOpRoot *opptr)
@@ -240,7 +258,7 @@ static AsyncOpStatus startBtcRecv(asyncOpRoot *opptr)
     }
   }
 
-  opStart(childOp);
+  combinerPushOperation(childOp, aaStart);
   return aosPending;
 }
 
@@ -280,16 +298,18 @@ asyncOpRoot *implBtcRecv(BTCSocket *socket,
   }
 
   if (result != aosSuccess) {
-    btcOp *op = initReadOp(startBtcRecv, recvFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, btcOpRecv, &stream, sizeLimit, command);
-    opForceStatus(&op->root, result);
-    return &op->root;
+    Context context(startBtcRecv, recvFinish, &stream, nullptr, sizeLimit, command, nullptr);
+    asyncOpRoot *op = newReadAsyncOp(&socket->root, flags, timeout, reinterpret_cast<void*>(callback), arg, btcOpRecv, &context);
+    opForceStatus(op, result);
+    return op;
   }
 
   if (childOp) {
-    btcOp *op = initReadOp(startBtcRecv, recvFinish, socket, flags|afRunning, timeout, reinterpret_cast<void*>(callback), arg, btcOpRecv, &stream, sizeLimit, command);
+    Context context(startBtcRecv, recvFinish, &stream, nullptr, sizeLimit, command, nullptr);
+    btcOp *op = reinterpret_cast<btcOp*>(newReadAsyncOp(&socket->root, flags | afRunning, timeout, reinterpret_cast<void*>(callback), arg, btcOpRecv, &context));
     op->state = state;
     childOp->arg = op;
-    opStart(childOp);
+    combinerPushOperation(childOp, aaStart);
     return &op->root;
   }
 
@@ -298,6 +318,13 @@ asyncOpRoot *implBtcRecv(BTCSocket *socket,
   *bytesTransferred = header->length + sizeof(MessageHeader);
   return nullptr;
 }
+
+static asyncOpRoot *implBtcRecvProxy(aioObjectRoot *object, AsyncFlags flags, uint64_t usTimeout, void *callback, void *arg, void *contextPtr)
+{
+  Context *context = static_cast<Context*>(contextPtr);
+  return implBtcRecv(reinterpret_cast<BTCSocket*>(object), context->CommandBuffer, *context->Stream, context->TransactionSize, flags, usTimeout, reinterpret_cast<btcRecvCb*>(callback), arg, &context->BytesTransferred);
+}
+
 
 static AsyncOpStatus startBtcSend(asyncOpRoot *opptr)
 {
@@ -312,7 +339,7 @@ static AsyncOpStatus startBtcSend(asyncOpRoot *opptr)
   while (!childOp) {
     switch (op->state) {
       case stInitialize : {
-        buildMessageHeader(header, socket->magic, op->command, op->buffer, op->size);
+        buildMessageHeader(header, socket->magic, op->command, op->buffer, static_cast<uint32_t>(op->size));
         if (op->size+sizeof(MessageHeader) <= sizeof(buffer)) {
           op->state = stFinished;
           uint8_t *dataPtr = buffer + sizeof(MessageHeader);
@@ -340,7 +367,7 @@ static AsyncOpStatus startBtcSend(asyncOpRoot *opptr)
     }
   }
 
-  opStart(childOp);
+  combinerPushOperation(childOp, aaStart);
   return aosPending;
 }
 
@@ -361,7 +388,7 @@ asyncOpRoot *implBtcSend(BTCSocket *socket,
   uint8_t buffer[USERSPACE_BUFFER_SIZE];
   MessageHeader *header = reinterpret_cast<MessageHeader*>(buffer);
 
-  buildMessageHeader(header, socket->magic, command, data, size);
+  buildMessageHeader(header, socket->magic, command, data, static_cast<uint32_t>(size));
 
   if (size+sizeof(MessageHeader) <= sizeof(buffer)) {
     state = stFinished;
@@ -378,15 +405,22 @@ asyncOpRoot *implBtcSend(BTCSocket *socket,
   }
 
   if (childOp) {
-    btcOp *op = initWriteOp(startBtcSend, sendFinish, socket, flags|afRunning, timeout, reinterpret_cast<void*>(callback), arg, btcOpSend, command, data, size);
+    Context context(startBtcSend, sendFinish, nullptr, data, size, nullptr, command);
+    btcOp *op = reinterpret_cast<btcOp*>(newWriteAsyncOp(&socket->root, flags | afRunning, timeout, reinterpret_cast<void*>(callback), arg, btcOpSend, &context));
     op->state = state;
     childOp->arg = op;
-    opStart(childOp);
+    combinerPushOperation(childOp, aaStart);
     return &op->root;
   }
 
   *bytesTransferred = size + sizeof(MessageHeader);
   return nullptr;
+}
+
+static asyncOpRoot *implBtcSendProxy(aioObjectRoot *object, AsyncFlags flags, uint64_t usTimeout, void *callback, void *arg, void *contextPtr)
+{
+  Context *context = static_cast<Context*>(contextPtr);
+  return implBtcSend(reinterpret_cast<BTCSocket*>(object), context->Command, context->Buffer, context->TransactionSize, flags, usTimeout, reinterpret_cast<btcSendCb*>(callback), arg, &context->BytesTransferred);
 }
 
 
@@ -433,47 +467,39 @@ void btcSocketSetMagic(BTCSocket *socket, uint32_t magic)
 
 ssize_t aioBtcRecv(BTCSocket *socket, char command[12], xmstream &stream, size_t sizeLimit, AsyncFlags flags, uint64_t timeout, btcRecvCb callback, void *arg)
 {
-  ssize_t result = -aosPending;
-  size_t bytesTransferred;
-  aioMethod([=, &stream]() { return &initReadOp(startBtcRecv, recvFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, btcOpRecv, &stream, sizeLimit, command)->root; },
-            [=, &stream, &bytesTransferred]() { return implBtcRecv(socket, command, stream, sizeLimit, flags, timeout, callback, arg, &bytesTransferred); },
-            [&bytesTransferred, &result]() { result = static_cast<ssize_t>(bytesTransferred); },
-            [](asyncOpRoot*) {},
-            &socket->root,
-            flags,
-            reinterpret_cast<void*>(callback),
-            btcOpRecv);
-  return result;
+  Context context(startBtcRecv, recvFinish, &stream, nullptr, sizeLimit, command, nullptr);
+  auto makeResult = [](void *contextPtr) {
+    Context *context = static_cast<Context*>(contextPtr);
+    context->Result = static_cast<ssize_t>(context->BytesTransferred);
+  };
+  auto initOp = [](asyncOpRoot*, void *) {};
+
+  runAioOperation(&socket->root, newReadAsyncOp, implBtcRecvProxy, makeResult, initOp, flags, timeout, reinterpret_cast<void*>(callback), arg, btcOpRecv, &context);
+  return context.Result;
 }
 
 ssize_t aioBtcSend(BTCSocket *socket, const char *command, void *data, size_t size, AsyncFlags flags, uint64_t timeout, btcSendCb callback, void *arg)
 {
-  ssize_t result = -aosPending;
-  size_t bytesTransferred;
-  aioMethod([=]() { return &initWriteOp(startBtcSend, sendFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, btcOpSend, command, data, size)->root; },
-            [=, &bytesTransferred]() { return implBtcSend(socket, command, data, size, flags, timeout, callback, arg, &bytesTransferred); },
-            [&bytesTransferred, &result]() { result = static_cast<ssize_t>(bytesTransferred); },
-            [](asyncOpRoot*) {},
-            &socket->root,
-            flags,
-            reinterpret_cast<void*>(callback),
-            btcOpSend);
-  return result;
+  Context context(startBtcSend, sendFinish, nullptr, data, size, nullptr, command);
+  auto makeResult = [](void *contextPtr) {
+    Context *context = static_cast<Context*>(contextPtr);
+    context->Result = static_cast<ssize_t>(context->BytesTransferred);
+  };
+  auto initOp = [](asyncOpRoot*, void *) {};
+  runAioOperation(&socket->root, newWriteAsyncOp, implBtcSendProxy, makeResult, initOp, flags, timeout, reinterpret_cast<void*>(callback), arg, btcOpSend, &context);
+  return context.Result;
 }
 
 
 ssize_t ioBtcRecv(BTCSocket *socket, char command[12], xmstream &stream, size_t sizeLimit, AsyncFlags flags, uint64_t timeout)
 {
-  size_t bytesTransferred;
-  btcOp *op = reinterpret_cast<btcOp*>(
-    ioMethod([=, &stream]() { return &initReadOp(startBtcRecv, nullptr, socket, flags | afCoroutine, timeout, nullptr, nullptr, btcOpRecv, &stream, sizeLimit, command)->root; },
-             [=, &stream, &bytesTransferred]() { return implBtcRecv(socket, command, stream, sizeLimit, flags | afCoroutine, timeout, nullptr, nullptr, &bytesTransferred); },
-             [](asyncOpRoot*) {},
-             &socket->root,
-             btcOpRecv));
+  Context context(startBtcRecv, 0, &stream, nullptr, sizeLimit, command, nullptr);
+  auto initOp = [](asyncOpRoot*, void *) {};
+  asyncOpRoot *op = runIoOperation(&socket->root, newReadAsyncOp, implBtcRecvProxy, initOp, flags, timeout, btcOpRecv, &context);
+
   if (op) {
-    AsyncOpStatus status = opGetStatus(&op->root);
-    objectRelease(&op->root, op->root.poolId);
+    AsyncOpStatus status = opGetStatus(op);
+    objectRelease(op, op->poolId);
     objectDecrementReference(&socket->root, 1);
     return status == aosSuccess ? static_cast<ssize_t>(stream.sizeOf()) : -status;
   } else {
@@ -483,16 +509,13 @@ ssize_t ioBtcRecv(BTCSocket *socket, char command[12], xmstream &stream, size_t 
 
 ssize_t ioBtcSend(BTCSocket *socket, const char *command, void *data, size_t size, AsyncFlags flags, uint64_t timeout)
 {
-  size_t bytesTransferred;
-  btcOp *op = reinterpret_cast<btcOp*>(
-    ioMethod([=]() { return &initWriteOp(startBtcSend, nullptr, socket, flags | afCoroutine, timeout, nullptr, nullptr, btcOpSend, command, data, size)->root; },
-             [=, &bytesTransferred]() { return implBtcSend(socket, command, data, size, flags | afCoroutine, timeout, nullptr, nullptr, &bytesTransferred); },
-             [](asyncOpRoot*) {},
-             &socket->root,
-             btcOpSend));
+  Context context(startBtcSend, 0, nullptr, data, size, nullptr, command);
+  auto initOp = [](asyncOpRoot*, void *) {};
+  asyncOpRoot *op = runIoOperation(&socket->root, newWriteAsyncOp, implBtcSendProxy, initOp, flags, timeout, btcOpSend, &context);
+
   if (op) {
-    AsyncOpStatus status = opGetStatus(&op->root);
-    objectRelease(&op->root, op->root.poolId);
+    AsyncOpStatus status = opGetStatus(op);
+    objectRelease(op, op->poolId);
     objectDecrementReference(&socket->root, 1);
     return status == aosSuccess ? static_cast<ssize_t>(size) : -status;
   } else {

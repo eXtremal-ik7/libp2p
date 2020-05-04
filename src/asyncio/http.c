@@ -18,7 +18,7 @@ static AsyncOpStatus httpParseStart(asyncOpRoot *opptr);
 
 static asyncOpRoot *alloc()
 {
-  HTTPOp *op = (HTTPOp*)malloc(sizeof(HTTPOp));
+  HTTPOp *op = (HTTPOp*)allocAsyncOp(sizeof(HTTPOp));
   op->internalBuffer = 0;
   op->dataSize = 0;
   op->internalBufferSize = 0;
@@ -122,7 +122,7 @@ static AsyncOpStatus httpParseStart(asyncOpRoot *opptr)
       implSslWrite(client->sslSocket, op->internalBuffer, op->dataSize, afWaitAll, 0, httpsResumeProc, op) :
       implWrite(client->plainSocket, op->internalBuffer, op->dataSize, afWaitAll, 0, httpResumeProc, op, &bytesTransferred);
     if (childOp) {
-      opStart(childOp);
+      combinerPushOperation(childOp, aaStart);
       return aosPending;
     }
   }
@@ -164,13 +164,15 @@ static AsyncOpStatus httpParseStart(asyncOpRoot *opptr)
 
         client->inBufferOffset = offset;
         if (readOp) {
-          opStart(readOp);
+          combinerPushOperation(readOp, aaStart);
           return aosPending;
         } else {
           httpSetBuffer(&client->state, client->inBuffer, client->inBufferOffset+bytesTransferred);
         }
         break;
       }
+
+      case ParserResultCancelled :
       case ParserResultError :
         return aosUnknownError;
     }
@@ -331,7 +333,7 @@ void aioHttpConnect(HTTPClient *client,
     op->dataSize = 0;
   }
 
-  opStart(&op->root);
+  combinerPushOperation(&op->root, aaStart);
 }
 
 void aioHttpRequest(HTTPClient *client,
@@ -354,7 +356,7 @@ void aioHttpRequest(HTTPClient *client,
     memcpy(op->internalBuffer, request, requestSize);
   }
 
-  opStart(&op->root);
+  combinerPushOperation(&op->root, aaStart);
 }
 
 
@@ -376,7 +378,7 @@ int ioHttpConnect(HTTPClient *client, const HostAddress *address, const char *tl
     op->dataSize = 0;
   }
 
-  combinerCall(&client->root, 1, &op->root, aaStart);
+  combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
   objectRelease(&op->root, op->root.poolId);
@@ -402,7 +404,7 @@ AsyncOpStatus ioHttpRequest(HTTPClient *client,
     memcpy(op->internalBuffer, request, requestSize);
   }
 
-  combinerCall(&client->root, 1, &op->root, aaStart);
+  combinerPushOperation(&op->root, aaStart);
   coroutineYield();
 
   AsyncOpStatus status = opGetStatus(&op->root);

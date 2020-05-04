@@ -38,7 +38,7 @@ typedef struct aioTimer {
 } aioTimer;
 __NO_PADDING_END
 
-static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType);
+void combinerTaskHandler(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy opMethod);
 void epollEnqueue(asyncBase *base, asyncOpRoot *op);
 void epollPostEmptyOperation(asyncBase *base);
 void epollNextFinishedOperation(asyncBase *base);
@@ -58,7 +58,7 @@ AsyncOpStatus epollAsyncReadMsg(asyncOpRoot *op);
 AsyncOpStatus epollAsyncWriteMsg(asyncOpRoot *op);
 
 static struct asyncImpl epollImpl = {
-  combiner,
+  combinerTaskHandler,
   epollEnqueue,
   epollPostEmptyOperation,
   epollNextFinishedOperation,
@@ -135,92 +135,58 @@ void epollPostEmptyOperation(asyncBase *base)
   epollEnqueue(base, 0);
 }
 
-static void combiner(aioObjectRoot *object, tag_t tag, asyncOpRoot *op, AsyncOpActionTy actionType)
+void combinerTaskHandler(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy opMethod)
 {
-  epollBase *base = (epollBase*)object->base;
-  tag_t currentTag = tag;
-  asyncOpRoot *newOp = op;
-  int hasFd = object->type == ioObjectDevice || object->type == ioObjectSocket;
-  if (hasFd && getFd((aioObject*)object) == -1)
-    return;
+  aioObject *fdObject = (object->type == ioObjectDevice || object->type == ioObjectSocket) ? (aioObject*)object : 0;
+  uint32_t ioEvents = fdObject ? fdObject->IoEvents : 0;
 
-  while (currentTag) {
-    int hasReadOp = object->readQueue.head != 0;
-    int hasWriteOp = object->writeQueue.head != 0;
+  int hasReadOp = object->readQueue.head != 0;
+  int hasWriteOp = object->writeQueue.head != 0;
+  if (ioEvents & IO_EVENT_ERROR) {
+    // EPOLLRDHUP mapped to TAG_ERROR, cancel all operations with aosDisconnected status
+    int available;
+    int fd = getFd(fdObject);
+    ioctl(fd, FIONREAD, &available);
+    if (available == 0)
+      cancelOperationList(&object->readQueue, aosDisconnected);
+    cancelOperationList(&object->writeQueue, aosDisconnected);
+  }
 
-    if (currentTag & TAG_ERROR) {
-      // EPOLLRDHUP mapped to TAG_ERROR, cancel all operations with aosDisconnected status
-      int available;
-      int fd = getFd((aioObject*)object);
-      ioctl(fd, FIONREAD, &available);
-      if (available == 0)
-        cancelOperationList(&object->readQueue, aosDisconnected);
-      cancelOperationList(&object->writeQueue, aosDisconnected);
+  uint32_t needStart = ioEvents;
+  if (op)
+    processAction(op, opMethod, &needStart);
+  if (needStart & IO_EVENT_READ)
+    executeOperationList(&object->readQueue);
+  if (needStart & IO_EVENT_WRITE)
+    executeOperationList(&object->writeQueue);
+
+  if (fdObject) {
+    int fd = getFd(fdObject);
+    epollBase *base = (epollBase*)object->base;
+    uint32_t currentEvents = 0;
+    uint32_t newEvents = 0;
+
+    // "Calculate" current epoll_ctl mask because we don't have map<fd, oldMask>
+    // EPOLLIN/EPOLLOUT now enabled if read/write queue was not empty and file descriptor not deactivated by EPOLLONESHOT flag
+    int fdDeactivated = (ioEvents & (IO_EVENT_READ | IO_EVENT_WRITE)) != 0;
+
+    if (hasReadOp)
+      currentEvents |= EPOLLIN;
+    if (hasWriteOp)
+      currentEvents |= EPOLLOUT;
+    if (fdDeactivated)
+      currentEvents = 0;
+
+    if (object->readQueue.head)
+      newEvents |= EPOLLIN;
+    if (object->writeQueue.head)
+      newEvents |= EPOLLOUT;
+
+    if (ioEvents)
+      fdObject->IoEvents = 0;
+    if (currentEvents != newEvents) {
+      epollControl(base->epollFd, EPOLL_CTL_MOD, newEvents ? newEvents | EPOLLONESHOT | EPOLLRDHUP : 0, fd, object);
     }
-
-    if (currentTag & TAG_CANCELIO) {
-      cancelOperationList(&object->readQueue, aosCanceled);
-      cancelOperationList(&object->writeQueue, aosCanceled);
-    }
-
-    if (currentTag & TAG_DELETE) {
-      // Perform delete and exit combiner
-      object->destructor(object);
-      if (object->destructorCb)
-        object->destructorCb(object, object->destructorCbArg);
-      return;
-    }
-    
-    // Check for pending operations
-    tag_t pendingOperationsNum;
-    tag_t enqueuedOperationsNum = 0;
-    tag_t needStart = currentTag;
-    if ( (pendingOperationsNum = __tag_get_opcount(currentTag)) ) {
-      if (newOp) {
-        // Don't try synchonously execute operation second time
-        processAction(newOp, actionType, &needStart);
-        enqueuedOperationsNum = 1;
-        newOp = 0;
-      } else {
-        while (enqueuedOperationsNum < pendingOperationsNum)
-          processOperationList(object, &needStart, &enqueuedOperationsNum);
-      }
-    }
-
-    if (needStart & TAG_READ_MASK)
-      executeOperationList(&object->readQueue);
-    if (needStart & TAG_WRITE_MASK)
-      executeOperationList(&object->writeQueue);
-
-    // I/O multiplexer configuration
-    if (hasFd) {
-      int fd = getFd((aioObject*)object);
-      uint32_t currentEvents = 0;
-      uint32_t newEvents = 0;
-
-      // "Calculate" current epoll_ctl mask because we don't have map<fd, oldMask>
-      // EPOLLIN/EPOLLOUT now enabled if read/write queue was not empty and file descriptor not deactivated by EPOLLONESHOT flag
-      int fdDeactivated = (currentTag & (TAG_READ_MASK | TAG_WRITE_MASK)) != 0;
-
-      if (hasReadOp)
-        currentEvents |= EPOLLIN;
-      if (hasWriteOp)
-        currentEvents |= EPOLLOUT;
-      if (fdDeactivated)
-        currentEvents = 0;
-
-      if (object->readQueue.head)
-        newEvents |= EPOLLIN;
-      if (object->writeQueue.head)
-        newEvents |= EPOLLOUT;
-      if (currentEvents != newEvents)
-        epollControl(base->epollFd, EPOLL_CTL_MOD, newEvents ? newEvents | EPOLLONESHOT | EPOLLRDHUP : 0, fd, object);
-    }
-    
-    // Try exit combiner
-    tag_t processed = __tag_make_processed(currentTag, enqueuedOperationsNum);
-    currentTag = __tag_atomic_fetch_and_add(&object->tag, -processed);
-    currentTag -= processed;
   }
 }
 
@@ -251,7 +217,7 @@ void epollNextFinishedOperation(asyncBase *base)
     } while (nfds <= 0 && errno == EINTR);
 
     for (n = 0; n < nfds; n++) {
-      tag_t timerId;
+      uintptr_t timerId;
       aioObjectRoot *object;
       __tagged_pointer_decode(events[n].data.ptr, (void**)&object, &timerId);
       if (object == &localBase->eventObject->root) {
@@ -287,17 +253,18 @@ void epollNextFinishedOperation(asyncBase *base)
           }
         }
       } else {
-        tag_t eventMask = 0;
+        uint32_t eventMask = 0;
         if (events[n].events & EPOLLIN)
-          eventMask |= TAG_READ;
+          eventMask |= IO_EVENT_READ;
         if (events[n].events & EPOLLOUT)
-          eventMask |= TAG_WRITE;
+          eventMask |= IO_EVENT_WRITE;
         if (events[n].events & EPOLLRDHUP)
-          eventMask |= TAG_ERROR;
+          eventMask |= IO_EVENT_ERROR;
 
-        tag_t currentTag = __tag_atomic_fetch_and_add(&object->tag, eventMask);
-        if (!currentTag)
-          combiner(object, eventMask, 0, aaNone);
+        if (eventMask) {
+          ((aioObject*)object)->IoEvents = eventMask;
+          combinerPushCounter(object, COMBINER_TAG_ACCESS);
+        }
       }
     }
   }
@@ -309,7 +276,7 @@ aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
   epollBase *localBase = (epollBase*)base;
   aioObject *object = (aioObject*)objectGet(socketPool);
   if (!object) {
-    object = __tagged_alloc(sizeof(aioObject));
+    object = alignedMalloc(sizeof(aioObject), TAGGED_POINTER_ALIGNMENT);
     object->buffer.ptr = 0;
     object->buffer.totalSize = 0;
   }
@@ -326,6 +293,7 @@ aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
       break;
   }
 
+  object->IoEvents = 0;
   object->buffer.offset = 0;
   object->buffer.dataSize = 0;
   epollControl(localBase->epollFd, EPOLL_CTL_ADD, 0, getFd(object), object);
@@ -334,7 +302,7 @@ aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 
 asyncOpRoot *epollNewAsyncOp()
 {
-  asyncOp *op = malloc(sizeof(asyncOp));
+  asyncOp *op = (asyncOp*)allocAsyncOp(sizeof(asyncOp));
   if (op) {
     op->internalBuffer = 0;
     op->internalBufferSize = 0;
@@ -372,7 +340,7 @@ void epollDeleteObject(aioObject *object)
 void epollInitializeTimer(asyncBase *base, asyncOpRoot *op)
 {
   epollBase *localBase = (epollBase*)base;
-  aioTimer *timer = __tagged_alloc(sizeof(aioTimer));
+  aioTimer *timer = alignedMalloc(sizeof(aioTimer), TAGGED_POINTER_ALIGNMENT);
   timer->root.base = base;
   timer->root.type = ioObjectTimer;
   timer->fd = timerfd_create(CLOCK_REALTIME, TFD_NONBLOCK);

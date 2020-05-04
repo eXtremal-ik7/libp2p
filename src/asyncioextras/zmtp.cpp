@@ -6,6 +6,41 @@ static const char *zmtpSocketPool = "zmtpSocket";
 static const char *poolId = "zmtp";
 static const char *timerPoolId = "zmtpTimer";
 
+enum zmtpMsgTy {
+  zmtpMsgFlagNone,
+  zmtpMsgFlagMore = 1,
+  zmtpMsgFlagLong = 2,
+  zmtpMsgFlagCommand = 4
+};
+
+struct Context {
+  aioExecuteProc *StartProc;
+  aioFinishProc *FinishProc;
+  zmtpStream *Stream;
+  void *Buffer;
+  size_t TransactionSize;
+  size_t BytesTransferred;
+  zmtpUserMsgTy UserMsgType;
+  zmtpMsgTy MsgType;
+  ssize_t Result;
+  Context(aioExecuteProc *startProc,
+          aioFinishProc *finishProc,
+          zmtpStream *stream,
+          void *buffer,
+          size_t transactionSize,
+          zmtpUserMsgTy userMsgType) :
+
+    StartProc(startProc),
+    FinishProc(finishProc),
+    Stream(stream),
+    Buffer(buffer),
+    TransactionSize(transactionSize),
+    BytesTransferred(0),
+    UserMsgType(userMsgType),
+    MsgType(zmtpMsgFlagNone),
+    Result(-aosPending) {}
+};
+
 static uint8_t localSignature[] = {0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7F};
 static uint8_t localMajorVersion = 3;
 static uint8_t localGreetingOther[] = {
@@ -15,12 +50,7 @@ static uint8_t localGreetingOther[] = {
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
-enum zmtpMsgTy {
-  zmtpMsgFlagNone,
-  zmtpMsgFlagMore = 1,
-  zmtpMsgFlagLong = 2,
-  zmtpMsgFlagCommand = 4
-};
+
 
 static const char *socketTypeNames[] = {
   "REQ",
@@ -104,7 +134,7 @@ static AsyncOpStatus startZmtpRecv(asyncOpRoot *opptr);
 
 static asyncOpRoot *alloc()
 {
-  return static_cast<asyncOpRoot*>(malloc(sizeof(zmtpOp)));
+  return allocAsyncOp(sizeof(zmtpOp));
 }
 
 static void resumeConnectCb(AsyncOpStatus status, aioObject*, void *arg)
@@ -156,80 +186,67 @@ static void sendFinish(asyncOpRoot *opptr)
                                                  opptr->arg);
 }
 
-zmtpOp *initOp(aioExecuteProc *start,
-               aioFinishProc *finish,
-               zmtpSocket *socket,
-               AsyncFlags flags,
-               uint64_t timeout,
-               void *callback,
-               void *arg,
-               int opCode)
+static asyncOpRoot *newAsyncOp(aioObjectRoot *object,
+                               AsyncFlags flags,
+                               uint64_t usTimeout,
+                               void *callback,
+                               void *arg,
+                               int opCode,
+                               void *contextPtr)
 {
-  asyncOpRoot *opptr =
-    initAsyncOpRoot(poolId, timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
-  zmtpOp *op = reinterpret_cast<zmtpOp*>(opptr);
+  struct Context *context = (struct Context*)contextPtr;
+  zmtpOp *op = reinterpret_cast<zmtpOp*>(initAsyncOpRoot(poolId, timerPoolId, alloc, context->StartProc, cancel, context->FinishProc, object, reinterpret_cast<void*>(callback), arg, flags, opCode, usTimeout));
   op->state = stInitialize;
   op->stateRw = stInitialize;
-  return op;
+  return &op->root;
 }
 
-zmtpOp *initReadOp(aioExecuteProc *start,
-                   aioFinishProc *finish,
-                   zmtpSocket *socket,
-                   AsyncFlags flags,
-                   uint64_t timeout,
-                   void *callback,
-                   void *arg,
-                   int opCode,
-                   void *,
-                   zmtpStream *stream,
-                   size_t size)
+static asyncOpRoot *newReadAsyncOp(aioObjectRoot *object,
+                                   AsyncFlags flags,
+                                   uint64_t usTimeout,
+                                   void *callback,
+                                   void *arg,
+                                   int opCode,
+                                   void *contextPtr)
 {
-  asyncOpRoot *opptr =
-    initAsyncOpRoot(poolId, timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
-  zmtpOp *op = reinterpret_cast<zmtpOp*>(opptr);
+  struct Context *context = (struct Context*)contextPtr;
+  zmtpOp *op = reinterpret_cast<zmtpOp*>(initAsyncOpRoot(poolId, timerPoolId, alloc, context->StartProc, cancel, context->FinishProc, object, reinterpret_cast<void*>(callback), arg, flags, opCode, usTimeout));
   op->state = stInitialize;
   op->stateRw = stInitialize;
   op->data = nullptr;
-  op->stream = stream;
-  op->size = 0;
-  op->size = size;
-  return op;
+  op->stream = context->Stream;
+  op->size = context->TransactionSize;
+  return &op->root;
 }
 
-zmtpOp *initWriteOp(aioExecuteProc *start,
-                    aioFinishProc *finish,
-                    zmtpSocket *socket,
-                    AsyncFlags flags,
-                    uint64_t timeout,
-                    void *callback,
-                    void *arg,
-                    int opCode,
-                    void *data,
-                    size_t size,
-                    zmtpUserMsgTy type)
+static asyncOpRoot *newWriteAsyncOp(aioObjectRoot *object,
+                                    AsyncFlags flags,
+                                    uint64_t usTimeout,
+                                    void *callback,
+                                    void *arg,
+                                    int opCode,
+                                    void *contextPtr)
 {
-  asyncOpRoot *opptr =
-    initAsyncOpRoot(poolId, timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
-  zmtpOp *op = reinterpret_cast<zmtpOp*>(opptr);
+  struct Context *context = (struct Context*)contextPtr;
+  zmtpOp *op = reinterpret_cast<zmtpOp*>(initAsyncOpRoot(poolId, timerPoolId, alloc, context->StartProc, cancel, context->FinishProc, object, reinterpret_cast<void*>(callback), arg, flags, opCode, usTimeout));
   op->state = stInitialize;
   op->stateRw = stInitialize;
-  op->data = data;
+  op->data = context->Buffer;
   op->stream = nullptr;
-  op->size = size;
-  switch (type) {
+  op->size = context->TransactionSize;
+  switch (context->UserMsgType) {
     case zmtpCommand :
-      op->type = (size < 256) ? zmtpMsgFlagCommand : zmtpMsgFlagCommand | zmtpMsgFlagLong;
+      op->type = (context->TransactionSize < 256) ? zmtpMsgFlagCommand : zmtpMsgFlagCommand | zmtpMsgFlagLong;
       break;
     case zmtpMessagePart :
-      op->type = (size < 256) ? zmtpMsgFlagMore : zmtpMsgFlagMore | zmtpMsgFlagLong;
+      op->type = (context->TransactionSize < 256) ? zmtpMsgFlagMore : zmtpMsgFlagMore | zmtpMsgFlagLong;
       break;
     case zmtpMessage :
     default :
-      op->type = (size < 256) ? zmtpMsgFlagNone : zmtpMsgFlagLong;
+      op->type = (context->TransactionSize < 256) ? zmtpMsgFlagNone : zmtpMsgFlagLong;
       break;
   }
-  return op;
+  return &op->root;
 }
 
 static AsyncOpStatus startZmtpAccept(asyncOpRoot *opptr)
@@ -318,7 +335,7 @@ static AsyncOpStatus startZmtpAccept(asyncOpRoot *opptr)
     }
   }
 
-  opStart(childOp);
+  combinerPushOperation(childOp, aaStart);
   return aosPending;
 }
 
@@ -406,7 +423,7 @@ static AsyncOpStatus startZmtpConnect(asyncOpRoot *opptr)
     }
   }
 
-  opStart(childOp);
+  combinerPushOperation(childOp, aaStart);
   return aosPending;
 }
 
@@ -463,7 +480,7 @@ static AsyncOpStatus startZmtpRecv(asyncOpRoot *opptr)
     }
   }
 
-  opStart(childOp);
+  combinerPushOperation(childOp, aaStart);
   return aosPending;
 }
 
@@ -503,21 +520,23 @@ static asyncOpRoot *implZmtpRecvStream(zmtpSocket *socket, zmtpStream &msg, size
         break;
       }
     } else {
-      zmtpOp *op = initReadOp(startZmtpRecv, recvFinish, socket, flags, 0, reinterpret_cast<void*>(callback), arg, zmtpOpRecv, nullptr, &msg, limit);
-      opForceStatus(&op->root, aosBufferTooSmall);
-      return &op->root;
+      Context context(startZmtpRecv, recvFinish, &msg, nullptr, limit, zmtpUnknown);
+      asyncOpRoot *op = newReadAsyncOp(&socket->root, flags, 0, reinterpret_cast<void*>(callback), arg, zmtpOpRecv, &context);
+      opForceStatus(op, aosBufferTooSmall);
+      return op;
     }
 
     finish = (type & zmtpMsgFlagMore) ? false : true;
   }
 
   if (childOp) {
-    zmtpOp *op = initReadOp(startZmtpRecv, recvFinish, socket, flags|afRunning, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpRecv, nullptr, &msg, limit);
+    Context context(startZmtpRecv, recvFinish, &msg, nullptr, limit, zmtpUnknown);
+    zmtpOp *op = reinterpret_cast<zmtpOp*>(newReadAsyncOp(&socket->root, flags | afRunning, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpRecv, &context));
     op->stateRw = state;
     op->type = type;
     op->transferred = transferred;
     childOp->arg = op;
-    opStart(childOp);
+    combinerPushOperation(childOp, aaStart);
     return &op->root;
   }
 
@@ -525,6 +544,12 @@ static asyncOpRoot *implZmtpRecvStream(zmtpSocket *socket, zmtpStream &msg, size
   *msgRead = type;
   *bytesRead = transferred;
   return nullptr;
+}
+
+static asyncOpRoot *implZmtpRecvStreamProxy(aioObjectRoot *object, AsyncFlags flags, uint64_t usTimeout, void *callback, void *arg, void *contextPtr)
+{
+  Context *context = static_cast<Context*>(contextPtr);
+  return implZmtpRecvStream(reinterpret_cast<zmtpSocket*>(object), *context->Stream, context->TransactionSize, flags, usTimeout, reinterpret_cast<zmtpRecvCb*>(callback), arg, &context->BytesTransferred, &context->MsgType);
 }
 
 static AsyncOpStatus startZmtpSend(asyncOpRoot *opptr)
@@ -586,7 +611,7 @@ static AsyncOpStatus startZmtpSend(asyncOpRoot *opptr)
     }
   }
 
-  opStart(childOp);
+  combinerPushOperation(childOp, aaStart);
   return aosPending;
 }
 
@@ -645,16 +670,23 @@ asyncOpRoot *implZmtpSend(zmtpSocket *socket, void *data, size_t size, zmtpUserM
   }
 
   if (childOp) {
-    zmtpOp *op = initWriteOp(startZmtpSend, sendFinish, socket, flags|afRunning, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpConnect, data, size, type);
+    Context context(startZmtpSend, sendFinish, nullptr, data, size, type);
+    zmtpOp *op = reinterpret_cast<zmtpOp*>(newWriteAsyncOp(&socket->root, flags | afRunning, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpSend, &context));
     op->stateRw = state;
     op->type = msgType;
     childOp->arg = op;
-    opStart(childOp);
+    combinerPushOperation(childOp, aaStart);
     return &op->root;
   }
 
   *bytesTransferred = size;
   return nullptr;
+}
+
+static asyncOpRoot *implZmtpSendProxy(aioObjectRoot *object, AsyncFlags flags, uint64_t usTimeout, void *callback, void *arg, void *contextPtr)
+{
+  Context *context = static_cast<Context*>(contextPtr);
+  return implZmtpSend(reinterpret_cast<zmtpSocket*>(object), context->Buffer, context->TransactionSize, context->UserMsgType, flags, usTimeout, reinterpret_cast<zmtpSendCb*>(callback), arg, &context->BytesTransferred);
 }
 
 void zmtpSocketDestructor(aioObjectRoot *object)
@@ -683,62 +715,62 @@ void zmtpSocketDelete(zmtpSocket *socket)
 
 void aioZmtpAccept(zmtpSocket *socket, AsyncFlags flags, uint64_t timeout, zmtpAcceptCb callback, void *arg)
 {
-  zmtpOp *op =
-    initOp(startZmtpAccept, acceptFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpAccept);
-  opStart(&op->root);
+  Context context(startZmtpAccept, acceptFinish, nullptr, nullptr, 0, zmtpUnknown);
+  asyncOpRoot *op = newAsyncOp(&socket->root, flags, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpAccept, &context);
+  combinerPushOperation(op, aaStart);
 }
 
 void aioZmtpConnect(zmtpSocket *socket, const HostAddress *address, AsyncFlags flags, uint64_t timeout, zmtpConnectCb callback, void *arg)
 {
+  Context context(startZmtpConnect, connectFinish, nullptr, nullptr, 0, zmtpUnknown);
   zmtpOp *op =
-    initOp(startZmtpConnect, connectFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpConnect);
+    reinterpret_cast<zmtpOp*>(newAsyncOp(&socket->root, flags, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpConnect, &context));
   op->address = *address;
-  opStart(&op->root);
+  combinerPushOperation(&op->root, aaStart);
 }
 
 ssize_t aioZmtpRecv(zmtpSocket *socket, zmtpStream &msg, size_t limit, AsyncFlags flags, uint64_t timeout, zmtpRecvCb callback, void *arg)
 {
-  ssize_t result = -aosPending;
-  size_t bytesTransferred;
-  zmtpMsgTy type = zmtpMsgFlagNone;
-  aioMethod([=, &msg]() { return &initReadOp(startZmtpRecv, recvFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpRecv, nullptr, &msg, limit)->root; },
-            [=, &msg, &bytesTransferred, &type]() { return implZmtpRecvStream(socket, msg, limit, flags, timeout, callback, arg, &bytesTransferred, &type); },
-            [&bytesTransferred, &result]() { result = static_cast<ssize_t>(bytesTransferred); },
-            [&bytesTransferred, &type](asyncOpRoot *op) {
-              reinterpret_cast<zmtpOp*>(op)->type = type;
-              reinterpret_cast<zmtpOp*>(op)->transferred = bytesTransferred;
-            },
-            &socket->root,
-            flags,
-            reinterpret_cast<void*>(callback),
-            zmtpOpRecv);
-  return result;
+  Context context(startZmtpRecv, recvFinish, &msg, nullptr, limit, zmtpUnknown);
+  auto makeResult = [](void *contextPtr) {
+    Context *context = static_cast<Context*>(contextPtr);
+    context->Result = static_cast<ssize_t>(context->BytesTransferred);
+  };
+  auto initOp = [](asyncOpRoot *op, void *contextPtr) {
+    Context *context = static_cast<Context*>(contextPtr);
+    reinterpret_cast<zmtpOp*>(op)->type = context->MsgType;
+    reinterpret_cast<zmtpOp*>(op)->transferred = context->BytesTransferred;
+  };
+
+  runAioOperation(&socket->root, newReadAsyncOp, implZmtpRecvStreamProxy, makeResult, initOp, flags, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpRecv, &context);
+  return context.Result;
 }
 
 ssize_t aioZmtpSend(zmtpSocket *socket, void *data, size_t size, zmtpUserMsgTy type, AsyncFlags flags, uint64_t timeout, zmtpSendCb callback, void *arg)
 {
-  ssize_t result = -aosPending;
-  size_t bytesTransferred;
-  aioMethod([=]() { return &initWriteOp(startZmtpSend, sendFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpConnect, data, size, type)->root; },
-            [=, &bytesTransferred]() { return implZmtpSend(socket, data, size, type, flags, timeout, callback, arg, &bytesTransferred); },
-            [&bytesTransferred, &result]() { result = static_cast<ssize_t>(bytesTransferred); },
-            [&bytesTransferred](asyncOpRoot *op) { reinterpret_cast<zmtpOp*>(op)->transferred = bytesTransferred; },
-            &socket->root,
-            flags,
-            reinterpret_cast<void*>(callback),
-            zmtpOpSend);
-  return result;
+  Context context(startZmtpSend, sendFinish, nullptr, data, size, type);
+  auto makeResult = [](void *contextPtr) {
+    Context *context = static_cast<Context*>(contextPtr);
+    context->Result = static_cast<ssize_t>(context->BytesTransferred);
+  };
+  auto initOp = [](asyncOpRoot *op, void *contextPtr) {
+    Context *context = static_cast<Context*>(contextPtr);
+    reinterpret_cast<zmtpOp*>(op)->transferred = context->BytesTransferred;
+  };
+
+  runAioOperation(&socket->root, newWriteAsyncOp, implZmtpSendProxy, makeResult, initOp, flags, timeout, reinterpret_cast<void*>(callback), arg, zmtpOpSend, &context);
+  return context.Result;
 }
 
 int ioZmtpAccept(zmtpSocket *socket, AsyncFlags flags, uint64_t timeout)
 {
-  zmtpOp *op =
-    initOp(startZmtpAccept, nullptr, socket, flags | afCoroutine, timeout, nullptr, nullptr, zmtpOpAccept);
-  combinerCall(&socket->root, 1, &op->root, aaStart);
+  Context context(startZmtpAccept, 0, nullptr, nullptr, 0, zmtpUnknown);
+  asyncOpRoot *op = newAsyncOp(&socket->root, flags | afCoroutine, timeout, nullptr, nullptr, zmtpOpAccept, &context);
+  combinerPushOperation(op, aaStart);
   coroutineYield();
 
-  AsyncOpStatus status = opGetStatus(&op->root);
-  objectRelease(&op->root, op->root.poolId);
+  AsyncOpStatus status = opGetStatus(op);
+  objectRelease(op, op->poolId);
   objectDecrementReference(&socket->root, 1);
 
   return status == aosSuccess ? 0 : -status;
@@ -746,10 +778,11 @@ int ioZmtpAccept(zmtpSocket *socket, AsyncFlags flags, uint64_t timeout)
 
 int ioZmtpConnect(zmtpSocket *socket, const HostAddress *address, AsyncFlags flags, uint64_t timeout)
 {
+  Context context(startZmtpConnect, 0, nullptr, nullptr, 0, zmtpUnknown);
   zmtpOp *op =
-    initOp(startZmtpConnect, nullptr, socket, flags | afCoroutine, timeout, nullptr, nullptr, zmtpOpConnect);
+    reinterpret_cast<zmtpOp*>(newAsyncOp(&socket->root, flags | afCoroutine, timeout, nullptr, nullptr, zmtpOpConnect, &context));
   op->address = *address;
-  combinerCall(&socket->root, 1, &op->root, aaStart);
+  combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
   objectRelease(&op->root, op->root.poolId);
@@ -760,17 +793,15 @@ int ioZmtpConnect(zmtpSocket *socket, const HostAddress *address, AsyncFlags fla
 
 ssize_t ioZmtpRecv(zmtpSocket *socket, zmtpStream &msg, size_t limit, AsyncFlags flags, uint64_t timeout, zmtpUserMsgTy *type)
 {
-  zmtpMsgTy msgType = zmtpMsgFlagNone;
-  size_t bytesTransferred;
-  zmtpOp *op = reinterpret_cast<zmtpOp*>(
-    ioMethod([=, &msg]() { return &initReadOp(startZmtpRecv, nullptr, socket, flags | afCoroutine, timeout, nullptr, nullptr, zmtpOpRecv, nullptr, &msg, limit)->root; },
-             [=, &msg, &msgType, &bytesTransferred]() { return implZmtpRecvStream(socket, msg, limit, flags | afCoroutine, timeout, nullptr, nullptr, &bytesTransferred, &msgType); },
-             [&bytesTransferred, &msgType](asyncOpRoot *op) {
-               reinterpret_cast<zmtpOp*>(op)->type = msgType;
-               reinterpret_cast<zmtpOp*>(op)->transferred = bytesTransferred;
-             },
-             &socket->root,
-             zmtpOpSend));
+  Context context(startZmtpRecv, 0, &msg, nullptr, limit, zmtpUnknown);
+  auto initOp = [](asyncOpRoot *op, void *contextPtr) {
+    Context *context = static_cast<Context*>(contextPtr);
+    reinterpret_cast<zmtpOp*>(op)->type = context->MsgType;
+    reinterpret_cast<zmtpOp*>(op)->transferred = context->BytesTransferred;
+  };
+
+  zmtpOp *op = reinterpret_cast<zmtpOp*>(runIoOperation(&socket->root, newReadAsyncOp, implZmtpRecvStreamProxy, initOp, flags, timeout, zmtpOpRecv, &context));
+
   if (op) {
     AsyncOpStatus status = opGetStatus(&op->root);
     *type = (op->type & zmtpMsgFlagCommand) ? zmtpCommand : zmtpMessage;
@@ -778,24 +809,24 @@ ssize_t ioZmtpRecv(zmtpSocket *socket, zmtpStream &msg, size_t limit, AsyncFlags
     objectDecrementReference(&socket->root, 1);
     return status == aosSuccess ? static_cast<ssize_t>(msg.sizeOf()) : -status;
   } else {
-    *type = (msgType & zmtpMsgFlagCommand) ? zmtpCommand : zmtpMessage;
+    *type = (context.MsgType & zmtpMsgFlagCommand) ? zmtpCommand : zmtpMessage;
     return static_cast<ssize_t>(msg.sizeOf());
   }
 }
 
 ssize_t ioZmtpSend(zmtpSocket *socket, void *data, size_t size, zmtpUserMsgTy type, AsyncFlags flags, uint64_t timeout)
 {
-  size_t bytesTransferred;
-  zmtpOp *op = reinterpret_cast<zmtpOp*>(
-    ioMethod([=]() { return &initWriteOp(startZmtpSend, nullptr, socket, flags | afCoroutine, timeout, nullptr, nullptr, zmtpOpConnect, data, size, type)->root; },
-             [=, &bytesTransferred]() { return implZmtpSend(socket, data, size, type, flags | afCoroutine, timeout, nullptr, nullptr, &bytesTransferred); },
-             [&bytesTransferred](asyncOpRoot *op) { reinterpret_cast<zmtpOp*>(op)->transferred = bytesTransferred; },
-             &socket->root,
-             zmtpOpSend));
+  Context context(startZmtpSend, 0, nullptr, data, size, type);
+  auto initOp = [](asyncOpRoot *op, void *contextPtr) {
+    Context *context = static_cast<Context*>(contextPtr);
+    reinterpret_cast<zmtpOp*>(op)->transferred = context->BytesTransferred;
+  };
+
+  asyncOpRoot *op = runIoOperation(&socket->root, newWriteAsyncOp, implZmtpSendProxy, initOp, flags, timeout, zmtpOpSend, &context);
 
   if (op) {
-    AsyncOpStatus status = opGetStatus(&op->root);
-    objectRelease(&op->root, op->root.poolId);
+    AsyncOpStatus status = opGetStatus(op);
+    objectRelease(op, op->poolId);
     objectDecrementReference(&socket->root, 1);
     return status == aosSuccess ? static_cast<ssize_t>(size) : -status;
   } else {

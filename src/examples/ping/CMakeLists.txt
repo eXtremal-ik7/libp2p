@@ -2,8 +2,8 @@ set(AIOPingSources AIOPing.cpp)
 
 if (MSVC)
   set(AIOPingSources ${AIOPingSources}
-    ${CMAKE_SOURCE_DIR}/msvc/getopt.c
-    ${CMAKE_SOURCE_DIR}/msvc/getopt1.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../msvc/getopt.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../msvc/getopt1.c
   )
 endif()
 

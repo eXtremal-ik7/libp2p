@@ -108,7 +108,7 @@ void p2pPeer::nodeMsgHandler()
   _node->addPeer(this);
   bool valid = true;
   p2pHeader header;
-  int status;
+  ssize_t status;
   while (valid && (status = iop2pRecvStream(connection, connection->stream, 65536, afNone, 0, &header)) > 0) {
     switch (header.type) {
       case p2pMsgRequest : {

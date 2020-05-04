@@ -173,7 +173,7 @@ void aioRlpxAccept(rlpxSocket *socket, AsyncFlags flags, uint64_t timeout, rlpxA
 {
   RlpxOperation *op =
     initOp(startRlpxAccept, acceptFinish, socket, flags, timeout, reinterpret_cast<void*>(callback), arg, rlpxOpAccept);
-  opStart(&op->root);
+  combinerPushOperation(&op->root, aaStart);
 }
 
 void aioRlpxConnect(rlpxSocket *socket, HostAddress address, AsyncFlags flags, uint64_t timeout, rlpxConnectCb callback, void *arg)

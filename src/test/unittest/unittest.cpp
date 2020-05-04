@@ -3,6 +3,7 @@
 #include "asyncio/device.h"
 #include "asyncio/socket.h"
 #include "p2putils/HttpRequestParse.h"
+#include "asyncioextras/rlpx.h"
 #include "atomic.h"
 #include <chrono>
 #include <thread>
@@ -1180,5 +1181,6 @@ int main(int argc, char **argv)
   gBase = createAsyncBase(method);
 
   ::testing::InitGoogleTest(&argc, argv);
+//  rlpxSocketNew(nullptr, nullptr, nullptr, nullptr);
   return RUN_ALL_TESTS();
 }
