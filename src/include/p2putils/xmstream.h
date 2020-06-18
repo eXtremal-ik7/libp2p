@@ -116,26 +116,28 @@ public:
   }
   
   // read functions
-  template<typename T=uint8_t> T *seek(size_t num) {
-    size_t size = sizeof(T)*num;
-    if (size <= remaining()) {
-      T *p = (T*)_p;
-      _p += size;
-      return p;
-    } else {
+  template<typename T=uint8_t> T *seek(ssize_t num) {
+    void *old = _p;
+    _p += sizeof(T)*num;
+
+    ssize_t newSize = _p - _m;
+    if (newSize < 0) {
+      _p = _m;
+    } else if (static_cast<size_t>(newSize) > _size) {
       _p = _m + _size;
       _eof = 1;
-      return 0;
+      return nullptr;
     }
+
+    return reinterpret_cast<T*>(old);
   }
 
-  template<typename T=uint8_t> T *seekEnd(size_t num, bool setEof = false) {
+  template<typename T=uint8_t> void seekEnd(size_t num, bool setEof = false) {
     size_t size = sizeof(T)*num;
     size_t diff = std::min(size, _size);
     _p = _m + size - diff;
     if (num == 0 && setEof)
       _eof = true;
-    return reinterpret_cast<T*>(_p);
   }
   
   void read(void *data, size_t size) {
@@ -166,6 +168,10 @@ public:
 
   void write(const char *data) {
     write(data, std::char_traits<char>::length(data));
+  }
+
+  void truncate() {
+    _size = _p - _m;
   }
 };
 
