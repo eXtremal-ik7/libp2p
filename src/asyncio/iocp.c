@@ -4,6 +4,7 @@
 #include <windows.h>
 #include "asyncioImpl.h"
 #include "atomic.h"
+#include <stdlib.h>
 #include <time.h>
 
 extern __tls RingBuffer localQueue;

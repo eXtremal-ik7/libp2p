@@ -1,4 +1,5 @@
 #include "asyncio/device.h"
+#include <stdlib.h>
 
 iodevTy serialPortOpen(const char *name)
 {

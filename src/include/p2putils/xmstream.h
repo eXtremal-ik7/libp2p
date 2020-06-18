@@ -4,7 +4,10 @@
 #include "p2putils/strExtras.h"
 #include <stdint.h>
 #include <string.h>
-#include <iostream>
+#if defined(_MSC_VER)
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
 
 class xmstream {
 private:
@@ -167,7 +170,7 @@ public:
   template<typename T> void writebe(T data) { *reserve<T>(1) = xhtobe(data); }
 
   void write(const char *data) {
-    write(data, std::char_traits<char>::length(data));
+    write(data, strlen(data));
   }
 
   void truncate() {

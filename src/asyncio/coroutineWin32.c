@@ -3,6 +3,7 @@
 #include "atomic.h"
 #include <windows.h>
 #include <assert.h>
+#include <stdlib.h>
 
 __tls coroutineTy *currentCoroutine;
 __tls coroutineTy *mainCoroutine;
