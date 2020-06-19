@@ -39,6 +39,12 @@ int socketListen(socketTy hSocket)
 }
 
 
+int socketShutdown(socketTy hSocket, int how)
+{
+  return shutdown(hSocket, how);
+}
+
+
 void socketReuseAddr(socketTy hSocket)
 {
   char optval = 1;

@@ -53,6 +53,10 @@ int socketListen(socketTy hSocket)
   return listen(hSocket, SOMAXCONN);
 }
 
+int socketShutdown(socketTy hSocket, int how)
+{
+  return shutdown(hSocket, how);
+}
 
 void socketReuseAddr(socketTy hSocket)
 {
