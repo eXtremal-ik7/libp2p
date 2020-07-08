@@ -24,7 +24,8 @@ static Terminal httpHeaders[] = {
   {"Host:", hhHost},
   {"User-Agent:", hhUserAgent},
   {"Accept:", hhAccept},
-  {"Transfer-Encoding:", hhTransferEncoding}
+  {"Transfer-Encoding:", hhTransferEncoding},
+  {"Content-Length:", hhContentLength}
 };
 
 struct UriArg {
@@ -79,6 +80,27 @@ static ParserResultTy readUntilCRLF(const char **ptr, const char *end)
 
   (*ptr) += 2;
   return ParserResultOk;
+}
+
+static inline ParserResultTy readDec(const char **ptr, const char *end, size_t *size)
+{
+  *size = 0;
+  const char *p = *ptr;
+  while (p < end-2) {
+    if (*p == 0x0D && *(p+1) == 0x0A) {
+      *ptr = p+2;
+      return ParserResultOk;
+    } else if (*p >= '0' && *p <= '9') {
+      *size *= 10;
+      *size += static_cast<unsigned char>(*p-'0');
+    } else {
+      return ParserResultError;
+    }
+
+    p++;
+  }
+
+  return ParserResultNeedMoreData;
 }
 
 static inline ParserResultTy readHex(const char **ptr, const char *end, size_t *size)
@@ -290,6 +312,17 @@ ParserResultTy httpRequestParse(HttpRequestParserState *state, httpRequestParseC
             break;
           }
 
+          case hhContentLength : {
+            size_t contentSize;
+            if ( ( result = readDec(&p, state->end, &contentSize)) != ParserResultOk )
+              return result;
+            component.header.sizeValue = contentSize;
+            state->dataRemaining = contentSize;
+            if (!callback(&component, arg))
+              return ParserResultCancelled;
+            break;
+          }
+
           default : {
             component.header.stringValue.data = p;
             if ( ( result = readUntilCRLF(&p, state->end)) != ParserResultOk )
@@ -395,31 +428,25 @@ ParserResultTy httpRequestParse(HttpRequestParserState *state, httpRequestParseC
       }
     } else {
       const char *p = state->ptr;
-      while (p <= state->end-2) {
-        if (p[0] == '\r' && p[1] == '\n') {
-          component.type = httpRequestDtDataLast;
-          component.data.data = state->ptr;
-          component.data.size = p - state->ptr;
-          if (!callback(&component, arg))
-            return ParserResultCancelled;
-          state->state = httpRequestStLast;
-          state->ptr = p+2;
-          return ParserResultOk;
-        }
-
-        p++;
-      }
-
-      if (p != state->ptr) {
-        component.type = httpRequestDtData;
-        component.data.data = state->ptr;
-        component.data.size = state->end - state->ptr;
+      if (canRead(p, state->end, state->dataRemaining)) {
+        component.type = httpRequestDtDataLast;
+        component.data.data = p;
+        component.data.size = state->dataRemaining;
         if (!callback(&component, arg))
           return ParserResultCancelled;
-        state->ptr = state->end;
+        state->ptr = p + state->dataRemaining;
+        state->state = httpRequestStLast;
+      } else if (p != state->end) {
+        size_t size = std::min(state->dataRemaining, static_cast<size_t>(state->end - p));
+        component.type = httpRequestDtData;
+        component.data.data = p;
+        component.data.size = size;
+        if (!callback(&component, arg))
+          return ParserResultCancelled;
+        state->ptr = p + size;
+        state->dataRemaining -= size;
+        return ParserResultNeedMoreData;
       }
-
-      return ParserResultNeedMoreData;
     }
   }
 

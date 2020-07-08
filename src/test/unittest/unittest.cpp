@@ -1138,6 +1138,58 @@ static void httpRequestCb1Impl(HttpRequestComponent *component, void *arg)
   (*callNum)++;
 }
 
+static void httpRequestCb2Impl(HttpRequestComponent *component, void *arg)
+{
+  int *callNum = static_cast<int*>(arg);
+  if (*callNum == 0) {
+    ASSERT_EQ(component->type, httpRequestDtMethod);
+    ASSERT_EQ(component->method, hmPost);
+  } else if (*callNum == 1) {
+    ASSERT_EQ(component->type, httpRequestDtUriPathElement);
+    ASSERT_EQ(component->data.size, strlen("api"));
+    ASSERT_EQ(memcmp(component->data.data, "api", strlen("api")), 0);
+  } else if (*callNum == 2) {
+    ASSERT_EQ(component->type, httpRequestDtUriPathElement);
+    ASSERT_EQ(component->data.size, strlen("usercreate"));
+    ASSERT_EQ(memcmp(component->data.data, "usercreate", strlen("usercreate")), 0);
+  } else if (*callNum == 3) {
+    ASSERT_EQ(component->type, httpRequestDtVersion);
+    ASSERT_EQ(component->version.majorVersion, 1);
+    ASSERT_EQ(component->version.minorVersion, 1);
+  } else if (*callNum == 4) {
+    ASSERT_EQ(component->type, httpRequestDtHeaderEntry);
+    ASSERT_EQ(component->header.entryType, hhHost);
+    ASSERT_EQ(component->header.stringValue.size, strlen("localhost:18880"));
+    ASSERT_EQ(memcmp(component->header.stringValue.data, "localhost:18880", strlen("localhost:18880")), 0);
+  } else if (*callNum == 5) {
+    ASSERT_EQ(component->type, httpRequestDtHeaderEntry);
+    ASSERT_EQ(component->header.entryType, hhUserAgent);
+    ASSERT_EQ(component->header.stringValue.size, strlen("curl/7.58.0"));
+    ASSERT_EQ(memcmp(component->header.stringValue.data, "curl/7.58.0", strlen("curl/7.58.0")), 0);
+  } else if (*callNum == 6) {
+    ASSERT_EQ(component->type, httpRequestDtHeaderEntry);
+    ASSERT_EQ(component->header.entryType, hhAccept);
+    ASSERT_EQ(component->header.stringValue.size, strlen("*/*"));
+    ASSERT_EQ(memcmp(component->header.stringValue.data, "*/*", strlen("*/*")), 0);
+  } else if (*callNum == 7) {
+    ASSERT_EQ(component->type, httpRequestDtHeaderEntry);
+    ASSERT_EQ(component->header.entryType, hhContentLength);
+    ASSERT_EQ(component->header.sizeValue, 2);
+  } else if (*callNum == 8) {
+    ASSERT_EQ(component->type, httpRequestDtHeaderEntry);
+    ASSERT_EQ(component->header.entryName.size, strlen("Content-Type"));
+    ASSERT_EQ(memcmp(component->header.entryName.data, "Content-Type", strlen("Content-Type")), 0);
+    ASSERT_EQ(component->header.stringValue.size, strlen("application/x-www-form-urlencoded"));
+    ASSERT_EQ(memcmp(component->header.stringValue.data, "application/x-www-form-urlencoded", strlen("application/x-www-form-urlencoded")), 0);
+  } else if (*callNum == 9) {
+    ASSERT_EQ(component->type, httpRequestDtDataLast);
+    ASSERT_EQ(component->data.size, 2);
+    ASSERT_EQ(memcmp(component->data.data, "{}", 2), 0);
+  }
+
+  (*callNum)++;
+}
+
 static int httpRequestCb1(HttpRequestComponent *component, void *arg)
 {
   httpRequestCb1Impl(component, arg);
@@ -1146,15 +1198,30 @@ static int httpRequestCb1(HttpRequestComponent *component, void *arg)
 
 TEST(http, http_request_parser)
 {
-  int callNum = 0;
-  const char request1[] = "GET /path/to/page?qname=value#fragment HTTP/1.1\r\nHost: localhost:8080\r\nUser-Agent: curl/7.58.0\r\nAccept: */*\r\n\r\n\r\n";
-  HttpRequestParserState state;
-  httpRequestParserInit(&state);
-  httpRequestSetBuffer(&state, request1, sizeof(request1)-1);
-  ParserResultTy result = httpRequestParse(&state, httpRequestCb1, &callNum);
+  {
+    int callNum = 0;
+    const char request1[] = "GET /path/to/page?qname=value#fragment HTTP/1.1\r\nHost: localhost:8080\r\nUser-Agent: curl/7.58.0\r\nAccept: */*\r\n\r\n\r\n";
+    HttpRequestParserState state;
+    httpRequestParserInit(&state);
+    httpRequestSetBuffer(&state, request1, sizeof(request1)-1);
+    ParserResultTy result = httpRequestParse(&state, httpRequestCb1, &callNum);
+    ASSERT_EQ(result, ParserResultOk);
+    ASSERT_EQ(callNum, 11);
+  }
 
-  ASSERT_EQ(result, ParserResultOk);
-  ASSERT_EQ(callNum, 11);
+  {
+    int callNum = 0;
+    const char request[] = "POST /api/usercreate HTTP/1.1\r\nHost: localhost:18880\r\nUser-Agent: curl/7.58.0\r\nAccept: */*\r\nContent-Length: 2\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\n{}";
+    HttpRequestParserState state;
+    httpRequestParserInit(&state);
+    httpRequestSetBuffer(&state, request, sizeof(request)-1);
+    ParserResultTy result = httpRequestParse(&state, [](HttpRequestComponent *component, void *arg) -> int {
+      httpRequestCb2Impl(component, arg);
+      return 1;
+    }, &callNum);
+    ASSERT_EQ(result, ParserResultOk);
+    ASSERT_EQ(callNum, 10);
+  }
 }
 
 int main(int argc, char **argv)

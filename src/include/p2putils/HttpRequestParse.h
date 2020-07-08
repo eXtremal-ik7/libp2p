@@ -13,6 +13,7 @@ enum {
   hhUserAgent,
   hhAccept,
   hhTransferEncoding,
+  hhContentLength
 };
 
 enum {
