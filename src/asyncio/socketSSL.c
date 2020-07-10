@@ -184,11 +184,9 @@ static AsyncOpStatus connectProc(asyncOpRoot *opptr)
   SSLSocket *socket = (SSLSocket*)op->root.object;
 
   if (op->state == sslStInitalize) {
-      op->state = sslStProcessing;
-      aioConnect(socket->object, &op->address, 0, sslConnectConnectCb, op);
-      if (op->buffer)
-        SSL_set_tlsext_host_name(socket->ssl, op->buffer);
-      return aosPending;
+    op->state = sslStProcessing;
+    aioConnect(socket->object, &op->address, 0, sslConnectConnectCb, op);
+    return aosPending;
   }
 
   int connectResult = SSL_connect(socket->ssl);
@@ -260,8 +258,17 @@ void sslSocketDestructor(aioObjectRoot *root)
 }
 
 
-SSLSocket *sslSocketNew(asyncBase *base)
+SSLSocket *sslSocketNew(asyncBase *base, aioObject *existingSocket)
 {
+  // Create socket if need
+  aioObject *socket = existingSocket;
+  if (!socket) {
+    socketTy fd = socketCreate(AF_INET, SOCK_STREAM, IPPROTO_TCP, 1);
+    // TODO: check fd
+    socketReuseAddr(fd);
+    socket = newSocketIo(base, fd);
+  }
+
   SSLSocket *S = objectGet(sslSocketPool);
   if (!S) {
     S = (SSLSocket*)malloc(sizeof(SSLSocket));
@@ -283,7 +290,7 @@ SSLSocket *sslSocketNew(asyncBase *base)
   }
 
   initObjectRoot(&S->root, base, ioObjectUserDefined, sslSocketDestructor);
-  S->object = newSocketIo(base, socketCreate(AF_INET, SOCK_STREAM, IPPROTO_TCP, 1));
+  S->object = socket;
   return S;
 }
 
@@ -308,7 +315,15 @@ void aioSslConnect(SSLSocket *socket,
   struct Context context;
   fillContext(&context, connectProc, connectFinish, (void*)(uintptr_t)tlsextHostName, tlsextHostName ? strlen(tlsextHostName)+1 : 0);
   SSLOp *op = (SSLOp*)newWriteAsyncOp(&socket->root, afNone, usTimeout, (void*)callback, arg, sslOpConnect, &context);
-  op->address = *address;
+
+  if (address)
+    op->address = *address;
+  else
+    op->state = sslStProcessing;
+
+  if (tlsextHostName)
+    SSL_set_tlsext_host_name(socket->ssl, op->buffer);
+
   combinerPushOperation(&op->root, aaStart);
 }
 

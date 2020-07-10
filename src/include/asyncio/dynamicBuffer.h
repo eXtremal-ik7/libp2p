@@ -26,6 +26,7 @@ void *dynamicBufferAlloc(dynamicBuffer *buffer, size_t size);
 void dynamicBufferClear(dynamicBuffer *buffer);
 void *dynamicBufferPtr(dynamicBuffer *buffer);
 size_t dynamicBufferRemaining(dynamicBuffer *buffer);
+void dynamicBufferWrite(dynamicBuffer *buffer, void *data, size_t size);
 
 
 #ifdef __cplusplus

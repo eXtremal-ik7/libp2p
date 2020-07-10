@@ -1,0 +1,11 @@
+add_executable(smtp smtp.cpp)
+target_link_libraries(smtp asyncio-0.5 OpenSSL::SSL OpenSSL::Crypto)
+if (WIN32)
+  target_link_libraries(smtp ws2_32 mswsock)
+endif()
+
+add_executable(smtp2 smtp2.cpp)
+target_link_libraries(smtp2 asyncio-0.5 OpenSSL::SSL OpenSSL::Crypto)
+if (WIN32)
+  target_link_libraries(smtp2 ws2_32 mswsock)
+endif()

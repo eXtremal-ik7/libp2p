@@ -47,8 +47,8 @@ void *dynamicBufferAlloc(dynamicBuffer *buffer, size_t size)
   dynamicBufferGrow(buffer, size);
   ptr = dynamicBufferPtr(buffer);
   buffer->offset += size;
-  buffer->size = (buffer->offset > buffer->size) ?
-    buffer->offset : buffer->size;
+  if (buffer->offset > buffer->size)
+    buffer->size = buffer->offset;
     
   return ptr;
 }
@@ -70,4 +70,14 @@ void *dynamicBufferPtr(dynamicBuffer *buffer)
 size_t dynamicBufferRemaining(dynamicBuffer *buffer)
 {
   return buffer->size - buffer->offset;
+}
+
+
+void dynamicBufferWrite(dynamicBuffer *buffer, void *data, size_t size)
+{
+  dynamicBufferGrow(buffer, size);
+  memcpy(dynamicBufferPtr(buffer), data, size);
+  buffer->offset += size;
+  if (buffer->offset > buffer->size)
+    buffer->size = buffer->offset;
 }

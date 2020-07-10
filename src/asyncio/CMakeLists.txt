@@ -8,15 +8,16 @@ set(Sources
   dynamicBuffer.c
   ringBuffer.c
   timer.c
+
+  http.c
+  smtp.c
+
+  base64.c
 )
 
 if (SSL_ENABLED)
   include_directories(${OPENSSL_INCLUDE_DIR})
   set(Sources ${Sources} socketSSL.c)
-endif()
-
-if (HTTP_ENABLED)
-  set(Sources ${Sources} http.c)
 endif()
 
 if (WIN32)

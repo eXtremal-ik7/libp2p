@@ -17,7 +17,8 @@ typedef void sslCb(AsyncOpStatus status, SSLSocket *object, size_t transferred, 
 typedef struct SSLSocket {
   aioObjectRoot root;
   
-  aioObject *object;  
+  aioObject *object;
+  int isConnected;
   SSL_CTX *sslContext;
   SSL *ssl;
   BIO *bioIn;
@@ -40,7 +41,7 @@ typedef struct SSLOp {
 } SSLOp;
 
 
-SSLSocket *sslSocketNew(asyncBase *base);
+SSLSocket *sslSocketNew(asyncBase *base, aioObject *existingSocket);
 void sslSocketDelete(SSLSocket *socket);
 
 socketTy sslGetSocket(const SSLSocket *socket);
