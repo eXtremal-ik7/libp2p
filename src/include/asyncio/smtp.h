@@ -23,6 +23,7 @@ typedef void smtpConnectCb(AsyncOpStatus, struct SMTPClient*, void*);
 typedef void smtpResponseCb(AsyncOpStatus, unsigned code, struct SMTPClient*, void*);
 
 SMTPClient *smtpClientNew(asyncBase *base, HostAddress localAddress, SmtpServerType type);
+void smtpClientDelete(SMTPClient *client);
 int smtpClientGetResultCode(SMTPClient *client);
 const char *smtpClientGetResponse(SMTPClient *client);
 

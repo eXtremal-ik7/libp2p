@@ -513,6 +513,11 @@ SMTPClient *smtpClientNew(asyncBase *base, HostAddress localAddress, SmtpServerT
   return client;
 }
 
+void smtpClientDelete(SMTPClient *client)
+{
+  objectDelete(&client->root);
+}
+
 int smtpClientGetResultCode(SMTPClient *client)
 {
   return client->ResultCode;
