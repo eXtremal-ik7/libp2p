@@ -513,6 +513,11 @@ SMTPClient *smtpClientNew(asyncBase *base, HostAddress localAddress, SmtpServerT
   return client;
 }
 
+int smtpClientGetResultCode(SMTPClient *client)
+{
+  return client->ResultCode;
+}
+
 const char *smtpClientGetResponse(SMTPClient *client)
 {
   return client->Response;
@@ -521,7 +526,6 @@ const char *smtpClientGetResponse(SMTPClient *client)
 void aioSmtpConnect(SMTPClient *client, HostAddress address, uint64_t usTimeout, smtpConnectCb callback, void *arg)
 {
   SMTPOp *op = allocSmtpOp(smtpConnectStart, connectFinish, client, SmtpOpConnect, (void*)callback, arg, afNone, usTimeout);
-
   op->Address = address;
   combinerPushOperation(&op->Root, aaStart);
 }
@@ -549,6 +553,58 @@ void aioSmtpCommand(SMTPClient *client, const char *command, AsyncFlags flags, u
   dynamicBufferWriteString(&op->Buffer, command);
   dynamicBufferWriteString(&op->Buffer, "\r\n");
   combinerPushOperation(&op->Root, aaStart);
+}
+
+int ioSmtpConnect(SMTPClient *client, HostAddress address, uint64_t usTimeout)
+{
+  SMTPOp *op = allocSmtpOp(smtpConnectStart, connectFinish, client, SmtpOpConnect, 0, 0, afCoroutine, usTimeout);
+  op->Address = address;
+  combinerPushOperation(&op->Root, aaStart);
+  coroutineYield();
+  AsyncOpStatus status = opGetStatus(&op->Root);
+  objectRelease(&op->Root, op->Root.poolId);
+  objectDecrementReference(&client->root, 1);
+  return status == aosSuccess ? 0 : -status;
+}
+
+int ioSmtpStartTls(SMTPClient *client, AsyncFlags flags, uint64_t usTimeout)
+{
+  SMTPOp *op = allocSmtpOp(smtpStartTlsStart, commandFinish, client, SmtpOpStartTls, 0, 0, flags | afCoroutine, usTimeout);
+  combinerPushOperation(&op->Root, aaStart);
+  coroutineYield();
+  AsyncOpStatus status = opGetStatus(&op->Root);
+  objectRelease(&op->Root, op->Root.poolId);
+  objectDecrementReference(&client->root, 1);
+  return status == aosSuccess ? 0 : -status;
+}
+
+int ioSmtpLogin(SMTPClient *client, const char *login, const char *password, AsyncFlags flags, uint64_t usTimeout)
+{
+  SMTPOp *op = allocSmtpOp(smtpLoginStart, commandFinish, client, SmtpOpCommand, 0, 0, flags | afCoroutine, usTimeout);
+  size_t loginOffset = putBase64(&op->Buffer, login, &op->loginSize);
+  size_t passwordOffset = putBase64(&op->Buffer, password, &op->passwordSize);
+  op->login = (char*)op->Buffer.data + loginOffset;
+  op->password = (char*)op->Buffer.data + passwordOffset;
+  combinerPushOperation(&op->Root, aaStart);
+  coroutineYield();
+  AsyncOpStatus status = opGetStatus(&op->Root);
+  objectRelease(&op->Root, op->Root.poolId);
+  objectDecrementReference(&client->root, 1);
+  return status == aosSuccess ? 0 : -status;
+}
+
+int ioSmtpCommand(SMTPClient *client, const char *command, AsyncFlags flags, uint64_t usTimeout)
+{
+  size_t commandSize = strlen(command)+2;
+  SMTPOp *op = allocSmtpOp(smtpCommandStart, commandFinish, client, SmtpOpCommand, 0, 0, flags | afCoroutine, usTimeout);
+  dynamicBufferWriteString(&op->Buffer, command);
+  dynamicBufferWriteString(&op->Buffer, "\r\n");
+  combinerPushOperation(&op->Root, aaStart);
+  coroutineYield();
+  AsyncOpStatus status = opGetStatus(&op->Root);
+  objectRelease(&op->Root, op->Root.poolId);
+  objectDecrementReference(&client->root, 1);
+  return status == aosSuccess ? 0 : -status;
 }
 
 void aioSmtpSendMail(SMTPClient *client,
@@ -625,4 +681,83 @@ void aioSmtpSendMail(SMTPClient *client,
   op->startTls = startTls;
 
   combinerPushOperation(&op->Root, aaStart);
+}
+
+int ioSmtpSendMail(SMTPClient *client,
+                   HostAddress smtpServerAddress,
+                   int startTls,
+                   const char *localHost,
+                   const char *login,
+                   const char *password,
+                   const char *from,
+                   const char *to,
+                   const char *subject,
+                   const char *text,
+                   AsyncFlags flags,
+                   uint64_t usTimeout)
+{
+  SMTPOp *op = allocSmtpOp(smtpSendMailStart, commandFinish, client, SmtpOpCommand, 0, 0, flags | afCoroutine, usTimeout);
+  size_t ehloOffset;
+  size_t fromOffset;
+  size_t toOffset;
+  size_t textOffset;
+
+  size_t loginOffset = putBase64(&op->Buffer, login, &op->loginSize);
+  size_t passwordOffset = putBase64(&op->Buffer, password, &op->passwordSize);
+
+  {
+    ehloOffset = op->Buffer.offset;
+    dynamicBufferWriteString(&op->Buffer, "EHLO ");
+    dynamicBufferWriteString(&op->Buffer, localHost);
+    dynamicBufferWriteString(&op->Buffer, "\r\n");
+    op->ehloSize = op->Buffer.offset - ehloOffset;
+  }
+  {
+    fromOffset = op->Buffer.offset;
+    dynamicBufferWriteString(&op->Buffer, "MAIL From: <");
+    dynamicBufferWriteString(&op->Buffer, from);
+    dynamicBufferWriteString(&op->Buffer, ">\r\n");
+    op->fromSize = op->Buffer.offset - fromOffset;
+  }
+  {
+    toOffset = op->Buffer.offset;
+    dynamicBufferWriteString(&op->Buffer, "RCPT To: <");
+    dynamicBufferWriteString(&op->Buffer, to);
+    dynamicBufferWriteString(&op->Buffer, ">\r\n");
+    op->toSize = op->Buffer.offset - toOffset;
+  }
+  {
+    textOffset = op->Buffer.offset;
+    dynamicBufferWriteString(&op->Buffer, "From: ");
+    dynamicBufferWriteString(&op->Buffer, from);
+    dynamicBufferWriteString(&op->Buffer, "\r\n");
+
+    dynamicBufferWriteString(&op->Buffer, "To: ");
+    dynamicBufferWriteString(&op->Buffer, to);
+    dynamicBufferWriteString(&op->Buffer, "\r\n");
+
+    dynamicBufferWriteString(&op->Buffer, "Subject: ");
+    dynamicBufferWriteString(&op->Buffer, subject);
+    dynamicBufferWriteString(&op->Buffer, "\r\n");
+
+    dynamicBufferWriteString(&op->Buffer, text);
+    dynamicBufferWriteString(&op->Buffer, "\r\n.\r\n");
+    op->textSize = op->Buffer.offset - textOffset;
+  }
+
+  op->Address = smtpServerAddress;
+  op->ehlo = (char*)op->Buffer.data + ehloOffset;
+  op->login = (char*)op->Buffer.data + loginOffset;
+  op->password = (char*)op->Buffer.data + passwordOffset;
+  op->from = (char*)op->Buffer.data + fromOffset;
+  op->to = (char*)op->Buffer.data + toOffset;
+  op->text = (char*)op->Buffer.data + textOffset;
+  op->startTls = startTls;
+
+  combinerPushOperation(&op->Root, aaStart);
+  coroutineYield();
+  AsyncOpStatus status = opGetStatus(&op->Root);
+  objectRelease(&op->Root, op->Root.poolId);
+  objectDecrementReference(&client->root, 1);
+  return status == aosSuccess ? 0 : -status;
 }
