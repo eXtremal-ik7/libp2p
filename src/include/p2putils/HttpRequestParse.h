@@ -1,33 +1,13 @@
+#ifndef __LIBP2P_HTTPREQUESTPARSE_H_
+#define __LIBP2P_HTTPREQUESTPARSE_H_
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#ifndef __LIBP2P_HTTPREQUESTPARSE_H_
-#define __LIBP2P_HTTPREQUESTPARSE_H_
-
-#include "p2putils/CommonParse.h"
+#include "HttpParseCommon.h"
+#include "CommonParse.h"
 #include <stddef.h>
-
-enum {
-  hhHost = 1,
-  hhUserAgent,
-  hhAccept,
-  hhTransferEncoding,
-  hhContentLength
-};
-
-enum {
-  hmUnknown = 0,
-  hmGet,
-  hmHead,
-  hmPost,
-  hmPut,
-  hmDelete,
-  hmConnect,
-  hmOptions,
-  hmTrace,
-  hmPatch
-};
 
 typedef enum HttpRequestParserStateTy {
   httpRequestMethod = 0,
@@ -51,7 +31,7 @@ typedef enum HttpRequestParserDataTy {
   httpRequestDtHeaderEntry,
   httpRequestDtData,
   httpRequestDtDataLast,
-} HttpParserDataTy;
+} HttpRequestParserDataTy;
 
 typedef struct HttpRequestParserState {
   HttpRequestParserStateTy state;
@@ -87,7 +67,7 @@ typedef struct HttpRequestComponent {
     } header;
   };
   Raw data2;
-} HttpComponent;
+} HttpRequestComponent;
 
 typedef int httpRequestParseCb(HttpRequestComponent *component, void *arg);
 
@@ -98,8 +78,8 @@ ParserResultTy httpRequestParse(HttpRequestParserState *state, httpRequestParseC
 const void *httpRequestDataPtr(HttpRequestParserState *state);
 size_t httpRequestDataRemaining(HttpRequestParserState *state);
 
-#endif //__LIBP2P_HTTPREQUESTPARSE_H_
-
 #ifdef __cplusplus
 }
 #endif
+
+#endif //__LIBP2P_HTTPREQUESTPARSE_H_

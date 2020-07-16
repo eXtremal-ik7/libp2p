@@ -1,22 +1,14 @@
+#ifndef __LIBP2P_HTTPPARSE_H_
+#define __LIBP2P_HTTPPARSE_H_
+
 #ifdef __cplusplus
 extern "C" {
 #endif 
 
-#ifndef __LIBP2P_HTTPPARSE_H_
-#define __LIBP2P_HTTPPARSE_H_
-
 #include <stddef.h>
 #include <stdint.h>
 #include "CommonParse.h"
-
-enum {
-  hhContentLength = 1,
-  hhContentType,
-  hhConnection,
-  hhDate,
-  hhServer,
-  hhTransferEncoding
-};
+#include "HttpParseCommon.h"
 
 typedef enum HttpParserStateTy {
   httpStStartLine = 0,
@@ -78,8 +70,8 @@ ParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void *arg
 const void *httpDataPtr(HttpParserState *state);
 size_t httpDataRemaining(HttpParserState *state);
 
-#endif //__LIBP2P_HTTPPARSE_H_
-
 #ifdef __cplusplus
 }
 #endif
+
+#endif //__LIBP2P_HTTPPARSE_H_
