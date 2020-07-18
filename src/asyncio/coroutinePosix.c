@@ -83,7 +83,7 @@ static int fiberInit(coroutineTy *coroutine, size_t stackSize)
 
 int coroutineIsMain()
 {
-  return currentCoroutine->prev == 0;
+  return !currentCoroutine || currentCoroutine->prev == 0;
 }
 
 coroutineTy *coroutineCurrent()
