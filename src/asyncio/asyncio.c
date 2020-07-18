@@ -676,3 +676,10 @@ void ioSleep(aioUserEvent *event, uint64_t usTimeout)
   event->base->methodImpl.startTimer(&event->root);
   coroutineYield();
 }
+
+void ioWaitUserEvent(aioUserEvent *event)
+{
+  event->root.callback = (void*)coroutineEventCb;
+  event->root.arg = coroutineCurrent();
+  coroutineYield();
+}

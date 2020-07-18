@@ -102,6 +102,7 @@ ssize_t ioReadMsg(aioObject *object, void *buffer, size_t size, AsyncFlags flags
 ssize_t ioWrite(aioObject *object, const void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
 ssize_t ioWriteMsg(aioObject *object, const HostAddress *address, const void *buffer, size_t size, AsyncFlags flags, uint64_t usTimeout);
 void ioSleep(aioUserEvent *event, uint64_t usTimeout);
+void ioWaitUserEvent(aioUserEvent *event);
 
 void asyncLoop(asyncBase *base);
 void postQuitOperation(asyncBase *base);
