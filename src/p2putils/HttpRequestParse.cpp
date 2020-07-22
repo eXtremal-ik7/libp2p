@@ -1,12 +1,12 @@
 #include "macro.h"
+#include "LiteFlatHashTable.h"
 #include "p2putils/HttpRequestParse.h"
 #include "p2putils/uriParse.h"
-#include "FSMTable.h"
 #include <string.h>
 #include <algorithm>
 
-static StateElement *methodNames = nullptr;
-static StateElement *headerNames = nullptr;
+static LiteFlatHashTable *methodNames = nullptr;
+static LiteFlatHashTable *headerNames = nullptr;
 
 static Terminal httpMethods[] = {
   {"GET", hmGet},
@@ -138,9 +138,9 @@ void httpRequestParserInit(HttpRequestParserState *state)
   state->dataRemaining = 0;
   state->firstFragment = true;
   if (!headerNames)
-    headerNames = buildTable(httpHeaders, sizeof(httpHeaders) / sizeof(Terminal));
+    headerNames = buildLiteFlatHashTable(httpHeaders, sizeof(httpHeaders) / sizeof(Terminal));
   if (!methodNames)
-    methodNames = buildTable(httpMethods, sizeof(httpMethods)/ sizeof(Terminal));
+    methodNames = buildLiteFlatHashTable(httpMethods, sizeof(httpMethods)/ sizeof(Terminal));
 }
 
 void httpRequestSetBuffer(HttpRequestParserState *state, const void *buffer, size_t size)
@@ -159,7 +159,8 @@ ParserResultTy httpRequestParse(HttpRequestParserState *state, httpRequestParseC
 
   if (state->state == httpRequestMethod) {
     int token;
-    ParserResultTy result = simpleTableParse(&state->ptr, state->end, methodNames, &token);
+    char space = ' ';
+    ParserResultTy result = searchLiteFlatHashTable(&state->ptr, state->end, &space, 1, methodNames, &token);
     if (result == ParserResultOk) {
       if (token == hmPost)
         state->haveBody = 1;
@@ -293,7 +294,8 @@ ParserResultTy httpRequestParse(HttpRequestParserState *state, httpRequestParseC
 
       int token;
       const char *p = state->ptr;
-      ParserResultTy result = simpleTableParse(&p, state->end, headerNames, &token);
+      char space = ' ';
+      ParserResultTy result = searchLiteFlatHashTable(&p, state->end, &space, 1, headerNames, &token);
       if (result == ParserResultOk) {
         component.header.entryType = token;
         skipSPCharacters(&p, state->end);

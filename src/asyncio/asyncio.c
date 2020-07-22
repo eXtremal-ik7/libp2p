@@ -72,7 +72,8 @@ static void readMsgFinish(asyncOpRoot *opptr)
 
 static void eventFinish(asyncOpRoot *root)
 {
-  ((aioEventCb*)root->callback)((aioUserEvent*)root, root->arg);
+  if (root->callback)
+    ((aioEventCb*)root->callback)((aioUserEvent*)root, root->arg);
 }
 
 static asyncOpRoot *newAsyncOp(aioObjectRoot *object,
@@ -682,4 +683,6 @@ void ioWaitUserEvent(aioUserEvent *event)
   event->root.callback = (void*)coroutineEventCb;
   event->root.arg = coroutineCurrent();
   coroutineYield();
+  event->root.callback = 0;
+  event->root.arg = 0;
 }

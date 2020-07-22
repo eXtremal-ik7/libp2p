@@ -530,6 +530,7 @@ int executeGlobalQueue(asyncBase *base)
       }
 
       default : {
+        assert(opGetStatus(op) != aosPending && "finishing pending operation!");
         currentFinishedSync = 0;
         if (op->flags & afCoroutine) {
           assert(coroutineIsMain() && "Execute global queue from non-main coroutine");

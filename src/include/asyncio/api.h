@@ -5,6 +5,7 @@
 extern "C" {
 #endif
 
+#include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "coroutine.h"
@@ -340,7 +341,8 @@ static inline asyncOpRoot *combinerAcquire(aioObjectRoot *object,
   }
 }
 
-static inline void combinerPushOperation(asyncOpRoot *op, AsyncOpActionTy actionType) {
+static inline void combinerPushOperation(asyncOpRoot *op, AsyncOpActionTy actionType)
+{
   aioObjectRoot *object = op->object;
   AsyncOpTaggedPtr opTagged = taggedAsyncOpMake(op, actionType, 0);
   AsyncOpTaggedPtr newOp;
@@ -409,6 +411,7 @@ static inline asyncOpRoot *runIoOperation(aioObjectRoot *object,
                                           int opCode,
                                           void *contextPtr)
 {
+  assert(!coroutineIsMain() && "Trying to run 'io' operation from main coroutine");
   asyncOpRoot *op = combinerAcquire(object, !(opCode & OPCODE_WRITE) ? &object->readQueue : &object->writeQueue, aaStart, createAsyncOp, flags | afCoroutine, usTimeout, 0, 0, opCode, contextPtr);
   if (!op) {
     // Object locked by current operation

@@ -1,12 +1,12 @@
 #include "macro.h"
 #include "p2putils/HttpParse.h"
-#include "FSMTable.h"
+#include "LiteFlatHashTable.h"
 #include <stdlib.h>
 #include <string.h>
 #include <algorithm>
 #include <vector>
 
-static StateElement *headerNames = nullptr;
+static LiteFlatHashTable *headerNames = nullptr;
 
 static Terminal httpHeaders[] = {
   {"Content-Length:", hhContentLength},
@@ -160,7 +160,7 @@ void httpInit(HttpParserState *state)
   state->dataRemaining = 0;
   state->firstFragment = true;
   if (!headerNames)
-    headerNames = buildTable(httpHeaders, sizeof(httpHeaders)/sizeof(Terminal));
+    headerNames = buildLiteFlatHashTable(httpHeaders, sizeof(httpHeaders)/sizeof(Terminal));
 }
 
 void httpSetBuffer(HttpParserState *state, const void *buffer, size_t size)
@@ -191,7 +191,8 @@ ParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void *arg
         } else {
           int token;
           const char *p = state->ptr;
-          ParserResultTy result = simpleTableParse(&p, state->end, headerNames, &token);
+          char space = ' ';
+          ParserResultTy result = searchLiteFlatHashTable(&p, state->end, &space, 1, headerNames, &token);
           if (result == ParserResultOk) {
             component.header.entryType = token;
             skipSPCharacters(&p, state->end);
