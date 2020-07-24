@@ -1,4 +1,4 @@
-#include "config.h"
+#include "libp2pconfig.h"
 #include "macro.h"
 #include "p2putils/uriParse.h"
 #include "p2putils/strExtras.h"

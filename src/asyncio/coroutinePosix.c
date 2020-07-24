@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include "asyncio/coroutine.h"
-#include "config.h"
+#include "libp2pconfig.h"
 
 typedef struct contextTy {
 #ifdef __i386__

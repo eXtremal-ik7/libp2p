@@ -83,8 +83,8 @@ endif(MSVC)
 include(TestBigEndian)
 TEST_BIG_ENDIAN(IS_BIGENDIAN)
 configure_file(
-  ${CMAKE_CURRENT_SOURCE_DIR}/include/config.h.in
-  ${CMAKE_CURRENT_BINARY_DIR}/include/config.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/libp2pconfig.h.in
+  ${CMAKE_CURRENT_BINARY_DIR}/include/libp2pconfig.h
 )
 
 include_directories(

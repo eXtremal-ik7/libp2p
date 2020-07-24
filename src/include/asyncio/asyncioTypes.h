@@ -1,7 +1,7 @@
 #ifndef __ASYNCTYPES_H_
 #define __ASYNCTYPES_H_
 
-#include "config.h"
+#include "libp2pconfig.h"
 #include <stdint.h>
 
 #if defined(OS_WINDOWS)
