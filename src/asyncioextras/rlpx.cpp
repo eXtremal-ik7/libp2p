@@ -1,5 +1,7 @@
 #include "asyncioextras/rlpx.h"
 #include "asyncio/objectPool.h"
+#include "asyncio/api.h"
+#include "macro.h"
 #include <stdlib.h>
 
 static const char *rplxSocketPool = "rlpxSocket";
@@ -37,15 +39,10 @@ __NO_PADDING_END
 
 static asyncOpRoot *alloc()
 {
-  return static_cast<asyncOpRoot*>(malloc(sizeof(RlpxOperation)));
+  return static_cast<asyncOpRoot*>(allocAsyncOp(sizeof(RlpxOperation)));
 }
 
 static void resumeConnectCb(AsyncOpStatus status, aioObject*, void *arg)
-{
-  resumeParent(static_cast<asyncOpRoot*>(arg), status);
-}
-
-static void resumeRwCb(AsyncOpStatus status, aioObject*, size_t, void *arg)
 {
   resumeParent(static_cast<asyncOpRoot*>(arg), status);
 }
@@ -108,6 +105,8 @@ RlpxOperation *initWriteOp(aioExecuteProc *start,
                     void *data,
                     size_t size)
 {
+  __UNUSED(data);
+  __UNUSED(size);
   asyncOpRoot *opptr =
     initAsyncOpRoot(poolId, timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
   RlpxOperation *op = reinterpret_cast<RlpxOperation*>(opptr);
@@ -135,8 +134,14 @@ static AsyncOpStatus startRlpxConnect(asyncOpRoot *opptr)
       case StConnectWriteAuth : {
         // auth = auth-size || ecies.encrypt([sig, initiator-pubk, initiator-nonce, auth-vsn, ...])
       }
+
+      default:
+        return aosUnknownError;
     }
   }
+
+  combinerPushOperation(childOp, aaStart);
+  return aosPending;
 }
 
 rlpxSocket *rlpxSocketNew(asyncBase *base, aioObject *plainSocket)
@@ -166,6 +171,7 @@ aioObject *rlpxGetPlainSocket(rlpxSocket *socket)
 
 static AsyncOpStatus startRlpxAccept(asyncOpRoot *opptr)
 {
+  __UNUSED(opptr);
   return aosUnknownError;
 }
 
@@ -185,30 +191,61 @@ void aioRlpxConnect(rlpxSocket *socket, HostAddress address, AsyncFlags flags, u
 
 ssize_t aioRlpxRecv(rlpxSocket *socket, xmstream &stream, size_t sizeLimit, AsyncFlags flags, uint64_t timeout, rlpxRecvCb callback, void *arg)
 {
+  __UNUSED(socket);
+  __UNUSED(stream);
+  __UNUSED(sizeLimit);
+  __UNUSED(flags);
+  __UNUSED(timeout);
+  __UNUSED(callback);
+  __UNUSED(arg);
   return 0;
 }
 
 ssize_t aioRlpxSend(rlpxSocket *socket, void *data, size_t size, AsyncFlags flags, uint64_t timeout, rlpxSendCb callback, void *arg)
 {
+  __UNUSED(socket);
+  __UNUSED(data);
+  __UNUSED(size);
+  __UNUSED(flags);
+  __UNUSED(timeout);
+  __UNUSED(callback);
+  __UNUSED(arg);
   return 0;
 }
 
 int ioRlpxAccept(rlpxSocket *socket, AsyncFlags flags, uint64_t timeout)
 {
+  __UNUSED(socket);
+  __UNUSED(flags);
+  __UNUSED(timeout);
   return 0;
 }
 
 int ioRlpxConnect(rlpxSocket *socket, HostAddress address, AsyncFlags flags, uint64_t timeout)
 {
+  __UNUSED(socket);
+  __UNUSED(address);
+  __UNUSED(flags);
+  __UNUSED(timeout);
   return 0;
 }
 
 ssize_t ioRlpxRecv(rlpxSocket *socket, xmstream &stream, size_t sizeLimit, AsyncFlags flags, uint64_t timeout)
 {
+  __UNUSED(socket);
+  __UNUSED(stream);
+  __UNUSED(sizeLimit);
+  __UNUSED(flags);
+  __UNUSED(timeout);
   return 0;
 }
 
 ssize_t ioRlpxSend(rlpxSocket *socket, void *data, size_t size, AsyncFlags flags, uint64_t timeout)
 {
+  __UNUSED(socket);
+  __UNUSED(data);
+  __UNUSED(size);
+  __UNUSED(flags);
+  __UNUSED(timeout);
   return 0;
 }

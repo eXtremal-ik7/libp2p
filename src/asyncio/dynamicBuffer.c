@@ -1,6 +1,7 @@
 #include "asyncio/dynamicBuffer.h"
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 
 void dynamicBufferGrow(dynamicBuffer *buffer, size_t extra)
@@ -73,7 +74,7 @@ size_t dynamicBufferRemaining(dynamicBuffer *buffer)
 }
 
 
-void dynamicBufferWrite(dynamicBuffer *buffer, void *data, size_t size)
+void dynamicBufferWrite(dynamicBuffer *buffer, const void *data, size_t size)
 {
   dynamicBufferGrow(buffer, size);
   memcpy(dynamicBufferPtr(buffer), data, size);

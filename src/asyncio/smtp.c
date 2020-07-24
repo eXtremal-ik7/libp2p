@@ -71,7 +71,7 @@ typedef struct SMTPOp {
   size_t textSize;
 } SMTPOp;
 
-static inline size_t putBase64(dynamicBuffer *buffer, const char *data, size_t *size)
+static inline size_t putBase64(dynamicBuffer *buffer, const void *data, size_t *size)
 {
   size_t length = strlen(data);
   size_t base64Length = base64getEncodeLength(length);
@@ -175,7 +175,7 @@ static void smtpParse(AsyncOpStatus status, SMTPClient *client, size_t bytesRead
   // Check begin of response (must be 3-digit number)
   {
     if (!isDigits(client->buffer, 3)) {
-      resumeParent(&op->Root, smtpInvalidFormat);
+      resumeParent(&op->Root, (AsyncOpStatus)smtpInvalidFormat);
       return;
     }
 
@@ -207,7 +207,7 @@ static void smtpParse(AsyncOpStatus status, SMTPClient *client, size_t bytesRead
 
       linesCount++;
       if (client->end - p < 3 || memcmp(p, firstReplyCode, 3) != 0) {
-        resumeParent(&op->Root, smtpInvalidFormat);
+        resumeParent(&op->Root, (AsyncOpStatus)smtpInvalidFormat);
         return;
       }
 
@@ -235,7 +235,7 @@ static void smtpParse(AsyncOpStatus status, SMTPClient *client, size_t bytesRead
 
     *out = 0;
     client->Response = client->buffer;
-    resumeParent(&op->Root, (client->ResultCode >= 200 && client->ResultCode <= 399) ? aosSuccess : smtpError);
+    resumeParent(&op->Root, (client->ResultCode >= 200 && client->ResultCode <= 399) ? aosSuccess : (AsyncOpStatus)smtpError);
   } else {
     // Orher response parse
     // Find '\n'
@@ -244,7 +244,7 @@ static void smtpParse(AsyncOpStatus status, SMTPClient *client, size_t bytesRead
       client->Response = client->buffer + 4;
       *(lf-1) = 0;
       client->ptr = lf+1;
-      resumeParent(&op->Root, (client->ResultCode >= 200 && client->ResultCode <= 399) ? aosSuccess : smtpError);
+      resumeParent(&op->Root, (client->ResultCode >= 200 && client->ResultCode <= 399) ? aosSuccess : (AsyncOpStatus)smtpError);
     } else {
       smtpRead(client, op);
     }
@@ -553,7 +553,6 @@ void aioSmtpLogin(SMTPClient *client, const char *login, const char *password, A
 
 void aioSmtpCommand(SMTPClient *client, const char *command, AsyncFlags flags, uint64_t usTimeout, smtpResponseCb callback, void *arg)
 {
-  size_t commandSize = strlen(command)+2;
   SMTPOp *op = allocSmtpOp(smtpCommandStart, commandFinish, client, SmtpOpCommand, (void*)callback, arg, flags, usTimeout);
   dynamicBufferWriteString(&op->Buffer, command);
   dynamicBufferWriteString(&op->Buffer, "\r\n");
@@ -600,7 +599,6 @@ int ioSmtpLogin(SMTPClient *client, const char *login, const char *password, Asy
 
 int ioSmtpCommand(SMTPClient *client, const char *command, AsyncFlags flags, uint64_t usTimeout)
 {
-  size_t commandSize = strlen(command)+2;
   SMTPOp *op = allocSmtpOp(smtpCommandStart, commandFinish, client, SmtpOpCommand, 0, 0, flags | afCoroutine, usTimeout);
   dynamicBufferWriteString(&op->Buffer, command);
   dynamicBufferWriteString(&op->Buffer, "\r\n");
