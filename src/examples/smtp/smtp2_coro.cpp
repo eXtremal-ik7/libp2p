@@ -65,7 +65,7 @@ void sendMailCoro(void *arg)
 int main(int argc, char **argv)
 {
   if (argc != 10) {
-    fprintf(stderr, "usage: %s <server:port> <type> <host> <from> <to> <subject> <text>\n", argv[0]);
+    fprintf(stderr, "usage: %s <server:port> <type> <client host> <login> <password> <from> <to> <subject> <text>\n", argv[0]);
     return 1;
   }
 
