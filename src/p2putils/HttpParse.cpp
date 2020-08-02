@@ -231,6 +231,15 @@ ParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void *arg
                 callback(&component, arg);
                 break;
               }
+
+              default : {
+                component.header.stringValue.data = p;
+                if ( ( result = readUntilCRLF(&p, state->end)) != ParserResultOk )
+                  return result;
+                component.header.stringValue.size = static_cast<size_t>(p-component.header.stringValue.data-2);
+                callback(&component, arg);
+                break;
+              }
             }
 
             state->ptr = p;
