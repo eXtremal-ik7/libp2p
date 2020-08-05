@@ -80,16 +80,15 @@ static const char base64EncodeTable[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklm
 
 size_t base64GetDecodeLength(const char *in)
 {
-  size_t bytesDecoded;
-  size_t bytesRemaining;
   const uint8_t *p = (const uint8_t*)in;
-
-  while (base64DecodeTable[*(p++)] <= 63)
+  while (base64DecodeTable[*p++] <= 63)
     continue;
+  --p;
+  size_t padding = 0;
+  while (*p++ == '=')
+    padding++;
 
-  bytesRemaining = (p - (const uint8_t*)in) - 1;
-  bytesDecoded = ((bytesRemaining + 3) / 4) * 3;
-  return bytesDecoded;
+  return 3*((p-(const uint8_t*)in)/4) - padding;
 }
 
 
