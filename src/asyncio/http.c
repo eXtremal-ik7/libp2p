@@ -2,12 +2,11 @@
 
 #include "asyncio/asyncio.h"
 #include "asyncio/coroutine.h"
-#include "asyncio/objectPool.h"
 #include <string.h>
 
-static const char *httpClientPool = "HTTPClient";
-static const char *httpPoolId = "HTTP";
-static const char *httpPoolTimerId = "HTTPTimer";
+static ConcurrentRingBuffer opPool;
+static ConcurrentRingBuffer opTimerPool;
+static ConcurrentRingBuffer objectPool;
 
 typedef enum {
   httpOpConnect = 0,
@@ -15,15 +14,6 @@ typedef enum {
 } HttpOpTy;
 
 static AsyncOpStatus httpParseStart(asyncOpRoot *opptr);
-
-static asyncOpRoot *alloc()
-{
-  HTTPOp *op = (HTTPOp*)allocAsyncOp(sizeof(HTTPOp));
-  op->internalBuffer = 0;
-  op->dataSize = 0;
-  op->internalBufferSize = 0;
-  return &op->root;
-}
 
 static int cancel(asyncOpRoot *opptr)
 {
@@ -179,6 +169,12 @@ static AsyncOpStatus httpParseStart(asyncOpRoot *opptr)
   }
 }
 
+static void releaseProc(asyncOpRoot *opptr)
+{
+  HTTPOp *op = (HTTPOp*)opptr;
+  if (op->internalBuffer)
+    free(op->internalBuffer);
+}
 
 static HTTPOp *allocHttpOp(aioExecuteProc executeProc,
                            aioFinishProc finishProc,
@@ -191,9 +187,14 @@ static HTTPOp *allocHttpOp(aioExecuteProc executeProc,
                            AsyncFlags flags,
                            uint64_t timeout)
 {
-  HTTPOp *op = (HTTPOp*)
-    initAsyncOpRoot(httpPoolId, httpPoolTimerId, alloc, executeProc, cancel, finishProc, &client->root, callback, arg, flags, type, timeout);
+  HTTPOp *op = 0;
+  if (asyncOpAlloc(client->root.base, sizeof(HTTPOp), flags & afRealtime, &opPool, &opTimerPool, (asyncOpRoot**)&op)) {
+    op->internalBuffer = 0;
+    op->dataSize = 0;
+    op->internalBufferSize = 0;
+  }
 
+  initAsyncOpRoot(&op->root, executeProc, cancel, finishProc, releaseProc, &client->root, callback, arg, flags, type, timeout);
   op->parseCallback = parseCallback;
   op->parseArg = parseArg;
   op->state = 0;
@@ -268,13 +269,17 @@ static void httpClientDestructor(aioObjectRoot *root)
     sslSocketDelete(client->sslSocket);
   else
     deleteAioObject(client->plainSocket);
-  objectRelease(root, httpClientPool);
+  if (!concurrentRingBufferEnqueue(&objectPool, socket)) {
+    free(client->inBuffer);
+    free(client);
+  }
 }
 
 HTTPClient *httpClientNew(asyncBase *base, aioObject *socket)
 {
-  HTTPClient *client = objectGet(httpClientPool);
-  if (!client) {
+  HTTPClient *client = 0;
+  concurrentRingBufferTryInit(&objectPool, 4096);
+  if (!concurrentRingBufferDequeue(&objectPool, (void**)&client)) {
     client = (HTTPClient*)malloc(sizeof(HTTPClient));
     client->inBuffer = (uint8_t*)malloc(65536);
     client->inBufferSize = 65536;
@@ -290,8 +295,9 @@ HTTPClient *httpClientNew(asyncBase *base, aioObject *socket)
 
 HTTPClient *httpsClientNew(asyncBase *base, SSLSocket *socket)
 {
-  HTTPClient *client = objectGet(httpClientPool);
-  if (!client) {
+  HTTPClient *client = 0;
+  concurrentRingBufferTryInit(&objectPool, 4096);
+  if (!concurrentRingBufferDequeue(&objectPool, (void**)&client)) {
     client = (HTTPClient*)malloc(sizeof(HTTPClient));
     client->inBuffer = (uint8_t*)malloc(65536);
     client->inBufferSize = 65536;
@@ -381,8 +387,7 @@ int ioHttpConnect(HTTPClient *client, const HostAddress *address, const char *tl
   combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
-  objectRelease(&op->root, op->root.poolId);
-  objectDecrementReference(&client->root, 1);
+  releaseAsyncOp(client->root.base, &op->root);
   return status == aosSuccess ? 0 : -(int)status;
 }
 
@@ -408,7 +413,6 @@ AsyncOpStatus ioHttpRequest(HTTPClient *client,
   coroutineYield();
 
   AsyncOpStatus status = opGetStatus(&op->root);
-  objectRelease(&op->root, op->root.poolId);
-  objectDecrementReference(&client->root, 1);
+  releaseAsyncOp(client->root.base, &op->root);
   return status;
 }

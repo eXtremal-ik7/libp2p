@@ -83,8 +83,8 @@ ParserResultTy searchLiteFlatHashTable(const char **p, const char *end, const ch
   size_t pos = (hash % table->Size) * table->CollisionsNum;
   LiteFlatHashEntry *entry = &table->Data[pos];
   for (unsigned i = 0; i < table->CollisionsNum; i++) {
-    if (entry->hash == hash) {
-      *token = entry->value;
+    if (entry[i].hash == hash) {
+      *token = entry[i].value;
       return ParserResultOk;
     }
   }

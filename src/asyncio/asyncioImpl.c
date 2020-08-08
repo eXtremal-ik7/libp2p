@@ -15,7 +15,7 @@ __tls unsigned currentFinishedSync;
 __tls unsigned messageLoopThreadId;
 __tls RingBuffer localQueue;
 
-static const char *asyncOpLinkListPool = "asyncOpLinkList";
+ConcurrentRingBuffer asyncOpLinkListPool;
 
 void eqRemove(List *list, asyncOpRoot *op)
 {
@@ -185,9 +185,13 @@ uintptr_t eventDecrementReference(aioUserEvent *event, uintptr_t tag)
 {
   uintptr_t result = __uintptr_atomic_fetch_and_add(&event->tag, (uintptr_t)0 - tag) & TAG_EVENT_MASK;
   if (result == (tag & TAG_EVENT_MASK)) {
-    objectRelease(&event->root, event->root.poolId);
     if (event->destructorCb)
       event->destructorCb(event, event->destructorCbArg);
+
+    if (!concurrentRingBufferEnqueue(event->root.objectPool, event)) {
+      event->base->methodImpl.deleteTimer(&event->root);
+      free(event);
+    }
   }
 
   return result;
@@ -217,8 +221,9 @@ void eventDeactivate(aioUserEvent *event)
 
 void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op)
 {
-  asyncOpListLink *timerLink = objectGet(asyncOpLinkListPool);
-  if (!timerLink)
+  asyncOpListLink *timerLink = 0;
+  concurrentRingBufferTryInit(&asyncOpLinkListPool, 4096);
+  if (!concurrentRingBufferDequeue(&asyncOpLinkListPool, (void**)&timerLink))
     timerLink = malloc(sizeof(asyncOpListLink));
   timerLink->op = op;
   timerLink->tag = opGetGeneration(op);
@@ -230,8 +235,10 @@ void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op)
 {
   asyncOpListLink *timerLink = (asyncOpListLink*)op->timerId;
   if (timerLink && pageMapRemove(&base->timerMap, timerLink)) {
-    objectRelease(timerLink, asyncOpLinkListPool);
     op->timerId = 0;
+    if (!concurrentRingBufferEnqueue(&asyncOpLinkListPool, timerLink))
+      free(timerLink);
+
   }
 }
 
@@ -248,7 +255,8 @@ void processTimeoutQueue(asyncBase *base, time_t currentTime)
     while (link) {
       asyncOpListLink *next = link->next;
       opCancel(link->op, link->tag, aosTimeout);
-      objectRelease(link, asyncOpLinkListPool);
+      if (!concurrentRingBufferEnqueue(&asyncOpLinkListPool, link))
+        free(link);
       link = next;
     }
   }
@@ -322,35 +330,64 @@ uintptr_t opEncodeTag(asyncOpRoot *op, uintptr_t tag)
   return ((op->tag >> TAG_STATUS_SIZE) & ~((uintptr_t)TAGGED_POINTER_DATA_MASK)) | (tag & (uintptr_t)TAGGED_POINTER_DATA_MASK);
 }
 
-asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
-                             const char *timerPool,
-                             newAsyncOpTy *newOpProc,
-                             aioExecuteProc *startMethod,
-                             aioCancelProc *cancelMethod,
-                             aioFinishProc *finishMethod,
-                             aioObjectRoot *object,
-                             void *callback,
-                             void *arg,
-                             AsyncFlags flags,
-                             int opCode,
-                             uint64_t timeout)
+int asyncOpAlloc(asyncBase *base,
+                 size_t size,
+                 int isRealTime,
+                 ConcurrentRingBuffer *objectPool,
+                 ConcurrentRingBuffer *objectTimerPool,
+                 asyncOpRoot **result)
 {
-  int realtime = (opCode == actUserEvent) || (flags & afRealtime);
-  const char *pool = realtime ? timerPool : nonTimerPool;
-  asyncOpRoot *op = (asyncOpRoot*)objectGet(pool);
-  if (!op) {
-    op = newOpProc();
-    op->poolId = pool;
-    if (realtime)
-      object->base->methodImpl.initializeTimer(object->base, op);
+  int hasAllocatedNew = 0;
+  asyncOpRoot *op = 0;
+  ConcurrentRingBuffer *buffer = !isRealTime ? objectPool : objectTimerPool;
+  concurrentRingBufferTryInit(buffer, 4096);
+  if (!concurrentRingBufferDequeue(buffer, (void**)&op)) {
+    op = (asyncOpRoot*)alignedMalloc(size, 1u << COMBINER_TAG_SIZE);
+    if (isRealTime)
+      base->methodImpl.initializeTimer(base, op);
+    else
+      op->timerId = 0;
     op->tag = 0;
+    hasAllocatedNew = 1;
   }
 
+  op->objectPool = buffer;
+  *result = op;
+  return hasAllocatedNew;
+}
+
+void releaseAsyncOp(asyncBase *base, asyncOpRoot *op)
+{
+  aioObjectRoot *object = op->object;
+  if (!concurrentRingBufferEnqueue(op->objectPool, op)) {
+    if (op->releaseMethod)
+      op->releaseMethod(op);
+    if (op->timerId)
+      base->methodImpl.deleteTimer(op);
+    free(op);
+  }
+
+  objectDecrementReference(object, 1);
+}
+
+void initAsyncOpRoot(asyncOpRoot *op,
+                     aioExecuteProc *startMethod,
+                     aioCancelProc *cancelMethod,
+                     aioFinishProc *finishMethod,
+                     aioReleaseProc *releaseMethod,
+                     aioObjectRoot *object,
+                     void *callback,
+                     void *arg,
+                     AsyncFlags flags,
+                     int opCode,
+                     uint64_t timeout)
+{
   op->tag = ((opGetGeneration(op)+1) << TAG_STATUS_SIZE) | aosPending;
   op->executeMethod = startMethod;
   op->cancelMethod = cancelMethod;
   // TODO: better type control
   op->finishMethod = (flags & afCoroutine) ? (aioFinishProc*)coroutineCurrent() : finishMethod;
+  op->releaseMethod = releaseMethod;
   op->executeQueue.prev = 0;
   op->executeQueue.next = 0;
   op->next = taggedAsyncOpNull();
@@ -360,10 +397,8 @@ asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
   op->callback = callback;
   op->arg = arg;
   op->timeout = timeout;
-  op->timerId = realtime ? op->timerId : 0;
   op->running = (flags & afRunning) ? arRunning : arWaiting;
   objectIncrementReference(object, 1);
-  return op;
 }
 
 static void opRun(asyncOpRoot *op, List *list)
@@ -525,7 +560,6 @@ int executeGlobalQueue(asyncBase *base)
         aioUserEvent *event = (aioUserEvent*)op;
         eventDeactivate(event);
         op->finishMethod(op);
-        eventDecrementReference(event, 1);
         break;
       }
 
@@ -536,11 +570,9 @@ int executeGlobalQueue(asyncBase *base)
           assert(coroutineIsMain() && "Execute global queue from non-main coroutine");
           coroutineCall((coroutineTy*)op->finishMethod);
         } else {
-          aioObjectRoot *object = op->object;
-          objectRelease(op, op->poolId);
           if (op->callback)
             op->finishMethod(op);
-          objectDecrementReference(object, 1);
+          releaseAsyncOp(base, op);
         }
       }
     }
@@ -567,10 +599,6 @@ int copyFromBuffer(void *dst, size_t *offset, struct ioBuffer *src, size_t size)
   }
 }
 
-asyncOpRoot *allocAsyncOp(size_t size)
-{
-  return alignedMalloc(size, 1u << COMBINER_TAG_SIZE);
-}
 
 static inline void combinerTaskHandlerCommon(aioObjectRoot *object, uint32_t tag)
 {

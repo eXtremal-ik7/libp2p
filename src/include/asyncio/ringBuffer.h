@@ -38,6 +38,7 @@ int ringBufferDequeue(RingBuffer *buffer, void **data);
 
 // Concurrent ring buffer API
 void concurrentRingBufferInit(ConcurrentRingBuffer *buffer, size_t size);
+void concurrentRingBufferTryInit(ConcurrentRingBuffer *buffer, size_t size);
 void concurrentRingBufferFree(ConcurrentRingBuffer *buffer);
 int concurrentRingBufferEmpty(ConcurrentRingBuffer *buffer);
 int concurrentRingBufferEnqueue(ConcurrentRingBuffer *buffer, void *data);

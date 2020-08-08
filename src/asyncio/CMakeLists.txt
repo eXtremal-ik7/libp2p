@@ -4,7 +4,6 @@ set_source_files_properties(coroutinePosix.s PROPERTIES COMPILE_FLAGS "-x assemb
 set(Sources
   asyncio.c
   asyncioImpl.c
-  objectPool.c
   dynamicBuffer.c
   ringBuffer.c
   timer.c

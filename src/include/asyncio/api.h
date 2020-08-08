@@ -11,7 +11,7 @@ extern "C" {
 #include "coroutine.h"
 #include "macro.h"
 #include "atomic.h"
-#include "objectPool.h"
+#include "ringBuffer.h"
 #include "asyncio/asyncioTypes.h"
 
 
@@ -97,10 +97,12 @@ typedef struct List {
   asyncOpRoot *tail;
 } List;
 
-typedef asyncOpRoot *newAsyncOpTy();
+typedef asyncOpRoot *newAsyncOpTy(asyncBase*, int, ConcurrentRingBuffer*, ConcurrentRingBuffer*);
+typedef void initializeTimerTy(asyncBase*, asyncOpRoot*);
 typedef AsyncOpStatus aioExecuteProc(asyncOpRoot*);
 typedef int aioCancelProc(asyncOpRoot*);
 typedef void aioFinishProc(asyncOpRoot*);
+typedef void aioReleaseProc(asyncOpRoot*);
 typedef void aioObjectDestructor(aioObjectRoot*);
 typedef void aioObjectDestructorCb(aioObjectRoot*, void*);
 typedef void userEventDestructorCb(aioUserEvent*, void*);
@@ -208,10 +210,11 @@ struct aioObjectRoot {
 
 struct asyncOpRoot {
   volatile uintptr_t tag;
-  const char *poolId;
+  ConcurrentRingBuffer *objectPool;
   aioExecuteProc *executeMethod;
   aioCancelProc *cancelMethod;
   aioFinishProc *finishMethod;
+  aioReleaseProc *releaseMethod;
   ListImpl executeQueue;
   AsyncOpTaggedPtr next;
   aioObjectRoot *object;
@@ -256,7 +259,23 @@ typedef asyncOpRoot *SyncImplProc(aioObjectRoot*, AsyncFlags, uint64_t, void*, v
 typedef void MakeResultProc(void*);
 typedef void InitOpProc(asyncOpRoot*, void*);
 
-asyncOpRoot *allocAsyncOp(size_t size);
+int asyncOpAlloc(asyncBase *base, size_t size, int isRealTime, ConcurrentRingBuffer *objectPool, ConcurrentRingBuffer *objectTimerPool, asyncOpRoot **result);
+void releaseAsyncOp(asyncBase *base, asyncOpRoot *op);
+
+void initAsyncOpRoot(asyncOpRoot *op,
+                     aioExecuteProc *startMethod,
+                     aioCancelProc *cancelMethod,
+                     aioFinishProc *finishMethod,
+                     aioReleaseProc *deleteMethod,
+                     aioObjectRoot *object,
+                     void *callback,
+                     void *arg,
+                     AsyncFlags flags,
+                     int opCode,
+                     uint64_t timeout);
+
+
+
 void combiner(aioObjectRoot *object, AsyncOpTaggedPtr stackTop, AsyncOpTaggedPtr forRun);
 
 __NO_UNUSED_FUNCTION_BEGIN
@@ -333,7 +352,7 @@ static inline asyncOpRoot *combinerAcquire(aioObjectRoot *object,
       return allocated;
     } else {
       if (allocated)
-        objectRelease(allocated, allocated->poolId);
+        releaseAsyncOp(object->base, allocated);
       return 0;
     }
   } else {
@@ -440,21 +459,6 @@ static inline asyncOpRoot *runIoOperation(aioObjectRoot *object,
 }
 
 __NO_UNUSED_FUNCTION_END
-
-
-
-asyncOpRoot *initAsyncOpRoot(const char *nonTimerPool,
-                             const char *timerPool,
-                             newAsyncOpTy *newOpProc,
-                             aioExecuteProc *startMethod,
-                             aioCancelProc *cancelMethod,
-                             aioFinishProc *finishMethod,
-                             aioObjectRoot *object,
-                             void *callback,
-                             void *arg,
-                             AsyncFlags flags,
-                             int opCode,
-                             uint64_t timeout);
 
 #ifdef __cplusplus
 }

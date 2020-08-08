@@ -3,7 +3,6 @@ extern "C" {
 #endif
 
 #include "asyncio/api.h"
-#include "asyncio/objectPool.h"
 #include "asyncio/ringBuffer.h"
 
 #define TAGGED_POINTER_DATA_SIZE 6
@@ -27,9 +26,9 @@ typedef void postEmptyOperationTy(asyncBase*);
 typedef void nextFinishedOperationTy(asyncBase*);
 typedef aioObject *newAioObjectTy(asyncBase*, IoObjectTy, void*);
 typedef void deleteObjectTy(aioObject*);
-typedef void initializeTimerTy(asyncBase*, asyncOpRoot*);
 typedef void startTimerTy(asyncOpRoot*);
 typedef void stopTimerTy(asyncOpRoot*);
+typedef void deleteTimerTy(asyncOpRoot*);
 typedef void activateTy(aioUserEvent*);
 
 struct asyncImpl {
@@ -44,6 +43,7 @@ struct asyncImpl {
   initializeTimerTy *initializeTimer;
   startTimerTy *startTimer;
   stopTimerTy *stopTimer;
+  deleteTimerTy *deleteTimer;
   activateTy *activate;
   aioExecuteProc *connect;
   aioExecuteProc *accept;

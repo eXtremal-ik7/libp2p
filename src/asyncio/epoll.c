@@ -18,8 +18,7 @@
 #include <sys/timerfd.h>
 
 extern __tls RingBuffer localQueue;
-
-static const char *socketPool = "aioObject";
+static ConcurrentRingBuffer objectPool;
 
 #define MAX_EVENTS 256
 
@@ -43,12 +42,13 @@ void epollEnqueue(asyncBase *base, asyncOpRoot *op);
 void epollPostEmptyOperation(asyncBase *base);
 void epollNextFinishedOperation(asyncBase *base);
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data);
-asyncOpRoot *epollNewAsyncOp(void);
+asyncOpRoot *epollNewAsyncOp(asyncBase *base, int isRealTime, ConcurrentRingBuffer *objectPool, ConcurrentRingBuffer *objectTimerPool);
 int epollCancelAsyncOp(asyncOpRoot *opptr);
 void epollDeleteObject(aioObject *object);
 void epollInitializeTimer(asyncBase *base, asyncOpRoot *op);
 void epollStartTimer(asyncOpRoot *op);
 void epollStopTimer(asyncOpRoot *op);
+void epollDeleteTimer(asyncOpRoot *op);
 void epollActivate(aioUserEvent *op);
 AsyncOpStatus epollAsyncConnect(asyncOpRoot *opptr);
 AsyncOpStatus epollAsyncAccept(asyncOpRoot *opptr);
@@ -69,6 +69,7 @@ static struct asyncImpl epollImpl = {
   epollInitializeTimer,
   epollStartTimer,
   epollStopTimer,
+  epollDeleteTimer,
   epollActivate,
   epollAsyncConnect,
   epollAsyncAccept,
@@ -274,8 +275,9 @@ void epollNextFinishedOperation(asyncBase *base)
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
   epollBase *localBase = (epollBase*)base;
-  aioObject *object = (aioObject*)objectGet(socketPool);
-  if (!object) {
+  aioObject *object = 0;
+  concurrentRingBufferTryInit(&objectPool, 4096);
+  if (!concurrentRingBufferDequeue(&objectPool, (void**)&object)) {
     object = alignedMalloc(sizeof(aioObject), TAGGED_POINTER_ALIGNMENT);
     object->buffer.ptr = 0;
     object->buffer.totalSize = 0;
@@ -300,10 +302,10 @@ aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
   return object;
 }
 
-asyncOpRoot *epollNewAsyncOp()
+asyncOpRoot *epollNewAsyncOp(asyncBase *base, int isRealTime, ConcurrentRingBuffer *objectPool, ConcurrentRingBuffer *objectTimerPool)
 {
-  asyncOp *op = (asyncOp*)allocAsyncOp(sizeof(asyncOp));
-  if (op) {
+  asyncOp *op = 0;
+  if (asyncOpAlloc(base, sizeof(asyncOp), isRealTime, objectPool, objectTimerPool, (asyncOpRoot**)&op)) {
     op->internalBuffer = 0;
     op->internalBufferSize = 0;
   }
@@ -334,7 +336,12 @@ void epollDeleteObject(aioObject *object)
     default :
       break;
   }
-  objectRelease(object, socketPool);
+
+  if (!concurrentRingBufferEnqueue(&objectPool, object)) {
+    if (object->buffer.ptr)
+      free(object->buffer.ptr);
+    free(object);
+  }
 }
 
 void epollInitializeTimer(asyncBase *base, asyncOpRoot *op)
@@ -380,6 +387,12 @@ void epollStopTimer(asyncOpRoot *op)
     continue;
 }
 
+void epollDeleteTimer(asyncOpRoot *op)
+{
+  aioTimer *timer = (aioTimer*)op->timerId;
+  close(timer->fd);
+  free(timer);
+}
 
 void epollActivate(aioUserEvent *op)
 {

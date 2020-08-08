@@ -9,12 +9,12 @@
 static LiteFlatHashTable *headerNames = nullptr;
 
 static Terminal httpHeaders[] = {
-  {"Content-Length:", hhContentLength},
-  {"Content-Type:", hhContentType},
-  {"Connection:", hhConnection},
-  {"Date:", hhDate},
-  {"Server:", hhServer},
-  {"Transfer-Encoding:", hhTransferEncoding}
+  {"Content-Length", hhContentLength},
+  {"Content-Type", hhContentType},
+  {"Connection", hhConnection},
+  {"Date", hhDate},
+  {"Server", hhServer},
+  {"Transfer-Encoding", hhTransferEncoding}
 };
 
 static int isDigit(char s)
@@ -190,11 +190,14 @@ ParserResultTy httpParse(HttpParserState *state, httpParseCb callback, void *arg
           break;
         } else {
           int token;
+          component.header.entryName.data = state->ptr;
           const char *p = state->ptr;
-          char space = ' ';
-          ParserResultTy result = searchLiteFlatHashTable(&p, state->end, &space, 1, headerNames, &token);
+          char colon = ':';
+          ParserResultTy result = searchLiteFlatHashTable(&p, state->end, &colon, 1, headerNames, &token);
           if (result == ParserResultOk) {
+            component.header.entryName.size = p - component.header.entryName.data;
             component.header.entryType = token;
+            ++p;
             skipSPCharacters(&p, state->end);
 
             switch (token) {

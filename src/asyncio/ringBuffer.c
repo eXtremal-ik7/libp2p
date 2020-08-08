@@ -70,6 +70,25 @@ void concurrentRingBufferInit(ConcurrentRingBuffer *buffer, size_t size)
     buffer->queue[i].sequence = i;
 }
 
+void concurrentRingBufferTryInit(ConcurrentRingBuffer *buffer, size_t size)
+{
+  assert((size & (size-1)) == 0 && "Invalid ring buffer size");
+  if (!buffer->queue) {
+    void *queue = malloc(size*sizeof(ConcurrentRingBufferElement));
+    if (!__pointer_atomic_compare_and_swap((void *volatile*)&buffer->queue, 0, queue)) {
+      free(queue);
+    } else {
+      buffer->queueSize = size;
+      buffer->queueSizeMask = size-1;
+      buffer->enqueuePos = 0;
+      buffer->dequeuePos = 0;
+      for (size_t i = 0; i < size; i++)
+        buffer->queue[i].sequence = i;
+    }
+  }
+}
+
+
 void concurrentRingBufferFree(ConcurrentRingBuffer *buffer)
 {
   free(buffer->queue);

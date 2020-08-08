@@ -1,10 +1,9 @@
 #include "asyncioextras/zmtp.h"
 #include "asyncio/coroutine.h"
-#include "asyncio/objectPool.h"
 
-static const char *zmtpSocketPool = "zmtpSocket";
-static const char *poolId = "zmtp";
-static const char *timerPoolId = "zmtpTimer";
+static ConcurrentRingBuffer opPool;
+static ConcurrentRingBuffer opTimerPool;
+static ConcurrentRingBuffer objectPool;
 
 enum zmtpMsgTy {
   zmtpMsgFlagNone,
@@ -132,11 +131,6 @@ __NO_PADDING_END
 
 static AsyncOpStatus startZmtpRecv(asyncOpRoot *opptr);
 
-static asyncOpRoot *alloc()
-{
-  return allocAsyncOp(sizeof(zmtpOp));
-}
-
 static void resumeConnectCb(AsyncOpStatus status, aioObject*, void *arg)
 {
   resumeParent(static_cast<asyncOpRoot*>(arg), status);
@@ -186,6 +180,10 @@ static void sendFinish(asyncOpRoot *opptr)
                                                  opptr->arg);
 }
 
+static void releaseOp(asyncOpRoot*)
+{
+}
+
 static asyncOpRoot *newAsyncOp(aioObjectRoot *object,
                                AsyncFlags flags,
                                uint64_t usTimeout,
@@ -194,8 +192,12 @@ static asyncOpRoot *newAsyncOp(aioObjectRoot *object,
                                int opCode,
                                void *contextPtr)
 {
+  zmtpOp *op = 0;
   struct Context *context = (struct Context*)contextPtr;
-  zmtpOp *op = reinterpret_cast<zmtpOp*>(initAsyncOpRoot(poolId, timerPoolId, alloc, context->StartProc, cancel, context->FinishProc, object, reinterpret_cast<void*>(callback), arg, flags, opCode, usTimeout));
+  if (asyncOpAlloc(object->base, sizeof(zmtpOp), flags & afRealtime, &opPool, &opTimerPool, (asyncOpRoot**)&op)) {
+  }
+
+  initAsyncOpRoot(&op->root, context->StartProc, cancel, context->FinishProc, releaseOp, object, callback, arg, flags, opCode, usTimeout);
   op->state = stInitialize;
   op->stateRw = stInitialize;
   return &op->root;
@@ -209,8 +211,12 @@ static asyncOpRoot *newReadAsyncOp(aioObjectRoot *object,
                                    int opCode,
                                    void *contextPtr)
 {
+  zmtpOp *op = 0;
   struct Context *context = (struct Context*)contextPtr;
-  zmtpOp *op = reinterpret_cast<zmtpOp*>(initAsyncOpRoot(poolId, timerPoolId, alloc, context->StartProc, cancel, context->FinishProc, object, reinterpret_cast<void*>(callback), arg, flags, opCode, usTimeout));
+  if (asyncOpAlloc(object->base, sizeof(zmtpOp), flags & afRealtime, &opPool, &opTimerPool, (asyncOpRoot**)&op)) {
+  }
+
+  initAsyncOpRoot(&op->root, context->StartProc, cancel, context->FinishProc, releaseOp, object, callback, arg, flags, opCode, usTimeout);
   op->state = stInitialize;
   op->stateRw = stInitialize;
   op->data = nullptr;
@@ -227,8 +233,12 @@ static asyncOpRoot *newWriteAsyncOp(aioObjectRoot *object,
                                     int opCode,
                                     void *contextPtr)
 {
+  zmtpOp *op = 0;
   struct Context *context = (struct Context*)contextPtr;
-  zmtpOp *op = reinterpret_cast<zmtpOp*>(initAsyncOpRoot(poolId, timerPoolId, alloc, context->StartProc, cancel, context->FinishProc, object, reinterpret_cast<void*>(callback), arg, flags, opCode, usTimeout));
+  if (asyncOpAlloc(object->base, sizeof(zmtpOp), flags & afRealtime, &opPool, &opTimerPool, (asyncOpRoot**)&op)) {
+  }
+
+  initAsyncOpRoot(&op->root, context->StartProc, cancel, context->FinishProc, releaseOp, object, callback, arg, flags, opCode, usTimeout);
   op->state = stInitialize;
   op->stateRw = stInitialize;
   op->data = context->Buffer;
@@ -692,14 +702,19 @@ static asyncOpRoot *implZmtpSendProxy(aioObjectRoot *object, AsyncFlags flags, u
 void zmtpSocketDestructor(aioObjectRoot *object)
 {
   deleteAioObject(reinterpret_cast<zmtpSocket*>(object)->plainSocket);
-  objectRelease(object, zmtpSocketPool);
+  if (!concurrentRingBufferEnqueue(&objectPool, object)) {
+    free(object);
+  }
 }
 
 zmtpSocket *zmtpSocketNew(asyncBase *base, aioObject *plainSocket, zmtpSocketTy type)
 {
-  zmtpSocket *socket = static_cast<zmtpSocket*>(objectGet(zmtpSocketPool));
-  if (!socket)
+  zmtpSocket *socket = nullptr;
+  concurrentRingBufferTryInit(&objectPool, 4096);
+  if (!concurrentRingBufferDequeue(&objectPool, (void**)&socket)) {
     socket = static_cast<zmtpSocket*>(malloc(sizeof(zmtpSocket)));
+  }
+
   initObjectRoot(&socket->root, base, ioObjectUserDefined, zmtpSocketDestructor);
   socket->plainSocket = plainSocket;
   socket->type = type;
@@ -770,9 +785,7 @@ int ioZmtpAccept(zmtpSocket *socket, AsyncFlags flags, uint64_t timeout)
   coroutineYield();
 
   AsyncOpStatus status = opGetStatus(op);
-  objectRelease(op, op->poolId);
-  objectDecrementReference(&socket->root, 1);
-
+  releaseAsyncOp(socket->root.base, op);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -785,9 +798,7 @@ int ioZmtpConnect(zmtpSocket *socket, const HostAddress *address, AsyncFlags fla
   combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
-  objectRelease(&op->root, op->root.poolId);
-  objectDecrementReference(&socket->root, 1);
-
+  releaseAsyncOp(socket->root.base, &op->root);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -805,8 +816,7 @@ ssize_t ioZmtpRecv(zmtpSocket *socket, zmtpStream &msg, size_t limit, AsyncFlags
   if (op) {
     AsyncOpStatus status = opGetStatus(&op->root);
     *type = (op->type & zmtpMsgFlagCommand) ? zmtpCommand : zmtpMessage;
-    objectRelease(&op->root, op->root.poolId);
-    objectDecrementReference(&socket->root, 1);
+    releaseAsyncOp(socket->root.base, &op->root);
     return status == aosSuccess ? static_cast<ssize_t>(msg.sizeOf()) : -status;
   } else {
     *type = (context.MsgType & zmtpMsgFlagCommand) ? zmtpCommand : zmtpMessage;
@@ -826,8 +836,7 @@ ssize_t ioZmtpSend(zmtpSocket *socket, void *data, size_t size, zmtpUserMsgTy ty
 
   if (op) {
     AsyncOpStatus status = opGetStatus(op);
-    objectRelease(op, op->poolId);
-    objectDecrementReference(&socket->root, 1);
+   releaseAsyncOp(socket->root.base, op);
     return status == aosSuccess ? static_cast<ssize_t>(size) : -status;
   } else {
     return static_cast<ssize_t>(size);

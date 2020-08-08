@@ -1,12 +1,11 @@
 #include "asyncio/coroutine.h"
-#include "asyncio/objectPool.h"
 #include "p2p/p2pproto.h"
 #include "p2p/p2pformat.h"
 #include <stdlib.h>
 
-static const char *p2pConnectionPool = "P2PConnection";
-static const char *p2pPoolId = "P2P";
-static const char *p2pPoolTimerId = "P2PTimer";
+static ConcurrentRingBuffer opPool;
+static ConcurrentRingBuffer opTimerPool;
+static ConcurrentRingBuffer objectPool;
 
 struct Context {
   aioExecuteProc *StartProc;
@@ -68,11 +67,6 @@ static inline AsyncOpStatus p2pStatusFromError(p2pErrorTy error)
   return aosUnknownError;
 }
 
-static asyncOpRoot *alloc()
-{
-  return allocAsyncOp(sizeof(p2pOp));
-}
-
 static void resumeRwCb(AsyncOpStatus status, aioObject*, size_t, void *arg)
 {
   resumeParent(static_cast<asyncOpRoot*>(arg), status);
@@ -129,6 +123,10 @@ static void sendFinish(asyncOpRoot *opptr)
                                                  opptr->arg);
 }
 
+static void releaseProc(asyncOpRoot*)
+{
+}
+
 static asyncOpRoot *newAsyncOp(aioObjectRoot *object,
                                AsyncFlags flags,
                                uint64_t usTimeout,
@@ -138,8 +136,11 @@ static asyncOpRoot *newAsyncOp(aioObjectRoot *object,
                                void *contextPtr)
 {
   struct Context *context = (struct Context*)contextPtr;
-  p2pOp *op = reinterpret_cast<p2pOp*>(
-    initAsyncOpRoot(p2pPoolId, p2pPoolTimerId, alloc, context->StartProc, cancel, context->FinishProc, object, callback, arg, flags, opCode, usTimeout));
+  p2pOp *op = 0;
+  if (asyncOpAlloc(object->base, sizeof(p2pOp), flags & afRealtime, &opPool, &opTimerPool, (asyncOpRoot**)&op)) {
+  }
+
+  initAsyncOpRoot(&op->root, context->StartProc, cancel, context->FinishProc, releaseProc, object, callback, arg, flags, opCode, usTimeout);
   if (context->Stream)
     op->stream = context->Stream;
   else
@@ -157,13 +158,17 @@ static void destructor(aioObjectRoot *root)
 {
   p2pConnection *connection = reinterpret_cast<p2pConnection*>(root);
   deleteAioObject(connection->socket);
-  objectRelease(root, p2pConnectionPool);
+  if (!concurrentRingBufferEnqueue(&objectPool, connection)) {
+    connection->stream.~p2pStream();
+    free(connection);
+  }
 }
 
 p2pConnection *p2pConnectionNew(aioObject *socket)
 {
-  p2pConnection *connection = static_cast<p2pConnection*>(objectGet(p2pConnectionPool));
-  if (!connection) {
+  p2pConnection *connection = 0;
+  concurrentRingBufferTryInit(&objectPool, 4096);
+  if (!concurrentRingBufferDequeue(&objectPool, (void**)&connection)) {
     connection = static_cast<p2pConnection*>(malloc(sizeof(p2pConnection)));
     new(&connection->stream) xmstream;
   }
@@ -591,8 +596,7 @@ int iop2pAccept(p2pConnection *connection, uint64_t timeout, p2pAcceptCb *callba
   combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
-  objectRelease(&op->root, op->root.poolId);
-  objectDecrementReference(&connection->root, 1);
+  releaseAsyncOp(connection->root.base, &op->root);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -606,8 +610,7 @@ int iop2pConnect(p2pConnection *connection, const HostAddress *address, uint64_t
   combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
-  objectRelease(&op->root, op->root.poolId);
-  objectDecrementReference(&connection->root, 1);
+  releaseAsyncOp(connection->root.base, &op->root);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -619,8 +622,7 @@ ssize_t iop2pSend(p2pConnection *connection, const void *data, uint32_t id, uint
 
   if (op) {
     AsyncOpStatus status = opGetStatus(op);
-    objectRelease(op, op->poolId);
-    objectDecrementReference(&connection->root, 1);
+    releaseAsyncOp(connection->root.base, op);
     return status == aosSuccess ? static_cast<ssize_t>(size) : -status;
   } else {
     return static_cast<ssize_t>(size);
@@ -637,8 +639,7 @@ ssize_t iop2pRecvStream(p2pConnection *connection, p2pStream &stream, uint32_t m
   if (op) {
     AsyncOpStatus status = opGetStatus(&op->root);
     *header = op->header;
-    objectRelease(&op->root, op->root.poolId);
-    objectDecrementReference(&connection->root, 1);
+    releaseAsyncOp(connection->root.base, &op->root);
     return status == aosSuccess ? static_cast<ssize_t>(header->size) : -status;
   } else {
     return static_cast<ssize_t>(header->size);
@@ -655,8 +656,7 @@ ssize_t iop2pRecv(p2pConnection *connection, void *buffer, uint32_t bufferSize, 
   if (op) {
     AsyncOpStatus status = opGetStatus(&op->root);
     *header = op->header;
-    objectRelease(&op->root, op->root.poolId);
-    objectDecrementReference(&connection->root, 1);
+    releaseAsyncOp(connection->root.base, &op->root);
     return status == aosSuccess ? static_cast<ssize_t>(header->size) : -status;
   } else {
     return static_cast<ssize_t>(header->size);

@@ -1,12 +1,11 @@
 #include "asyncioextras/rlpx.h"
-#include "asyncio/objectPool.h"
 #include "asyncio/api.h"
 #include "macro.h"
 #include <stdlib.h>
 
-static const char *rplxSocketPool = "rlpxSocket";
-static const char *poolId = "rlpx";
-static const char *timerPoolId = "rlpxTimer";
+static ConcurrentRingBuffer opPool;
+static ConcurrentRingBuffer opTimerPool;
+static ConcurrentRingBuffer objectPool;
 
 enum rlpxOpTy {
   rlpxOpAccept = OPCODE_READ,
@@ -37,11 +36,6 @@ struct RlpxOperation {
 };
 __NO_PADDING_END
 
-static asyncOpRoot *alloc()
-{
-  return static_cast<asyncOpRoot*>(allocAsyncOp(sizeof(RlpxOperation)));
-}
-
 static void resumeConnectCb(AsyncOpStatus status, aioObject*, void *arg)
 {
   resumeParent(static_cast<asyncOpRoot*>(arg), status);
@@ -64,6 +58,10 @@ static void connectFinish(asyncOpRoot *opptr)
   reinterpret_cast<rlpxConnectCb*>(opptr->callback)(opGetStatus(opptr), reinterpret_cast<rlpxSocket*>(opptr->object), opptr->arg);
 }
 
+static void releaseOp(asyncOpRoot*)
+{
+}
+
 RlpxOperation *initOp(aioExecuteProc *start,
                aioFinishProc *finish,
                rlpxSocket *socket,
@@ -73,9 +71,9 @@ RlpxOperation *initOp(aioExecuteProc *start,
                void *arg,
                int opCode)
 {
-  asyncOpRoot *opptr =
-    initAsyncOpRoot(poolId, timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
-  RlpxOperation *op = reinterpret_cast<RlpxOperation*>(opptr);
+  RlpxOperation *op = 0;
+  if (asyncOpAlloc(socket->root.base, sizeof(RlpxOperation), flags & afRealtime, &opPool, &opTimerPool, (asyncOpRoot**)&op)) {}
+  initAsyncOpRoot(&op->root, start, cancel, finish, releaseOp, &socket->root, callback, arg, flags, opCode, timeout);
   return op;
 }
 
@@ -88,9 +86,9 @@ RlpxOperation *initReadOp(aioExecuteProc *start,
                    void *arg,
                    int opCode)
 {
-  asyncOpRoot *opptr =
-    initAsyncOpRoot(poolId, timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
-  RlpxOperation *op = reinterpret_cast<RlpxOperation*>(opptr);
+  RlpxOperation *op = 0;
+  if (asyncOpAlloc(socket->root.base, sizeof(RlpxOperation), flags & afRealtime, &opPool, &opTimerPool, (asyncOpRoot**)&op)) {}
+  initAsyncOpRoot(&op->root, start, cancel, finish, releaseOp, &socket->root, callback, arg, flags, opCode, timeout);
   return op;
 }
 
@@ -107,16 +105,18 @@ RlpxOperation *initWriteOp(aioExecuteProc *start,
 {
   __UNUSED(data);
   __UNUSED(size);
-  asyncOpRoot *opptr =
-    initAsyncOpRoot(poolId, timerPoolId, alloc, start, cancel, finish, &socket->root, reinterpret_cast<void*>(callback), arg, flags, opCode, timeout);
-  RlpxOperation *op = reinterpret_cast<RlpxOperation*>(opptr);
+  RlpxOperation *op = 0;
+  if (asyncOpAlloc(socket->root.base, sizeof(RlpxOperation), flags & afRealtime, &opPool, &opTimerPool, (asyncOpRoot**)&op)) {}
+  initAsyncOpRoot(&op->root, start, cancel, finish, releaseOp, &socket->root, callback, arg, flags, opCode, timeout);
   return op;
 }
 
 static void rlpxSocketDestructor(aioObjectRoot *object)
 {
   deleteAioObject(reinterpret_cast<rlpxSocket*>(object)->plainSocket);
-  objectRelease(object, rplxSocketPool);
+  if (!concurrentRingBufferEnqueue(&objectPool, object)) {
+    free(object);
+  }
 }
 
 static AsyncOpStatus startRlpxConnect(asyncOpRoot *opptr)
@@ -146,9 +146,11 @@ static AsyncOpStatus startRlpxConnect(asyncOpRoot *opptr)
 
 rlpxSocket *rlpxSocketNew(asyncBase *base, aioObject *plainSocket)
 {
-  rlpxSocket *socket = static_cast<rlpxSocket*>(objectGet(rplxSocketPool));
-  if (!socket)
+  rlpxSocket *socket = 0;
+  concurrentRingBufferTryInit(&objectPool, 4096);
+  if (!concurrentRingBufferDequeue(&objectPool, (void**)&socket)) {
     socket = static_cast<rlpxSocket*>(malloc(sizeof(rlpxSocket)));
+  }
   initObjectRoot(&socket->root, base, ioObjectUserDefined, rlpxSocketDestructor);
   socket->plainSocket = plainSocket;
   return socket;

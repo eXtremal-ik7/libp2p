@@ -1,14 +1,13 @@
 #include "asyncioextras/btc.h"
-#include "asyncio/objectPool.h"
 #include "p2putils/xmstream.h"
 #include <stdlib.h>
 #include <string.h>
 
 #include "openssl/sha.h"
 
-static const char *btcSocketPool = "btcSocket";
-static const char *poolId = "btc";
-static const char *timerPoolId = "btcTimer";
+static ConcurrentRingBuffer opPool;
+static ConcurrentRingBuffer opTimerPool;
+static ConcurrentRingBuffer objectPool;
 
 struct Context {
   aioExecuteProc *StartProc;
@@ -121,14 +120,6 @@ static void decodeMessageHeader(MessageHeader *header)
   header->checksum = xletoh(header->checksum);
 }
 
-static asyncOpRoot *alloc()
-{
-  btcOp *op = reinterpret_cast<btcOp*>(allocAsyncOp(sizeof(btcOp)));
-  op->internalBuffer = nullptr;
-  op->internalBufferSize = 0;
-  return &op->root;
-}
-
 static void resumeRwCb(AsyncOpStatus status, aioObject*, size_t, void *arg)
 {
   resumeParent(static_cast<asyncOpRoot*>(arg), status);
@@ -158,6 +149,14 @@ static void sendFinish(asyncOpRoot *opptr)
                                                 opptr->arg);
 }
 
+static void releaseProc(asyncOpRoot *opptr)
+{
+  btcOp *op = (btcOp*)opptr;
+  if (op->internalBuffer)
+    free(op->internalBuffer);
+}
+
+
 static asyncOpRoot *newReadAsyncOp(aioObjectRoot *object,
                                    AsyncFlags flags,
                                    uint64_t usTimeout,
@@ -166,10 +165,14 @@ static asyncOpRoot *newReadAsyncOp(aioObjectRoot *object,
                                    int opCode,
                                    void *contextPtr)
 {
-  Context *context = static_cast<Context*>(contextPtr);
-  asyncOpRoot *opptr =
-    initAsyncOpRoot(poolId, timerPoolId, alloc, context->StartProc, cancel, context->FinishProc, object, callback, arg, flags, opCode, usTimeout);
-  btcOp *op = reinterpret_cast<btcOp*>(opptr);
+  btcOp *op = 0;
+  struct Context *context = (struct Context*)contextPtr;
+  if (asyncOpAlloc(object->base, sizeof(btcOp), flags & afRealtime, &opPool, &opTimerPool, (asyncOpRoot**)&op)) {
+    op->internalBuffer = nullptr;
+    op->internalBufferSize = 0;
+  }
+
+  initAsyncOpRoot(&op->root, context->StartProc, cancel, context->FinishProc, releaseProc, object, callback, arg, flags, opCode, usTimeout);
   op->state = stInitialize;
   op->size = context->TransactionSize;
   op->stream = context->Stream;
@@ -185,10 +188,14 @@ static asyncOpRoot *newWriteAsyncOp(aioObjectRoot *object,
                                     int opCode,
                                     void *contextPtr)
 {
-  Context *context = static_cast<Context*>(contextPtr);
-  asyncOpRoot *opptr =
-    initAsyncOpRoot(poolId, timerPoolId, alloc, context->StartProc, cancel, context->FinishProc, object, callback, arg, flags, opCode, usTimeout);
-  btcOp *op = reinterpret_cast<btcOp*>(opptr);
+  btcOp *op = 0;
+  struct Context *context = (struct Context*)contextPtr;
+  if (asyncOpAlloc(object->base, sizeof(btcOp), flags & afRealtime, &opPool, &opTimerPool, (asyncOpRoot**)&op)) {
+    op->internalBuffer = nullptr;
+    op->internalBufferSize = 0;
+  }
+
+  initAsyncOpRoot(&op->root, context->StartProc, cancel, context->FinishProc, releaseProc, object, callback, arg, flags, opCode, usTimeout);
   op->state = stInitialize;
 
   if (!(flags & afNoCopy)) {
@@ -427,7 +434,8 @@ static asyncOpRoot *implBtcSendProxy(aioObjectRoot *object, AsyncFlags flags, ui
 void btcSocketDestructor(aioObjectRoot *object)
 {
   deleteAioObject(reinterpret_cast<BTCSocket*>(object)->plainSocket);
-  objectRelease(object, btcSocketPool);
+  if (!concurrentRingBufferEnqueue(&objectPool, object))
+    free(object);
 }
 
 aioObjectRoot *btcSocketHandle(BTCSocket *socket)
@@ -437,8 +445,9 @@ aioObjectRoot *btcSocketHandle(BTCSocket *socket)
 
 BTCSocket *btcSocketNew(asyncBase *base, aioObject *plainSocket)
 {
-  BTCSocket *socket = static_cast<BTCSocket*>(objectGet(btcSocketPool));
-  if (!socket)
+  BTCSocket *socket = 0;
+  concurrentRingBufferTryInit(&objectPool, 4096);
+  if (!concurrentRingBufferDequeue(&objectPool, (void**)&socket))
     socket = static_cast<BTCSocket*>(malloc(sizeof(BTCSocket)));
   initObjectRoot(&socket->root, base, ioObjectUserDefined, btcSocketDestructor);
 
@@ -499,8 +508,7 @@ ssize_t ioBtcRecv(BTCSocket *socket, char command[12], xmstream &stream, size_t 
 
   if (op) {
     AsyncOpStatus status = opGetStatus(op);
-    objectRelease(op, op->poolId);
-    objectDecrementReference(&socket->root, 1);
+    releaseAsyncOp(socket->root.base, op);
     return status == aosSuccess ? static_cast<ssize_t>(stream.sizeOf()) : -status;
   } else {
     return static_cast<ssize_t>(stream.sizeOf());
@@ -515,8 +523,7 @@ ssize_t ioBtcSend(BTCSocket *socket, const char *command, void *data, size_t siz
 
   if (op) {
     AsyncOpStatus status = opGetStatus(op);
-    objectRelease(op, op->poolId);
-    objectDecrementReference(&socket->root, 1);
+    releaseAsyncOp(socket->root.base, op);
     return status == aosSuccess ? static_cast<ssize_t>(size) : -status;
   } else {
     return static_cast<ssize_t>(size);

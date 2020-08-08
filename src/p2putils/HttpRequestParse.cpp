@@ -21,11 +21,11 @@ static Terminal httpMethods[] = {
 };
 
 static Terminal httpHeaders[] = {
-  {"Host:", hhHost},
-  {"User-Agent:", hhUserAgent},
-  {"Accept:", hhAccept},
-  {"Transfer-Encoding:", hhTransferEncoding},
-  {"Content-Length:", hhContentLength}
+  {"Host", hhHost},
+  {"User-Agent", hhUserAgent},
+  {"Accept", hhAccept},
+  {"Transfer-Encoding", hhTransferEncoding},
+  {"Content-Length", hhContentLength}
 };
 
 struct UriArg {
@@ -293,11 +293,14 @@ ParserResultTy httpRequestParse(HttpRequestParserState *state, httpRequestParseC
       }
 
       int token;
+      component.header.entryName.data = state->ptr;
       const char *p = state->ptr;
-      char space = ' ';
-      ParserResultTy result = searchLiteFlatHashTable(&p, state->end, &space, 1, headerNames, &token);
+      char colon = ':';
+      ParserResultTy result = searchLiteFlatHashTable(&p, state->end, &colon, 1, headerNames, &token);
       if (result == ParserResultOk) {
+        component.header.entryName.size = p - component.header.entryName.data;
         component.header.entryType = token;
+        ++p;
         skipSPCharacters(&p, state->end);
 
         switch (token) {

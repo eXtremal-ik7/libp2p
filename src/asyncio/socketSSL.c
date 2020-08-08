@@ -1,6 +1,5 @@
 #include "asyncio/asyncio.h"
 #include "asyncio/coroutine.h"
-#include "asyncio/objectPool.h"
 #include "asyncio/socket.h"
 #include "asyncio/socketSSL.h"
 #include "asyncioImpl.h"
@@ -12,9 +11,9 @@
 #define DEFAULT_SSL_READ_BUFFER_SIZE 16384
 #define DEFAULT_SSL_WRITE_BUFFER_SIZE 16384
 
-static const char *sslSocketPool = "SSLSocket";
-static const char *sslPoolId = "SSL";
-static const char *sslPoolTimerId = "SSLTimer";
+static ConcurrentRingBuffer opPool;
+static ConcurrentRingBuffer opTimerPool;
+static ConcurrentRingBuffer objectPool;
 
 struct Context {
   aioExecuteProc *StartProc;
@@ -62,15 +61,6 @@ static AsyncOpStatus connectProc(asyncOpRoot *opptr);
 static AsyncOpStatus readProc(asyncOpRoot *opptr);
 static void sslWriteWriteCb(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg);
 
-
-static asyncOpRoot *alloc()
-{
-  SSLOp *op = (SSLOp*)allocAsyncOp(sizeof(SSLOp));
-  op->internalBuffer = 0;
-  op->internalBufferSize = 0;
-  return (asyncOpRoot*)op;
-}
-
 static int cancel(asyncOpRoot *opptr)
 {
   SSLSocket *S = (SSLSocket*)opptr->object;
@@ -89,6 +79,13 @@ static void rwFinish(asyncOpRoot *opptr)
   ((sslCb*)opptr->callback)(opGetStatus(opptr), (SSLSocket*)opptr->object, op->bytesTransferred, opptr->arg);
 }
 
+static void releaseOp(asyncOpRoot *opptr)
+{
+  SSLOp *op = (SSLOp*)opptr;
+  if (op->internalBuffer)
+    free(op->internalBuffer);
+}
+
 static asyncOpRoot *newReadAsyncOp(aioObjectRoot *object,
                                    AsyncFlags flags,
                                    uint64_t usTimeout,
@@ -97,9 +94,14 @@ static asyncOpRoot *newReadAsyncOp(aioObjectRoot *object,
                                    int opCode,
                                    void *contextPtr)
 {
+  SSLOp *op = 0;
   struct Context *context = (struct Context*)contextPtr;
-  SSLOp *op = (SSLOp*)
-    initAsyncOpRoot(sslPoolId, sslPoolTimerId, alloc, context->StartProc, cancel, context->FinishProc, object, callback, arg, flags, opCode, usTimeout);
+  if (asyncOpAlloc(object->base, sizeof(SSLOp), flags & afRealtime, &opPool, &opTimerPool, (asyncOpRoot**)&op)) {
+    op->internalBuffer = 0;
+    op->internalBufferSize = 0;
+  }
+
+  initAsyncOpRoot(&op->root, context->StartProc, cancel, context->FinishProc, releaseOp, object, callback, arg, flags, opCode, usTimeout);
   op->buffer = context->Buffer;
   op->transactionSize = context->TransactionSize;
   op->bytesTransferred = 0;
@@ -115,10 +117,14 @@ static asyncOpRoot *newWriteAsyncOp(aioObjectRoot *object,
                                     int opCode,
                                     void *contextPtr)
 {
+  SSLOp *op = 0;
   struct Context *context = (struct Context*)contextPtr;
-  SSLOp *op = (SSLOp*)
-    initAsyncOpRoot(sslPoolId, sslPoolTimerId, alloc, context->StartProc, cancel, context->FinishProc, object, callback, arg, flags, opCode, usTimeout);
+  if (asyncOpAlloc(object->base, sizeof(SSLOp), flags & afRealtime, &opPool, &opTimerPool, (asyncOpRoot**)&op)) {
+    op->internalBuffer = 0;
+    op->internalBufferSize = 0;
+  }
 
+  initAsyncOpRoot(&op->root, context->StartProc, cancel, context->FinishProc, releaseOp, object, callback, arg, flags, opCode, usTimeout);
   if (!(flags & afNoCopy) && context->TransactionSize) {
     if (op->internalBuffer == 0) {
       op->internalBuffer = malloc(context->TransactionSize);
@@ -144,8 +150,7 @@ static ssize_t coroutineRwFinish(SSLOp *op, SSLSocket *object)
 {
   AsyncOpStatus status = opGetStatus(&op->root);
   size_t bytesTransferred = op->bytesTransferred;
-  objectRelease(&op->root, op->root.poolId);
-  objectDecrementReference(&object->root, 1);
+  releaseAsyncOp(object->root.base, &op->root);
   return status == aosSuccess ? (ssize_t)bytesTransferred : -(int)status;
 }
 
@@ -254,7 +259,15 @@ void sslSocketDestructor(aioObjectRoot *root)
 {
   SSLSocket *socket = (SSLSocket*)root;
   deleteAioObject(socket->object);
-  objectRelease(root, sslSocketPool);
+  if (!concurrentRingBufferEnqueue(&objectPool, socket)) {
+    free(socket->sslReadBuffer);
+    free(socket->sslWriteBuffer);
+    BIO_free(socket->bioOut);
+    BIO_free(socket->bioIn);
+    SSL_free(socket->ssl);
+    SSL_CTX_free(socket->sslContext);
+    free(socket);
+  }
 }
 
 
@@ -269,8 +282,9 @@ SSLSocket *sslSocketNew(asyncBase *base, aioObject *existingSocket)
     socket = newSocketIo(base, fd);
   }
 
-  SSLSocket *S = objectGet(sslSocketPool);
-  if (!S) {
+  SSLSocket *S = 0;
+  concurrentRingBufferTryInit(&objectPool, 4096);
+  if (!concurrentRingBufferDequeue(&objectPool, (void**)&S)) {
     S = (SSLSocket*)malloc(sizeof(SSLSocket));
 #ifdef DEPRECATEDIN_1_1_0
     S->sslContext = SSL_CTX_new (TLS_client_method());
@@ -485,8 +499,7 @@ int ioSslConnect(SSLSocket *socket, const HostAddress *address, const char *tlse
   combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
-  objectRelease(&op->root, op->root.poolId);
-  objectDecrementReference(&socket->root, 1);
+  releaseAsyncOp(socket->root.base, &op->root);
   return status == aosSuccess ? 0 : -status;
 }
 

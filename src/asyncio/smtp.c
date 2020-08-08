@@ -6,9 +6,9 @@
 #include "asyncio/socket.h"
 #include <memory.h>
 
-static const char *clientPool = "SMTPClient";
-static const char *poolId = "SMTP";
-static const char *poolTimerId = "SMTPTimer";
+static ConcurrentRingBuffer opPool;
+static ConcurrentRingBuffer opTimerPool;
+static ConcurrentRingBuffer objectPool;
 
 typedef enum SmtpOpTy {
   SmtpOpConnect = OPCODE_WRITE,
@@ -89,13 +89,6 @@ static inline void dynamicBufferWriteString(dynamicBuffer *buffer, const char *d
   dynamicBufferWrite(buffer, data, strlen(data));
 }
 
-static asyncOpRoot *alloc()
-{
-  SMTPOp *op = (SMTPOp*)allocAsyncOp(sizeof(SMTPOp));
-  dynamicBufferInit(&op->Buffer, 1024);
-  return &op->Root;
-}
-
 static int cancel(asyncOpRoot *opptr)
 {
   SMTPClient *client = (SMTPClient*)opptr->object;
@@ -114,6 +107,13 @@ static void commandFinish(asyncOpRoot *opptr)
   ((smtpResponseCb*)opptr->callback)(opGetStatus(opptr), client->ResultCode, client, opptr->arg);
 }
 
+static void releaseProc(asyncOpRoot *opptr)
+{
+  SMTPOp *op = (SMTPOp*)opptr;
+  dynamicBufferFree(&op->Buffer);
+}
+
+
 static SMTPOp *allocSmtpOp(aioExecuteProc executeProc,
                            aioFinishProc finishProc,
                            SMTPClient *client,
@@ -123,8 +123,12 @@ static SMTPOp *allocSmtpOp(aioExecuteProc executeProc,
                            AsyncFlags flags,
                            uint64_t timeout)
 {
-  SMTPOp *op = (SMTPOp*)
-    initAsyncOpRoot(poolId, poolTimerId, alloc, executeProc, cancel, finishProc, &client->root, callback, arg, flags, type, timeout);
+  SMTPOp *op = 0;
+  if (asyncOpAlloc(client->root.base, sizeof(SMTPOp), flags & afRealtime, &opPool, &opTimerPool, (asyncOpRoot**)&op)) {
+    dynamicBufferInit(&op->Buffer, 1024);
+  }
+
+  initAsyncOpRoot(&op->Root, executeProc, cancel, finishProc, releaseProc, &client->root, callback, arg, flags, type, timeout);
   op->State = stInitialize;
   dynamicBufferClear(&op->Buffer);
   return op;
@@ -481,7 +485,9 @@ static void smtpClientDestructor(aioObjectRoot *root)
     sslSocketDelete(client->TlsSocket);
   else
     deleteAioObject(client->PlainSocket);
-  objectRelease(root, clientPool);
+
+  if (!concurrentRingBufferEnqueue(&objectPool, client))
+    free(client);
 }
 
 SMTPClient *smtpClientNew(asyncBase *base, HostAddress localAddress, SmtpServerType type)
@@ -494,8 +500,9 @@ SMTPClient *smtpClientNew(asyncBase *base, HostAddress localAddress, SmtpServerT
     return 0;
   }
 
-  SMTPClient *client = objectGet(clientPool);
-  if (!client) {
+  SMTPClient *client = 0;
+  concurrentRingBufferTryInit(&objectPool, 4096);
+  if (!concurrentRingBufferDequeue(&objectPool, (void**)&client)) {
     client = (SMTPClient*)malloc(sizeof(SMTPClient));
   }
 
@@ -566,8 +573,7 @@ int ioSmtpConnect(SMTPClient *client, HostAddress address, uint64_t usTimeout)
   combinerPushOperation(&op->Root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->Root);
-  objectRelease(&op->Root, op->Root.poolId);
-  objectDecrementReference(&client->root, 1);
+  releaseAsyncOp(client->root.base, &op->Root);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -577,8 +583,7 @@ int ioSmtpStartTls(SMTPClient *client, AsyncFlags flags, uint64_t usTimeout)
   combinerPushOperation(&op->Root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->Root);
-  objectRelease(&op->Root, op->Root.poolId);
-  objectDecrementReference(&client->root, 1);
+  releaseAsyncOp(client->root.base, &op->Root);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -592,8 +597,7 @@ int ioSmtpLogin(SMTPClient *client, const char *login, const char *password, Asy
   combinerPushOperation(&op->Root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->Root);
-  objectRelease(&op->Root, op->Root.poolId);
-  objectDecrementReference(&client->root, 1);
+  releaseAsyncOp(client->root.base, &op->Root);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -605,8 +609,7 @@ int ioSmtpCommand(SMTPClient *client, const char *command, AsyncFlags flags, uin
   combinerPushOperation(&op->Root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->Root);
-  objectRelease(&op->Root, op->Root.poolId);
-  objectDecrementReference(&client->root, 1);
+  releaseAsyncOp(client->root.base, &op->Root);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -760,7 +763,6 @@ int ioSmtpSendMail(SMTPClient *client,
   combinerPushOperation(&op->Root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->Root);
-  objectRelease(&op->Root, op->Root.poolId);
-  objectDecrementReference(&client->root, 1);
+  releaseAsyncOp(client->root.base, &op->Root);
   return status == aosSuccess ? 0 : -status;
 }

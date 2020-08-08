@@ -9,9 +9,9 @@
 #include <string.h>
 #include <time.h>
 
-static const char *poolId = "asyncIo";
-static const char *timerPoolId = "asyncIoTimer";
-static const char *eventPoolId = "asyncIoEvent";
+static ConcurrentRingBuffer opPool;
+static ConcurrentRingBuffer opTimerPool;
+static ConcurrentRingBuffer eventPool;
 
 #ifdef OS_WINDOWS
 asyncBase *iocpNewAsyncBase();
@@ -76,6 +76,13 @@ static void eventFinish(asyncOpRoot *root)
     ((aioEventCb*)root->callback)((aioUserEvent*)root, root->arg);
 }
 
+static void releaseOp(asyncOpRoot *opptr)
+{
+  asyncOp *op = (asyncOp*)opptr;
+  if (op->internalBuffer)
+    free(op->internalBuffer);
+}
+
 static asyncOpRoot *newAsyncOp(aioObjectRoot *object,
                                AsyncFlags flags,
                                uint64_t usTimeout,
@@ -85,18 +92,8 @@ static asyncOpRoot *newAsyncOp(aioObjectRoot *object,
                                void *contextPtr)
 {
   struct Context *context = (struct Context*)contextPtr;
-  asyncOp *op = (asyncOp*)initAsyncOpRoot(poolId,
-                                          timerPoolId,
-                                          object->base->methodImpl.newAsyncOp,
-                                          context->StartProc,
-                                          object->base->methodImpl.cancelAsyncOp,
-                                          context->FinishProc,
-                                          object,
-                                          callback,
-                                          arg,
-                                          flags,
-                                          opCode,
-                                          usTimeout);
+  asyncOp *op = (asyncOp*)object->base->methodImpl.newAsyncOp(object->base, flags & afRealtime, &opPool, &opTimerPool);
+  initAsyncOpRoot(&op->root, context->StartProc, object->base->methodImpl.cancelAsyncOp, context->FinishProc, releaseOp, object, callback, arg, flags, opCode, usTimeout);
 
   op->state = 0;
   op->transactionSize = context->TransactionSize;
@@ -131,8 +128,7 @@ static ssize_t coroutineRwFinish(asyncOp *op, aioObject *object)
 {
   AsyncOpStatus status = opGetStatus(&op->root);
   size_t bytesTransferred = op->bytesTransferred;
-  objectRelease(&op->root, op->root.poolId);
-  objectDecrementReference(&object->root, 1);
+  releaseAsyncOp(object->root.base, &op->root);
   return status == aosSuccess ? (ssize_t)bytesTransferred : -(int)status;
 }
 
@@ -217,16 +213,13 @@ void setSocketBuffer(aioObject *socket, size_t bufferSize)
 
 aioUserEvent *newUserEvent(asyncBase *base, int isSemaphore, aioEventCb callback, void *arg)
 {
-  aioUserEvent *event = (aioUserEvent*)objectGet(eventPoolId);
-  if (!event) {
-    event = malloc(sizeof(aioUserEvent));
-    event->root.poolId = eventPoolId;
-    base->methodImpl.initializeTimer(base, &event->root);
-  }
-
+  // TODO: use malloc allocator for aioUserEvent
+  aioUserEvent *event = 0;
+  asyncOpAlloc(base, sizeof(aioUserEvent), 1, 0, &eventPool, (asyncOpRoot**)&event);
   event->root.opCode = actUserEvent;
   event->root.finishMethod = eventFinish;
   event->root.callback = (void*)callback;
+  event->root.releaseMethod = 0;
   event->root.arg = arg;
   event->root.tag = ((opGetGeneration(&event->root)+1) << TAG_STATUS_SIZE) | aosPending;
   event->base = base;
@@ -555,8 +548,7 @@ int ioConnect(aioObject *object, const HostAddress *address, uint64_t usTimeout)
   combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
-  objectRelease(&op->root, op->root.poolId);
-  objectDecrementReference(&object->root, 1);
+  releaseAsyncOp(object->root.base, &op->root);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -576,8 +568,7 @@ socketTy ioAccept(aioObject *object, uint64_t usTimeout)
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
   socketTy acceptSocket = op->acceptSocket;
-  objectRelease(&op->root, op->root.poolId);
-  objectDecrementReference(&object->root, 1);
+  releaseAsyncOp(object->root.base, &op->root);
   return status == aosSuccess ? acceptSocket : -(int)status;
 }
 
@@ -652,6 +643,7 @@ ssize_t ioWriteMsg(aioObject *object, const HostAddress *address, const void *bu
     if (++currentFinishedSync >= MAX_SYNCHRONOUS_FINISHED_OPERATION) {
       asyncOp *op = (asyncOp*)newAsyncOp(&object->root, flags | afCoroutine, usTimeout, 0, 0, actWriteMsg, &context);
       op->host = *address;
+      opForceStatus(&op->root, aosSuccess);
       addToGlobalQueue(&op->root);
       coroutineYield();
       return coroutineRwFinish(op, object);
