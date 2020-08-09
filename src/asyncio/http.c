@@ -269,7 +269,7 @@ static void httpClientDestructor(aioObjectRoot *root)
     sslSocketDelete(client->sslSocket);
   else
     deleteAioObject(client->plainSocket);
-  if (!concurrentRingBufferEnqueue(&objectPool, socket)) {
+  if (!concurrentRingBufferEnqueue(&objectPool, client)) {
     free(client->inBuffer);
     free(client);
   }
