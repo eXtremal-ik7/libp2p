@@ -230,7 +230,7 @@ static void smtpParse(AsyncOpStatus status, SMTPClient *client, size_t bytesRead
       lf = memchr(p, '\n', client->end - p);
 
       size_t lineSize = lf-1-(p+4);
-      memcpy(out, p+4, lineSize);
+      memmove(out, p+4, lineSize);
 
       out[lineSize] = '\n';
       p = lf + 1;
@@ -273,7 +273,7 @@ static void smtpRead(SMTPClient *client, SMTPOp *op)
 {
   size_t offset = client->end - client->end;
   if (offset) {
-    memcpy(client->buffer, client->ptr, client->end - client->ptr);
+    memmove(client->buffer, client->ptr, client->end - client->ptr);
     client->ptr = client->buffer + offset;
   }
 
