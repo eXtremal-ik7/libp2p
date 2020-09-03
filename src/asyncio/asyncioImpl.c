@@ -362,7 +362,7 @@ void releaseAsyncOp(asyncBase *base, asyncOpRoot *op)
   if (!concurrentRingBufferEnqueue(op->objectPool, op)) {
     if (op->releaseMethod)
       op->releaseMethod(op);
-    if (op->timerId)
+    if ((op->flags & afRealtime) || op->opCode == actUserEvent)
       base->methodImpl.deleteTimer(op);
     free(op);
   }
