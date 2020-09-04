@@ -1,9 +1,9 @@
 #include "asyncioextras/zmtp.h"
 #include "asyncio/coroutine.h"
 
-static ConcurrentRingBuffer opPool;
-static ConcurrentRingBuffer opTimerPool;
-static ConcurrentRingBuffer objectPool;
+static ConcurrentQueue opPool;
+static ConcurrentQueue opTimerPool;
+static ConcurrentQueue objectPool;
 
 enum zmtpMsgTy {
   zmtpMsgFlagNone,
@@ -702,16 +702,13 @@ static asyncOpRoot *implZmtpSendProxy(aioObjectRoot *object, AsyncFlags flags, u
 void zmtpSocketDestructor(aioObjectRoot *object)
 {
   deleteAioObject(reinterpret_cast<zmtpSocket*>(object)->plainSocket);
-  if (!concurrentRingBufferEnqueue(&objectPool, object)) {
-    free(object);
-  }
+  concurrentQueuePush(&objectPool, object);
 }
 
 zmtpSocket *zmtpSocketNew(asyncBase *base, aioObject *plainSocket, zmtpSocketTy type)
 {
   zmtpSocket *socket = nullptr;
-  concurrentRingBufferTryInit(&objectPool, 4096);
-  if (!concurrentRingBufferDequeue(&objectPool, (void**)&socket)) {
+  if (!concurrentQueuePop(&objectPool, (void**)&socket)) {
     socket = static_cast<zmtpSocket*>(malloc(sizeof(zmtpSocket)));
   }
 

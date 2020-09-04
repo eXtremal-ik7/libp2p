@@ -6,43 +6,29 @@
 #define __ASYNCIO_RINGBUFFER_H_
 
 #include <stddef.h>
+#include <stdint.h>
 
-typedef struct RingBuffer {
-  void **queue;
-  size_t queueSize;
-  size_t queueSizeMask;
-  size_t enqueuePos;
-  size_t dequeuePos;
-} RingBuffer;
-
-typedef struct ConcurrentRingBufferElement {
+typedef struct ConcurrentQueueElement {
   void *data;
   volatile size_t sequence;
-} ConcurrentRingBufferElement;
+} ConcurrentQueueElement;
 
-typedef struct ConcurrentRingBuffer {
-  ConcurrentRingBufferElement *queue;
+typedef struct ConcurrentQueuePartition {
+  ConcurrentQueueElement *queue;
   size_t queueSize;
   size_t queueSizeMask;
   volatile size_t enqueuePos;
   volatile size_t dequeuePos;
-} ConcurrentRingBuffer;
+} ConcurrentQueuePartition;
 
-
-// Ring buffer API
-void ringBufferInit(RingBuffer *buffer, size_t initialSize);
-void ringBufferFree(RingBuffer *buffer);
-int ringBufferEmpty(RingBuffer *buffer);
-void ringBufferEnqueue(RingBuffer *buffer, void *data);
-int ringBufferDequeue(RingBuffer *buffer, void **data);
+typedef struct ConcurrentQueue {
+  ConcurrentQueuePartition Partitions[64];
+  volatile uint32_t ReadPartition;
+  volatile uint32_t WritePartition;
+} ConcurrentQueue;
 
 // Concurrent ring buffer API
-void concurrentRingBufferInit(ConcurrentRingBuffer *buffer, size_t size);
-void concurrentRingBufferTryInit(ConcurrentRingBuffer *buffer, size_t size);
-void concurrentRingBufferFree(ConcurrentRingBuffer *buffer);
-int concurrentRingBufferEmpty(ConcurrentRingBuffer *buffer);
-int concurrentRingBufferEnqueue(ConcurrentRingBuffer *buffer, void *data);
-int concurrentRingBufferDequeue(ConcurrentRingBuffer *buffer, void **data);
-
+void concurrentQueuePush(ConcurrentQueue *queue, void *data);
+int concurrentQueuePop(ConcurrentQueue *queue, void **data);
 
 #endif //__ASYNCIO_RINGBUFFER_H_

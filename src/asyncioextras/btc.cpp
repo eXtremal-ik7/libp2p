@@ -5,9 +5,9 @@
 
 #include "openssl/sha.h"
 
-static ConcurrentRingBuffer opPool;
-static ConcurrentRingBuffer opTimerPool;
-static ConcurrentRingBuffer objectPool;
+static ConcurrentQueue opPool;
+static ConcurrentQueue opTimerPool;
+static ConcurrentQueue objectPool;
 
 struct Context {
   aioExecuteProc *StartProc;
@@ -434,8 +434,7 @@ static asyncOpRoot *implBtcSendProxy(aioObjectRoot *object, AsyncFlags flags, ui
 void btcSocketDestructor(aioObjectRoot *object)
 {
   deleteAioObject(reinterpret_cast<BTCSocket*>(object)->plainSocket);
-  if (!concurrentRingBufferEnqueue(&objectPool, object))
-    free(object);
+  concurrentQueuePush(&objectPool, object);
 }
 
 aioObjectRoot *btcSocketHandle(BTCSocket *socket)
@@ -446,8 +445,7 @@ aioObjectRoot *btcSocketHandle(BTCSocket *socket)
 BTCSocket *btcSocketNew(asyncBase *base, aioObject *plainSocket)
 {
   BTCSocket *socket = 0;
-  concurrentRingBufferTryInit(&objectPool, 4096);
-  if (!concurrentRingBufferDequeue(&objectPool, (void**)&socket))
+  if (!concurrentQueuePop(&objectPool, (void**)&socket))
     socket = static_cast<BTCSocket*>(malloc(sizeof(BTCSocket)));
   initObjectRoot(&socket->root, base, ioObjectUserDefined, btcSocketDestructor);
 

@@ -97,7 +97,7 @@ typedef struct List {
   asyncOpRoot *tail;
 } List;
 
-typedef asyncOpRoot *newAsyncOpTy(asyncBase*, int, ConcurrentRingBuffer*, ConcurrentRingBuffer*);
+typedef asyncOpRoot *newAsyncOpTy(asyncBase*, int, ConcurrentQueue*, ConcurrentQueue*);
 typedef void initializeTimerTy(asyncBase*, asyncOpRoot*);
 typedef AsyncOpStatus aioExecuteProc(asyncOpRoot*);
 typedef int aioCancelProc(asyncOpRoot*);
@@ -210,7 +210,7 @@ struct aioObjectRoot {
 
 struct asyncOpRoot {
   volatile uintptr_t tag;
-  ConcurrentRingBuffer *objectPool;
+  ConcurrentQueue *objectPool;
   aioExecuteProc *executeMethod;
   aioCancelProc *cancelMethod;
   aioFinishProc *finishMethod;
@@ -259,7 +259,7 @@ typedef asyncOpRoot *SyncImplProc(aioObjectRoot*, AsyncFlags, uint64_t, void*, v
 typedef void MakeResultProc(void*);
 typedef void InitOpProc(asyncOpRoot*, void*);
 
-int asyncOpAlloc(asyncBase *base, size_t size, int isRealTime, ConcurrentRingBuffer *objectPool, ConcurrentRingBuffer *objectTimerPool, asyncOpRoot **result);
+int asyncOpAlloc(asyncBase *base, size_t size, int isRealTime, ConcurrentQueue *objectPool, ConcurrentQueue *objectTimerPool, asyncOpRoot **result);
 void releaseAsyncOp(asyncBase *base, asyncOpRoot *op);
 
 void initAsyncOpRoot(asyncOpRoot *op,

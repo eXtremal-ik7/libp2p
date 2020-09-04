@@ -6,9 +6,9 @@
 #include "asyncio/socket.h"
 #include <memory.h>
 
-static ConcurrentRingBuffer opPool;
-static ConcurrentRingBuffer opTimerPool;
-static ConcurrentRingBuffer objectPool;
+static ConcurrentQueue opPool;
+static ConcurrentQueue opTimerPool;
+static ConcurrentQueue objectPool;
 
 typedef enum SmtpOpTy {
   SmtpOpConnect = OPCODE_WRITE,
@@ -486,8 +486,7 @@ static void smtpClientDestructor(aioObjectRoot *root)
   else
     deleteAioObject(client->PlainSocket);
 
-  if (!concurrentRingBufferEnqueue(&objectPool, client))
-    free(client);
+  concurrentQueuePush(&objectPool, client);
 }
 
 SMTPClient *smtpClientNew(asyncBase *base, HostAddress localAddress, SmtpServerType type)
@@ -501,8 +500,7 @@ SMTPClient *smtpClientNew(asyncBase *base, HostAddress localAddress, SmtpServerT
   }
 
   SMTPClient *client = 0;
-  concurrentRingBufferTryInit(&objectPool, 4096);
-  if (!concurrentRingBufferDequeue(&objectPool, (void**)&client)) {
+  if (!concurrentQueuePop(&objectPool, (void**)&client)) {
     client = (SMTPClient*)malloc(sizeof(SMTPClient));
   }
 

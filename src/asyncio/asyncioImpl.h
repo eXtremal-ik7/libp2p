@@ -56,7 +56,7 @@ struct asyncImpl {
 struct asyncBase {
   enum AsyncMethod method;
   struct asyncImpl methodImpl;
-  struct ConcurrentRingBuffer globalQueue;
+  struct ConcurrentQueue globalQueue;
   struct pageMap timerMap;
   time_t lastCheckPoint;
   volatile unsigned messageLoopThreadCounter;

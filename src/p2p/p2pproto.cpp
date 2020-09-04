@@ -3,9 +3,9 @@
 #include "p2p/p2pformat.h"
 #include <stdlib.h>
 
-static ConcurrentRingBuffer opPool;
-static ConcurrentRingBuffer opTimerPool;
-static ConcurrentRingBuffer objectPool;
+static ConcurrentQueue opPool;
+static ConcurrentQueue opTimerPool;
+static ConcurrentQueue objectPool;
 
 struct Context {
   aioExecuteProc *StartProc;
@@ -158,17 +158,13 @@ static void destructor(aioObjectRoot *root)
 {
   p2pConnection *connection = reinterpret_cast<p2pConnection*>(root);
   deleteAioObject(connection->socket);
-  if (!concurrentRingBufferEnqueue(&objectPool, connection)) {
-    connection->stream.~p2pStream();
-    free(connection);
-  }
+  concurrentQueuePush(&objectPool, connection);
 }
 
 p2pConnection *p2pConnectionNew(aioObject *socket)
 {
   p2pConnection *connection = 0;
-  concurrentRingBufferTryInit(&objectPool, 4096);
-  if (!concurrentRingBufferDequeue(&objectPool, (void**)&connection)) {
+  if (!concurrentQueuePop(&objectPool, (void**)&connection)) {
     connection = static_cast<p2pConnection*>(malloc(sizeof(p2pConnection)));
     new(&connection->stream) xmstream;
   }

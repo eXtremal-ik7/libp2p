@@ -9,9 +9,9 @@
 #include <string.h>
 #include <time.h>
 
-static ConcurrentRingBuffer opPool;
-static ConcurrentRingBuffer opTimerPool;
-static ConcurrentRingBuffer eventPool;
+static ConcurrentQueue opPool;
+static ConcurrentQueue opTimerPool;
+static ConcurrentQueue eventPool;
 
 #ifdef OS_WINDOWS
 asyncBase *iocpNewAsyncBase();
@@ -185,7 +185,7 @@ asyncBase *createAsyncBase(AsyncMethod method)
   base->opsCount = 0;
 #endif
   pageMapInit(&base->timerMap);
-  concurrentRingBufferInit(&base->globalQueue, 65536);
+  memset(&base->globalQueue, 0, sizeof(base->globalQueue));
   base->timerMapLock = 0;
   base->lastCheckPoint = time(0);
   base->messageLoopThreadCounter = 0;

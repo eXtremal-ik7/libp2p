@@ -17,8 +17,7 @@
 #include <sys/epoll.h>
 #include <sys/timerfd.h>
 
-extern __tls RingBuffer localQueue;
-static ConcurrentRingBuffer objectPool;
+static ConcurrentQueue objectPool;
 
 #define MAX_EVENTS 256
 
@@ -42,7 +41,7 @@ void epollEnqueue(asyncBase *base, asyncOpRoot *op);
 void epollPostEmptyOperation(asyncBase *base);
 void epollNextFinishedOperation(asyncBase *base);
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data);
-asyncOpRoot *epollNewAsyncOp(asyncBase *base, int isRealTime, ConcurrentRingBuffer *objectPool, ConcurrentRingBuffer *objectTimerPool);
+asyncOpRoot *epollNewAsyncOp(asyncBase *base, int isRealTime, ConcurrentQueue *objectPool, ConcurrentQueue *objectTimerPool);
 int epollCancelAsyncOp(asyncOpRoot *opptr);
 void epollDeleteObject(aioObject *object);
 void epollInitializeTimer(asyncBase *base, asyncOpRoot *op);
@@ -125,10 +124,8 @@ asyncBase *epollNewAsyncBase()
 void epollEnqueue(asyncBase *base, asyncOpRoot *op)
 {
   epollBase *localBase = (epollBase*)base;
-  if (concurrentRingBufferEnqueue(&base->globalQueue, op))
-    eventfd_write(localBase->eventFd, 1);
-  else
-    ringBufferEnqueue(&localQueue, op);
+  concurrentQueuePush(&base->globalQueue, op);
+  eventfd_write(localBase->eventFd, 1);
 }
 
 void epollPostEmptyOperation(asyncBase *base)
@@ -197,7 +194,6 @@ void epollNextFinishedOperation(asyncBase *base)
   struct epoll_event events[MAX_EVENTS];
   epollBase *localBase = (epollBase *)base;
   messageLoopThreadId = __sync_fetch_and_add(&base->messageLoopThreadCounter, 1);
-  ringBufferInit(&localQueue, 128);
 
   while (1) {
     do {
@@ -206,8 +202,6 @@ void epollNextFinishedOperation(asyncBase *base)
         unsigned threadsRunning = __uint_atomic_fetch_and_add(&base->messageLoopThreadCounter, 0u-1) - 1;
         if (threadsRunning)
           epollEnqueue(base, 0);
-
-        ringBufferFree(&localQueue);
         return;
       }
 
@@ -276,8 +270,7 @@ aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
   epollBase *localBase = (epollBase*)base;
   aioObject *object = 0;
-  concurrentRingBufferTryInit(&objectPool, 4096);
-  if (!concurrentRingBufferDequeue(&objectPool, (void**)&object)) {
+  if (!concurrentQueuePop(&objectPool, (void**)&object)) {
     object = alignedMalloc(sizeof(aioObject), TAGGED_POINTER_ALIGNMENT);
     object->buffer.ptr = 0;
     object->buffer.totalSize = 0;
@@ -302,7 +295,7 @@ aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
   return object;
 }
 
-asyncOpRoot *epollNewAsyncOp(asyncBase *base, int isRealTime, ConcurrentRingBuffer *objectPool, ConcurrentRingBuffer *objectTimerPool)
+asyncOpRoot *epollNewAsyncOp(asyncBase *base, int isRealTime, ConcurrentQueue *objectPool, ConcurrentQueue *objectTimerPool)
 {
   asyncOp *op = 0;
   if (asyncOpAlloc(base, sizeof(asyncOp), isRealTime, objectPool, objectTimerPool, (asyncOpRoot**)&op)) {
@@ -337,11 +330,7 @@ void epollDeleteObject(aioObject *object)
       break;
   }
 
-  if (!concurrentRingBufferEnqueue(&objectPool, object)) {
-    if (object->buffer.ptr)
-      free(object->buffer.ptr);
-    free(object);
-  }
+  concurrentQueuePush(&objectPool, object);
 }
 
 void epollInitializeTimer(asyncBase *base, asyncOpRoot *op)

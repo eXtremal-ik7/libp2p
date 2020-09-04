@@ -11,9 +11,9 @@
 #define DEFAULT_SSL_READ_BUFFER_SIZE 16384
 #define DEFAULT_SSL_WRITE_BUFFER_SIZE 16384
 
-static ConcurrentRingBuffer opPool;
-static ConcurrentRingBuffer opTimerPool;
-static ConcurrentRingBuffer objectPool;
+static ConcurrentQueue opPool;
+static ConcurrentQueue opTimerPool;
+static ConcurrentQueue objectPool;
 
 struct Context {
   aioExecuteProc *StartProc;
@@ -259,15 +259,7 @@ void sslSocketDestructor(aioObjectRoot *root)
 {
   SSLSocket *socket = (SSLSocket*)root;
   deleteAioObject(socket->object);
-  if (!concurrentRingBufferEnqueue(&objectPool, socket)) {
-    free(socket->sslReadBuffer);
-    free(socket->sslWriteBuffer);
-    BIO_free(socket->bioOut);
-    BIO_free(socket->bioIn);
-    SSL_free(socket->ssl);
-    SSL_CTX_free(socket->sslContext);
-    free(socket);
-  }
+  concurrentQueuePush(&objectPool, socket);
 }
 
 
@@ -283,8 +275,7 @@ SSLSocket *sslSocketNew(asyncBase *base, aioObject *existingSocket)
   }
 
   SSLSocket *S = 0;
-  concurrentRingBufferTryInit(&objectPool, 4096);
-  if (!concurrentRingBufferDequeue(&objectPool, (void**)&S)) {
+  if (!concurrentQueuePop(&objectPool, (void**)&S)) {
     S = (SSLSocket*)malloc(sizeof(SSLSocket));
 #ifdef DEPRECATEDIN_1_1_0
     S->sslContext = SSL_CTX_new (TLS_client_method());

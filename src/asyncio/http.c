@@ -4,9 +4,9 @@
 #include "asyncio/coroutine.h"
 #include <string.h>
 
-static ConcurrentRingBuffer opPool;
-static ConcurrentRingBuffer opTimerPool;
-static ConcurrentRingBuffer objectPool;
+static ConcurrentQueue opPool;
+static ConcurrentQueue opTimerPool;
+static ConcurrentQueue objectPool;
 
 typedef enum {
   httpOpConnect = 0,

@@ -3,9 +3,9 @@
 #include "macro.h"
 #include <stdlib.h>
 
-static ConcurrentRingBuffer opPool;
-static ConcurrentRingBuffer opTimerPool;
-static ConcurrentRingBuffer objectPool;
+static ConcurrentQueue opPool;
+static ConcurrentQueue opTimerPool;
+static ConcurrentQueue objectPool;
 
 enum rlpxOpTy {
   rlpxOpAccept = OPCODE_READ,
@@ -114,9 +114,7 @@ RlpxOperation *initWriteOp(aioExecuteProc *start,
 static void rlpxSocketDestructor(aioObjectRoot *object)
 {
   deleteAioObject(reinterpret_cast<rlpxSocket*>(object)->plainSocket);
-  if (!concurrentRingBufferEnqueue(&objectPool, object)) {
-    free(object);
-  }
+  concurrentQueuePush(&objectPool, object);
 }
 
 static AsyncOpStatus startRlpxConnect(asyncOpRoot *opptr)
@@ -147,8 +145,7 @@ static AsyncOpStatus startRlpxConnect(asyncOpRoot *opptr)
 rlpxSocket *rlpxSocketNew(asyncBase *base, aioObject *plainSocket)
 {
   rlpxSocket *socket = 0;
-  concurrentRingBufferTryInit(&objectPool, 4096);
-  if (!concurrentRingBufferDequeue(&objectPool, (void**)&socket)) {
+  if (!concurrentQueuePop(&objectPool, (void**)&socket)) {
     socket = static_cast<rlpxSocket*>(malloc(sizeof(rlpxSocket)));
   }
   initObjectRoot(&socket->root, base, ioObjectUserDefined, rlpxSocketDestructor);

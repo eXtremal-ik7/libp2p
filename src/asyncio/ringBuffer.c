@@ -1,80 +1,19 @@
-// Lock free bounded queue
-// Original code from Dmitry Vyukov
+// Lock free unbounded queue
+// Based on bounded queue code from Dmitry Vyukov
 // http://www.1024cores.net
 
 #include "asyncio/ringBuffer.h"
 #include "atomic.h"
 #include <assert.h>
-#include <stdint.h>
 #include <stdlib.h>
 
-void ringBufferInit(RingBuffer *buffer, size_t initialSize)
-{
-  assert((initialSize & (initialSize-1)) == 0 && "Invalid ring buffer size");
-  buffer->queue = malloc(initialSize*sizeof(void*));
-  buffer->queueSize = initialSize;
-  buffer->queueSizeMask = initialSize-1;
-  buffer->enqueuePos = 0;
-  buffer->dequeuePos = 0;
-}
+#define CONCURRENT_QUEUE_INITIAL_SIZE_LOG2 12
 
-void ringBufferFree(RingBuffer *buffer)
-{
-  free(buffer->queue);
-}
-
-int ringBufferEmpty(RingBuffer *buffer)
-{
-  return buffer->dequeuePos == buffer->enqueuePos;
-}
-
-void ringBufferEnqueue(RingBuffer *buffer, void *data)
-{
-  if (buffer->enqueuePos - buffer->dequeuePos == buffer->queueSize) {
-    // realloc
-    size_t newSize = buffer->queueSize*2;
-    void **newQueue = malloc(newSize*sizeof(void*));
-    for (size_t i = 0, pos = buffer->dequeuePos; pos != buffer->enqueuePos; pos++, i++)
-      newQueue[i] = buffer->queue[pos & buffer->queueSizeMask];
-
-    free(buffer->queue);
-    buffer->queue = newQueue;
-    buffer->queueSize = newSize;
-    buffer->queueSizeMask = newSize-1;
-    buffer->enqueuePos = newSize/2;
-    buffer->dequeuePos = 0;
-  }
-
-  buffer->queue[buffer->enqueuePos++ & buffer->queueSizeMask] = data;
-}
-
-int ringBufferDequeue(RingBuffer *buffer, void **data)
-{
-  if (buffer->dequeuePos != buffer->enqueuePos) {
-    *data = buffer->queue[buffer->dequeuePos++ & buffer->queueSizeMask];
-    return 1;
-  } else {
-    return 0;
-  }
-}
-
-void concurrentRingBufferInit(ConcurrentRingBuffer *buffer, size_t size)
-{
-  assert((size & (size-1)) == 0 && "Invalid ring buffer size");
-  buffer->queue = malloc(size*sizeof(ConcurrentRingBufferElement));
-  buffer->queueSize = size;
-  buffer->queueSizeMask = size-1;
-  buffer->enqueuePos = 0;
-  buffer->dequeuePos = 0;
-  for (size_t i = 0; i < size; i++)
-    buffer->queue[i].sequence = i;
-}
-
-void concurrentRingBufferTryInit(ConcurrentRingBuffer *buffer, size_t size)
+static void partitionInit(ConcurrentQueuePartition *buffer, size_t size)
 {
   assert((size & (size-1)) == 0 && "Invalid ring buffer size");
   if (!buffer->queue) {
-    void *queue = malloc(size*sizeof(ConcurrentRingBufferElement));
+    void *queue = malloc(size*sizeof(ConcurrentQueueElement));
     if (!__pointer_atomic_compare_and_swap((void *volatile*)&buffer->queue, 0, queue)) {
       free(queue);
     } else {
@@ -88,20 +27,9 @@ void concurrentRingBufferTryInit(ConcurrentRingBuffer *buffer, size_t size)
   }
 }
 
-
-void concurrentRingBufferFree(ConcurrentRingBuffer *buffer)
+static int partitionPush(ConcurrentQueuePartition *buffer, void *data)
 {
-  free(buffer->queue);
-}
-
-int concurrentRingBufferEmpty(ConcurrentRingBuffer *buffer)
-{
-  return buffer->dequeuePos == buffer->enqueuePos;
-}
-
-int concurrentRingBufferEnqueue(ConcurrentRingBuffer *buffer, void *data)
-{
-  ConcurrentRingBufferElement *element = 0;
+  ConcurrentQueueElement *element = 0;
   size_t pos = buffer->enqueuePos;
   for (;;) {
     element = &buffer->queue[pos & buffer->queueSizeMask];
@@ -123,9 +51,12 @@ int concurrentRingBufferEnqueue(ConcurrentRingBuffer *buffer, void *data)
   return 1;
 }
 
-int concurrentRingBufferDequeue(ConcurrentRingBuffer *buffer, void **data)
+int partitionPop(ConcurrentQueuePartition *buffer, void **data)
 {
-  ConcurrentRingBufferElement *element = 0;
+  if (!buffer->queue)
+    return 0;
+
+  ConcurrentQueueElement *element = 0;
   size_t pos = buffer->dequeuePos;
   for (;;) {
     element = &buffer->queue[pos & buffer->queueSizeMask];
@@ -145,4 +76,34 @@ int concurrentRingBufferDequeue(ConcurrentRingBuffer *buffer, void **data)
   *data = element->data;
   element->sequence = pos + buffer->queueSize;
   return 1;
+}
+
+void concurrentQueuePush(ConcurrentQueue *queue, void *data)
+{
+  for (;;) {
+    uint32_t currentWritePartition = queue->WritePartition;
+    ConcurrentQueuePartition *partition = &queue->Partitions[currentWritePartition];
+
+    partitionInit(partition, 1 << (queue->WritePartition + CONCURRENT_QUEUE_INITIAL_SIZE_LOG2));
+    if (partitionPush(partition, data))
+      return;
+
+    __uint_atomic_compare_and_swap(&queue->WritePartition, currentWritePartition, currentWritePartition+1);
+  }
+}
+
+int concurrentQueuePop(ConcurrentQueue *queue, void **data)
+{
+  for (;;) {
+    uint32_t currentReadPartition = queue->ReadPartition;
+    ConcurrentQueuePartition *partition = &queue->Partitions[currentReadPartition];
+
+    if (partitionPop(partition, data))
+      return 1;
+
+    if (currentReadPartition == queue->WritePartition)
+      return 0;
+
+    __uint_atomic_compare_and_swap(&queue->ReadPartition, currentReadPartition, currentReadPartition+1);
+  }
 }

@@ -13,9 +13,8 @@
 
 __tls unsigned currentFinishedSync;
 __tls unsigned messageLoopThreadId;
-__tls RingBuffer localQueue;
 
-ConcurrentRingBuffer asyncOpLinkListPool;
+ConcurrentQueue asyncOpLinkListPool;
 
 void eqRemove(List *list, asyncOpRoot *op)
 {
@@ -188,10 +187,7 @@ uintptr_t eventDecrementReference(aioUserEvent *event, uintptr_t tag)
     if (event->destructorCb)
       event->destructorCb(event, event->destructorCbArg);
 
-    if (!concurrentRingBufferEnqueue(event->root.objectPool, event)) {
-      event->base->methodImpl.deleteTimer(&event->root);
-      free(event);
-    }
+    concurrentQueuePush(event->root.objectPool, event);
   }
 
   return result;
@@ -222,8 +218,7 @@ void eventDeactivate(aioUserEvent *event)
 void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op)
 {
   asyncOpListLink *timerLink = 0;
-  concurrentRingBufferTryInit(&asyncOpLinkListPool, 4096);
-  if (!concurrentRingBufferDequeue(&asyncOpLinkListPool, (void**)&timerLink))
+  if (!concurrentQueuePop(&asyncOpLinkListPool, (void**)&timerLink))
     timerLink = malloc(sizeof(asyncOpListLink));
   timerLink->op = op;
   timerLink->tag = opGetGeneration(op);
@@ -236,9 +231,7 @@ void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op)
   asyncOpListLink *timerLink = (asyncOpListLink*)op->timerId;
   if (timerLink && pageMapRemove(&base->timerMap, timerLink)) {
     op->timerId = 0;
-    if (!concurrentRingBufferEnqueue(&asyncOpLinkListPool, timerLink))
-      free(timerLink);
-
+    concurrentQueuePush(&asyncOpLinkListPool, timerLink);
   }
 }
 
@@ -255,8 +248,7 @@ void processTimeoutQueue(asyncBase *base, time_t currentTime)
     while (link) {
       asyncOpListLink *next = link->next;
       opCancel(link->op, link->tag, aosTimeout);
-      if (!concurrentRingBufferEnqueue(&asyncOpLinkListPool, link))
-        free(link);
+      concurrentQueuePush(&asyncOpLinkListPool, link);
       link = next;
     }
   }
@@ -333,15 +325,14 @@ uintptr_t opEncodeTag(asyncOpRoot *op, uintptr_t tag)
 int asyncOpAlloc(asyncBase *base,
                  size_t size,
                  int isRealTime,
-                 ConcurrentRingBuffer *objectPool,
-                 ConcurrentRingBuffer *objectTimerPool,
+                 ConcurrentQueue *objectPool,
+                 ConcurrentQueue *objectTimerPool,
                  asyncOpRoot **result)
 {
   int hasAllocatedNew = 0;
   asyncOpRoot *op = 0;
-  ConcurrentRingBuffer *buffer = !isRealTime ? objectPool : objectTimerPool;
-  concurrentRingBufferTryInit(buffer, 4096);
-  if (!concurrentRingBufferDequeue(buffer, (void**)&op)) {
+  ConcurrentQueue *buffer = !isRealTime ? objectPool : objectTimerPool;
+  if (!concurrentQueuePop(buffer, (void**)&op)) {
     op = (asyncOpRoot*)alignedMalloc(size, 1u << COMBINER_TAG_SIZE);
     if (isRealTime)
       base->methodImpl.initializeTimer(base, op);
@@ -359,14 +350,7 @@ int asyncOpAlloc(asyncBase *base,
 void releaseAsyncOp(asyncBase *base, asyncOpRoot *op)
 {
   aioObjectRoot *object = op->object;
-  if (!concurrentRingBufferEnqueue(op->objectPool, op)) {
-    if (op->releaseMethod)
-      op->releaseMethod(op);
-    if ((op->flags & afRealtime) || op->opCode == actUserEvent)
-      base->methodImpl.deleteTimer(op);
-    free(op);
-  }
-
+  concurrentQueuePush(op->objectPool, op);
   objectDecrementReference(object, 1);
 }
 
@@ -549,9 +533,7 @@ void addToGlobalQueue(asyncOpRoot *op)
 int executeGlobalQueue(asyncBase *base)
 { 
   asyncOpRoot *op;
-  while (ringBufferDequeue(&localQueue, (void**)&op))
-    concurrentRingBufferEnqueue(&base->globalQueue, op);
-  while (concurrentRingBufferDequeue(&base->globalQueue, (void**)&op)) {
+  while (concurrentQueuePop(&base->globalQueue, (void**)&op)) {
     if (!op)
       return 0;
 
