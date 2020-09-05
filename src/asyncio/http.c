@@ -269,17 +269,13 @@ static void httpClientDestructor(aioObjectRoot *root)
     sslSocketDelete(client->sslSocket);
   else
     deleteAioObject(client->plainSocket);
-  if (!concurrentRingBufferEnqueue(&objectPool, client)) {
-    free(client->inBuffer);
-    free(client);
-  }
+  concurrentQueuePush(&objectPool, client);
 }
 
 HTTPClient *httpClientNew(asyncBase *base, aioObject *socket)
 {
   HTTPClient *client = 0;
-  concurrentRingBufferTryInit(&objectPool, 4096);
-  if (!concurrentRingBufferDequeue(&objectPool, (void**)&client)) {
+  if (!concurrentQueuePop(&objectPool, (void**)&client)) {
     client = (HTTPClient*)malloc(sizeof(HTTPClient));
     client->inBuffer = (uint8_t*)malloc(65536);
     client->inBufferSize = 65536;
