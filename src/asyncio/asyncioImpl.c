@@ -98,16 +98,7 @@ asyncOpListLink *pageMapExtractAll(pageMap *map, uint64_t tm)
   uint32_t hi;
   pageMapKeys(tm, &lo, &hi);
   asyncOpListLink **p1 = map->map[hi];
-
-  if (p1) {
-  __spinlock_acquire(&map->lock);
-  asyncOpListLink *first = p1[lo];
-    p1[lo] = 0;
-    __spinlock_release(&map->lock);
-    return first;
-  } else {
-    return 0;
-  }
+  return p1 ? __pointer_atomic_exchange((void* volatile*)&p1[lo], 0) : 0;
 }
 
 void pageMapAdd(pageMap *map, asyncOpListLink *link)
@@ -124,39 +115,10 @@ void pageMapAdd(pageMap *map, asyncOpListLink *link)
     }
   }
 
-  link->prev = 0;
-
-  __spinlock_acquire(&map->lock);
-  link->next = p1[lo];
-  if (p1[lo])
-    p1[lo]->prev = link;
-  p1[lo] = link;
-  __spinlock_release(&map->lock);
-}
-
-int pageMapRemove(pageMap *map, asyncOpListLink *link)
-{
-  int removed = 0;
-  uint32_t lo;
-  uint32_t hi;
-  pageMapKeys(getPt(link->op->endTime), &lo, &hi);
-  asyncOpListLink **p1 = map->map[hi];
-  if (!p1)
-    return removed;
-
-  __spinlock_acquire(&map->lock);
-  if (p1[lo]) {
-    if (link == p1[lo])
-      p1[lo] = link->next;
-    if (link->prev)
-      link->prev->next = link->next;
-    if (link->next)
-      link->next->prev = link->prev;
-    removed = 1;
-  }
-  __spinlock_release(&map->lock);
-
-  return removed;
+  asyncOpListLink *current;
+  do {
+    current = link->next = p1[lo];
+  } while (!__pointer_atomic_compare_and_swap((void* volatile*)&p1[lo], current, link));
 }
 
 uintptr_t objectIncrementReference(aioObjectRoot *object, uintptr_t count)
@@ -224,15 +186,6 @@ void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op)
   timerLink->tag = opGetGeneration(op);
   pageMapAdd(&base->timerMap, timerLink);
   op->timerId = timerLink;
-}
-
-void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op)
-{
-  asyncOpListLink *timerLink = (asyncOpListLink*)op->timerId;
-  if (timerLink && pageMapRemove(&base->timerMap, timerLink)) {
-    op->timerId = 0;
-    concurrentQueuePush(&asyncOpLinkListPool, timerLink);
-  }
 }
 
 void processTimeoutQueue(asyncBase *base, time_t currentTime)
@@ -456,8 +409,6 @@ void opRelease(asyncOpRoot *op, AsyncOpStatus status, List *executeList)
   if (op->timerId && status != aosTimeout) {
     if (op->flags & afRealtime)
       op->object->base->methodImpl.stopTimer(op);
-    else
-      removeFromTimeoutQueue(op->object->base, op);
   }
 
   if (executeList)

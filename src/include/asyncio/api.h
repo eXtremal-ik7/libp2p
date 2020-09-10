@@ -172,7 +172,6 @@ void eqPushBack(List *list, asyncOpRoot *op);
 typedef struct asyncOpListLink {
   asyncOpRoot *op;
   uintptr_t tag;
-  asyncOpListLink *prev;
   asyncOpListLink *next;
 } asyncOpListLink;
 

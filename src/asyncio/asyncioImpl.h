@@ -110,7 +110,6 @@ struct aioUserEvent {
 
 void pageMapInit(pageMap *map);
 void addToTimeoutQueue(asyncBase *base, asyncOpRoot *op);
-void removeFromTimeoutQueue(asyncBase *base, asyncOpRoot *op);
 void processTimeoutQueue(asyncBase *base, time_t currentTime);
 
 int copyFromBuffer(void *dst, size_t *offset, struct ioBuffer *src, size_t size);

@@ -58,6 +58,15 @@ static inline int __pointer_atomic_compare_and_swap(void *volatile *tag, void *v
 #endif
 }
 
+static inline void *__pointer_atomic_exchange(void *volatile *pointer, void *v1)
+{
+#ifndef _MSC_VER
+  return __atomic_exchange_n(pointer, v1, __ATOMIC_SEQ_CST);
+#else
+  return InterlockedExchangePointer(pointer, v1);
+#endif
+}
+
 static inline void __spinlock_acquire(unsigned *lock)
 {
   for (;;) {
