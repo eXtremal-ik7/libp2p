@@ -7,9 +7,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-extern __tls RingBuffer localQueue;
-
-static const char *socketPool = "aioObject";
+static ConcurrentQueue objectPool;
 
 typedef struct iocpOp iocpOp;
 
@@ -40,12 +38,13 @@ void iocpEnqueue(asyncBase *base, asyncOpRoot *op);
 void postEmptyOperation(asyncBase *base);
 void iocpNextFinishedOperation(asyncBase *base);
 aioObject *iocpNewAioObject(asyncBase *base, IoObjectTy type, void *data);
-asyncOpRoot *iocpNewAsyncOp();
+asyncOpRoot *iocpNewAsyncOp(asyncBase *base, int isRealTime, ConcurrentQueue *objectPool, ConcurrentQueue *objectTimerPool);
 int iocpCancelAsyncOp(asyncOpRoot *opptr);
 void iocpDeleteObject(aioObject *op);
 void iocpInitializeTimer(asyncBase *base, asyncOpRoot *op);
 void iocpStartTimer(asyncOpRoot *op);
 void iocpStopTimer(asyncOpRoot *op);
+void iocpDeleteTimer(asyncOpRoot *op);
 void iocpActivate(aioUserEvent *event);
 AsyncOpStatus iocpAsyncConnect(asyncOpRoot *op);
 AsyncOpStatus iocpAsyncAccept(asyncOpRoot *op);
@@ -66,6 +65,7 @@ static struct asyncImpl iocpImpl = {
   iocpInitializeTimer,
   iocpStartTimer,
   iocpStopTimer,
+  iocpDeleteTimer,
   iocpActivate,
   iocpAsyncConnect,
   iocpAsyncAccept,
@@ -253,9 +253,9 @@ void iocpNextFinishedOperation(asyncBase *base)
             coroutineCall((coroutineTy*)op->finishMethod);
           } else {
             aioObjectRoot* object = op->object;
-            objectRelease(op, op->poolId);
             if (op->callback)
               op->finishMethod(op);
+            concurrentQueuePush(op->objectPool, op);
             objectDecrementReference(object, 1);
           }
         }
@@ -316,9 +316,9 @@ void iocpNextFinishedOperation(asyncBase *base)
 aioObject *iocpNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
   iocpBase *localBase = (iocpBase*)base;
-  aioObject *object = (aioObject*)objectGet(socketPool);
-  if (!object) {
-    object = malloc(sizeof(aioObject));
+  aioObject* object = 0;
+  if (!concurrentQueuePop(&objectPool, (void*)&object)) {
+    object = alignedMalloc(sizeof(aioObject), TAGGED_POINTER_ALIGNMENT);
     object->buffer.ptr = 0;
     object->buffer.totalSize = 0;
   }
@@ -343,14 +343,16 @@ aioObject *iocpNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 }
 
 
-asyncOpRoot *iocpNewAsyncOp()
+asyncOpRoot *iocpNewAsyncOp(asyncBase* base, int isRealTime, ConcurrentQueue *objectPool, ConcurrentQueue *objectTimerPool)
 {
-  iocpOp *op;
-  op = alignedMalloc(sizeof(iocpOp), 1u << COMBINER_TAG_SIZE);
-  if (op)
-    memset(op, 0, sizeof(iocpOp));
+  iocpOp *op = 0;
+  if (asyncOpAlloc(base, sizeof(iocpOp), isRealTime, objectPool, objectTimerPool, (asyncOpRoot**)&op)) {
+    op->info.internalBuffer = 0;
+    op->info.internalBufferSize = 0;
+  }
 
-  return (asyncOpRoot*)op;
+  memset(&op->overlapped, 0, sizeof(op->overlapped));
+  return &op->info.root;
 }
 
 int iocpCancelAsyncOp(asyncOpRoot *opptr)
@@ -384,7 +386,7 @@ void iocpDeleteObject(aioObject *object)
       break;
   }
 
-  objectRelease(object, socketPool);
+  concurrentQueuePush(&objectPool, object);
 }
 
 void iocpInitializeTimer(asyncBase *base, asyncOpRoot *op)
@@ -425,6 +427,12 @@ void iocpStopTimer(asyncOpRoot *op)
   CancelWaitableTimer(((aioTimer*)op->timerId)->hTimer);
 }
 
+void iocpDeleteTimer(asyncOpRoot *op)
+{
+  aioTimer *timer = (aioTimer*)op->timerId;
+  CloseHandle(timer->hTimer);
+  free(timer);
+}
 
 void iocpActivate(aioUserEvent *event)
 {
