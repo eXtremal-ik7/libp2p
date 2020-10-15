@@ -198,14 +198,19 @@ ParserResultTy httpRequestParse(HttpRequestParserState *state, httpRequestParseC
     state->state = httpRequestUriQueryBegin;
   }
 
-  if (state->state == httpRequestUriQueryBegin && *state->ptr == '?') {
-    state->state = httpRequestUriQuery;
-    state->ptr++;
-  } else {
-    state->state = httpRequestUriFragment;
+  if (state->state == httpRequestUriQueryBegin) {
+    if (state->ptr == state->end)
+      return ParserResultNeedMoreData;
+
+    if (*state->ptr == '?') {
+      state->state = httpRequestUriQuery;
+      state->ptr++;
+    } else {
+      state->state = httpRequestUriFragment;
+    }
   }
 
-    // Parse URI query
+  // Parse URI query
   if (state->state == httpRequestUriQuery) {
     localResult = uriParseQuery(&state->ptr, state->end, false, [](URIComponent *source, void *arg) {
       HttpRequestComponent component;
@@ -228,6 +233,9 @@ ParserResultTy httpRequestParse(HttpRequestParserState *state, httpRequestParseC
 
   // Parse URI fragment
   if (state->state == httpRequestUriFragment) {
+    if (state->ptr == state->end)
+      return ParserResultNeedMoreData;
+
     if (*state->ptr == '#') {
       state->ptr++;
       localResult = uriParseFragment(&state->ptr, state->end, false, [](URIComponent *source, void *arg) {
@@ -441,15 +449,17 @@ ParserResultTy httpRequestParse(HttpRequestParserState *state, httpRequestParseC
           return ParserResultCancelled;
         state->ptr = p + state->dataRemaining;
         state->state = httpRequestStLast;
-      } else if (p != state->end) {
-        size_t size = std::min(state->dataRemaining, static_cast<size_t>(state->end - p));
-        component.type = httpRequestDtData;
-        component.data.data = p;
-        component.data.size = size;
-        if (!callback(&component, arg))
-          return ParserResultCancelled;
-        state->ptr = p + size;
-        state->dataRemaining -= size;
+      } else {
+        if (p != state->end) {
+          size_t size = std::min(state->dataRemaining, static_cast<size_t>(state->end - p));
+          component.type = httpRequestDtData;
+          component.data.data = p;
+          component.data.size = size;
+          if (!callback(&component, arg))
+            return ParserResultCancelled;
+          state->ptr = p + size;
+          state->dataRemaining -= size;
+        }
         return ParserResultNeedMoreData;
       }
     }
