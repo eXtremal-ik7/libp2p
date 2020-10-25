@@ -300,7 +300,7 @@ int asyncOpAlloc(asyncBase *base,
   return hasAllocatedNew;
 }
 
-void releaseAsyncOp(asyncBase *base, asyncOpRoot *op)
+void releaseAsyncOp(asyncOpRoot *op)
 {
   aioObjectRoot *object = op->object;
   concurrentQueuePush(op->objectPool, op);
@@ -505,7 +505,7 @@ int executeGlobalQueue(asyncBase *base)
         } else {
           if (op->callback)
             op->finishMethod(op);
-          releaseAsyncOp(base, op);
+          releaseAsyncOp(op);
         }
       }
     }

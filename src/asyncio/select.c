@@ -48,12 +48,13 @@ void selectEnqueue(asyncBase *base, asyncOpRoot *op);
 void selectPostEmptyOperation(asyncBase *base);
 void selectNextFinishedOperation(asyncBase *base);
 aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data);
-asyncOpRoot *selectNewAsyncOp(void);
+asyncOpRoot *selectNewAsyncOp(asyncBase *base, int isRealTime, ConcurrentQueue *objectPool, ConcurrentQueue *objectTimerPool);
 int selectCancelAsyncOp(asyncOpRoot *opptr);
 void selectDeleteObject(aioObject *object);
 void selectInitializeTimer(asyncBase *base, asyncOpRoot *op);
 void selectStartTimer(asyncOpRoot *op);
 void selectStopTimer(asyncOpRoot *op);
+void selectDeleteTimer(asyncOpRoot *op);
 void selectActivate(aioUserEvent *op);
 AsyncOpStatus selectAsyncConnect(asyncOpRoot *opptr);
 AsyncOpStatus selectAsyncAccept(asyncOpRoot *opptr);
@@ -75,6 +76,7 @@ static struct asyncImpl selectImpl = {
   selectInitializeTimer,
   selectStartTimer,
   selectStopTimer,
+  selectDeleteTimer,
   selectActivate,
   selectAsyncConnect,
   selectAsyncAccept,
@@ -291,15 +293,13 @@ aioObject *selectNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 }
 
 
-asyncOpRoot *selectNewAsyncOp()
+asyncOpRoot *selectNewAsyncOp(asyncBase *base, int isRealTime, ConcurrentQueue *objectPool, ConcurrentQueue *objectTimerPool)
 {
-  selectOp *op = malloc(sizeof(selectOp));
-  if (op) {
-    op->info.internalBuffer = 0;
-    op->info.internalBufferSize = 0;
-  }
-
-  return (asyncOpRoot*)op;
+  __UNUSED(base);
+  __UNUSED(isRealTime);
+  __UNUSED(objectPool);
+  __UNUSED(objectTimerPool);
+  return 0;
 }
 
 int selectCancelAsyncOp(asyncOpRoot *opptr)
@@ -336,6 +336,10 @@ void selectStopTimer(asyncOpRoot *op)
   stopTimer(op);
 }
 
+void selectDeleteTimer(asyncOpRoot *op)
+{
+  __UNUSED(op);
+}
 
 void selectActivate(aioUserEvent *event)
 {

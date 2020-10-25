@@ -69,7 +69,7 @@ template<typename Type> Type xatoi(const char *in)
   while (*p)
     lvalue = (lvalue*10) + (*p++ - '0');
   
-  return minus ? -lvalue : lvalue;
+  return minus ? static_cast<Type>(0)-lvalue : lvalue;
 }
 
 #endif //__LIBP2P_STREXTRAS_H_

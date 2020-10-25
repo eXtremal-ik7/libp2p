@@ -84,7 +84,7 @@ void concurrentQueuePush(ConcurrentQueue *queue, void *data)
     uint32_t currentWritePartition = queue->WritePartition;
     ConcurrentQueuePartition *partition = &queue->Partitions[currentWritePartition];
 
-    partitionInit(partition, 1 << (queue->WritePartition + CONCURRENT_QUEUE_INITIAL_SIZE_LOG2));
+    partitionInit(partition, (size_t)1 << (queue->WritePartition + CONCURRENT_QUEUE_INITIAL_SIZE_LOG2));
     if (partitionPush(partition, data))
       return;
 

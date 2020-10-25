@@ -782,7 +782,7 @@ int ioZmtpAccept(zmtpSocket *socket, AsyncFlags flags, uint64_t timeout)
   coroutineYield();
 
   AsyncOpStatus status = opGetStatus(op);
-  releaseAsyncOp(socket->root.base, op);
+  releaseAsyncOp(op);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -795,7 +795,7 @@ int ioZmtpConnect(zmtpSocket *socket, const HostAddress *address, AsyncFlags fla
   combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
-  releaseAsyncOp(socket->root.base, &op->root);
+  releaseAsyncOp(&op->root);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -813,7 +813,7 @@ ssize_t ioZmtpRecv(zmtpSocket *socket, zmtpStream &msg, size_t limit, AsyncFlags
   if (op) {
     AsyncOpStatus status = opGetStatus(&op->root);
     *type = (op->type & zmtpMsgFlagCommand) ? zmtpCommand : zmtpMessage;
-    releaseAsyncOp(socket->root.base, &op->root);
+    releaseAsyncOp(&op->root);
     return status == aosSuccess ? static_cast<ssize_t>(msg.sizeOf()) : -status;
   } else {
     *type = (context.MsgType & zmtpMsgFlagCommand) ? zmtpCommand : zmtpMessage;
@@ -833,7 +833,7 @@ ssize_t ioZmtpSend(zmtpSocket *socket, void *data, size_t size, zmtpUserMsgTy ty
 
   if (op) {
     AsyncOpStatus status = opGetStatus(op);
-   releaseAsyncOp(socket->root.base, op);
+    releaseAsyncOp(op);
     return status == aosSuccess ? static_cast<ssize_t>(size) : -status;
   } else {
     return static_cast<ssize_t>(size);

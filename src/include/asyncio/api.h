@@ -259,7 +259,7 @@ typedef void MakeResultProc(void*);
 typedef void InitOpProc(asyncOpRoot*, void*);
 
 int asyncOpAlloc(asyncBase *base, size_t size, int isRealTime, ConcurrentQueue *objectPool, ConcurrentQueue *objectTimerPool, asyncOpRoot **result);
-void releaseAsyncOp(asyncBase *base, asyncOpRoot *op);
+void releaseAsyncOp(asyncOpRoot *op);
 
 void initAsyncOpRoot(asyncOpRoot *op,
                      aioExecuteProc *startMethod,
@@ -351,7 +351,7 @@ static inline asyncOpRoot *combinerAcquire(aioObjectRoot *object,
       return allocated;
     } else {
       if (allocated)
-        releaseAsyncOp(object->base, allocated);
+        releaseAsyncOp(allocated);
       return 0;
     }
   } else {

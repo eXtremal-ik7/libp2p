@@ -126,9 +126,10 @@ static void coroutineEventCb(aioObject *event, void *arg)
 
 static ssize_t coroutineRwFinish(asyncOp *op, aioObject *object)
 {
+  __UNUSED(object);
   AsyncOpStatus status = opGetStatus(&op->root);
   size_t bytesTransferred = op->bytesTransferred;
-  releaseAsyncOp(object->root.base, &op->root);
+  releaseAsyncOp(&op->root);
   return status == aosSuccess ? (ssize_t)bytesTransferred : -(int)status;
 }
 
@@ -548,7 +549,7 @@ int ioConnect(aioObject *object, const HostAddress *address, uint64_t usTimeout)
   combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
-  releaseAsyncOp(object->root.base, &op->root);
+  releaseAsyncOp(&op->root);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -568,7 +569,7 @@ socketTy ioAccept(aioObject *object, uint64_t usTimeout)
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
   socketTy acceptSocket = op->acceptSocket;
-  releaseAsyncOp(object->root.base, &op->root);
+  releaseAsyncOp(&op->root);
   return status == aosSuccess ? acceptSocket : -(int)status;
 }
 

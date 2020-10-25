@@ -571,7 +571,7 @@ int ioSmtpConnect(SMTPClient *client, HostAddress address, uint64_t usTimeout)
   combinerPushOperation(&op->Root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->Root);
-  releaseAsyncOp(client->root.base, &op->Root);
+  releaseAsyncOp(&op->Root);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -581,7 +581,7 @@ int ioSmtpStartTls(SMTPClient *client, AsyncFlags flags, uint64_t usTimeout)
   combinerPushOperation(&op->Root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->Root);
-  releaseAsyncOp(client->root.base, &op->Root);
+  releaseAsyncOp(&op->Root);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -595,7 +595,7 @@ int ioSmtpLogin(SMTPClient *client, const char *login, const char *password, Asy
   combinerPushOperation(&op->Root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->Root);
-  releaseAsyncOp(client->root.base, &op->Root);
+  releaseAsyncOp(&op->Root);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -607,7 +607,7 @@ int ioSmtpCommand(SMTPClient *client, const char *command, AsyncFlags flags, uin
   combinerPushOperation(&op->Root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->Root);
-  releaseAsyncOp(client->root.base, &op->Root);
+  releaseAsyncOp(&op->Root);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -761,6 +761,6 @@ int ioSmtpSendMail(SMTPClient *client,
   combinerPushOperation(&op->Root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->Root);
-  releaseAsyncOp(client->root.base, &op->Root);
+  releaseAsyncOp(&op->Root);
   return status == aosSuccess ? 0 : -status;
 }

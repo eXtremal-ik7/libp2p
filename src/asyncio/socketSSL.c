@@ -148,9 +148,10 @@ static asyncOpRoot *newWriteAsyncOp(aioObjectRoot *object,
 
 static ssize_t coroutineRwFinish(SSLOp *op, SSLSocket *object)
 {
+  __UNUSED(object);
   AsyncOpStatus status = opGetStatus(&op->root);
   size_t bytesTransferred = op->bytesTransferred;
-  releaseAsyncOp(object->root.base, &op->root);
+  releaseAsyncOp(&op->root);
   return status == aosSuccess ? (ssize_t)bytesTransferred : -(int)status;
 }
 
@@ -490,7 +491,7 @@ int ioSslConnect(SSLSocket *socket, const HostAddress *address, const char *tlse
   combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
-  releaseAsyncOp(socket->root.base, &op->root);
+  releaseAsyncOp(&op->root);
   return status == aosSuccess ? 0 : -status;
 }
 

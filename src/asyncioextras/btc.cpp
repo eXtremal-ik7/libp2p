@@ -506,7 +506,7 @@ ssize_t ioBtcRecv(BTCSocket *socket, char command[12], xmstream &stream, size_t 
 
   if (op) {
     AsyncOpStatus status = opGetStatus(op);
-    releaseAsyncOp(socket->root.base, op);
+    releaseAsyncOp(op);
     return status == aosSuccess ? static_cast<ssize_t>(stream.sizeOf()) : -status;
   } else {
     return static_cast<ssize_t>(stream.sizeOf());
@@ -521,7 +521,7 @@ ssize_t ioBtcSend(BTCSocket *socket, const char *command, void *data, size_t siz
 
   if (op) {
     AsyncOpStatus status = opGetStatus(op);
-    releaseAsyncOp(socket->root.base, op);
+    releaseAsyncOp(op);
     return status == aosSuccess ? static_cast<ssize_t>(size) : -status;
   } else {
     return static_cast<ssize_t>(size);

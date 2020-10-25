@@ -382,7 +382,7 @@ int ioHttpConnect(HTTPClient *client, const HostAddress *address, const char *tl
   combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
-  releaseAsyncOp(client->root.base, &op->root);
+  releaseAsyncOp(&op->root);
   return status == aosSuccess ? 0 : -(int)status;
 }
 
@@ -408,6 +408,6 @@ AsyncOpStatus ioHttpRequest(HTTPClient *client,
   coroutineYield();
 
   AsyncOpStatus status = opGetStatus(&op->root);
-  releaseAsyncOp(client->root.base, &op->root);
+  releaseAsyncOp(&op->root);
   return status;
 }
