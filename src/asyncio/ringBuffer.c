@@ -13,26 +13,20 @@ static void partitionInit(ConcurrentQueuePartition *buffer, size_t size)
 {
   assert((size & (size-1)) == 0 && "Invalid ring buffer size");
   if (!buffer->queue) {
-    void *queue = malloc(size*sizeof(ConcurrentQueueElement));
-    if (!__pointer_atomic_compare_and_swap((void *volatile*)&buffer->queue, 0, queue)) {
+    ConcurrentQueueElement *queue = (ConcurrentQueueElement*)malloc(size*sizeof(ConcurrentQueueElement));
+    for (size_t i = 0; i < size; i++)
+      queue[i].sequence = i;
+    if (!__pointer_atomic_compare_and_swap((void *volatile*)&buffer->queue, 0, queue))
       free(queue);
-    } else {
-      buffer->queueSize = size;
-      buffer->queueSizeMask = size-1;
-      buffer->enqueuePos = 0;
-      buffer->dequeuePos = 0;
-      for (size_t i = 0; i < size; i++)
-        buffer->queue[i].sequence = i;
-    }
   }
 }
 
-static int partitionPush(ConcurrentQueuePartition *buffer, void *data)
+static int partitionPush(ConcurrentQueuePartition *buffer, void *data, size_t mask)
 {
   ConcurrentQueueElement *element = 0;
   size_t pos = buffer->enqueuePos;
   for (;;) {
-    element = &buffer->queue[pos & buffer->queueSizeMask];
+    element = &buffer->queue[pos & mask];
     size_t seq = element->sequence;
     intptr_t diff = (intptr_t)seq - (intptr_t)pos;
     if (diff == 0) {
@@ -51,7 +45,7 @@ static int partitionPush(ConcurrentQueuePartition *buffer, void *data)
   return 1;
 }
 
-int partitionPop(ConcurrentQueuePartition *buffer, void **data)
+static int partitionPop(ConcurrentQueuePartition *buffer, void **data, size_t mask)
 {
   if (!buffer->queue)
     return 0;
@@ -59,7 +53,7 @@ int partitionPop(ConcurrentQueuePartition *buffer, void **data)
   ConcurrentQueueElement *element = 0;
   size_t pos = buffer->dequeuePos;
   for (;;) {
-    element = &buffer->queue[pos & buffer->queueSizeMask];
+    element = &buffer->queue[pos & mask];
     size_t seq = element->sequence;
     intptr_t diff = (intptr_t)seq - (intptr_t)(pos+1);
     if (diff == 0) {
@@ -74,7 +68,7 @@ int partitionPop(ConcurrentQueuePartition *buffer, void **data)
   }
 
   *data = element->data;
-  element->sequence = pos + buffer->queueSize;
+  element->sequence = pos + (mask+1);
   return 1;
 }
 
@@ -83,9 +77,11 @@ void concurrentQueuePush(ConcurrentQueue *queue, void *data)
   for (;;) {
     uint32_t currentWritePartition = queue->WritePartition;
     ConcurrentQueuePartition *partition = &queue->Partitions[currentWritePartition];
+    size_t partitionSize = (size_t)1 << (currentWritePartition + CONCURRENT_QUEUE_INITIAL_SIZE_LOG2);
+    size_t mask = partitionSize-1;
 
-    partitionInit(partition, (size_t)1 << (queue->WritePartition + CONCURRENT_QUEUE_INITIAL_SIZE_LOG2));
-    if (partitionPush(partition, data))
+    partitionInit(partition, partitionSize);
+    if (partitionPush(partition, data, mask))
       return;
 
     __uint_atomic_compare_and_swap(&queue->WritePartition, currentWritePartition, currentWritePartition+1);
@@ -97,8 +93,10 @@ int concurrentQueuePop(ConcurrentQueue *queue, void **data)
   for (;;) {
     uint32_t currentReadPartition = queue->ReadPartition;
     ConcurrentQueuePartition *partition = &queue->Partitions[currentReadPartition];
+    size_t partitionSize = (size_t)1 << (currentReadPartition + CONCURRENT_QUEUE_INITIAL_SIZE_LOG2);
+    size_t mask = partitionSize-1;
 
-    if (partitionPop(partition, data))
+    if (partitionPop(partition, data, mask))
       return 1;
 
     if (currentReadPartition == queue->WritePartition)

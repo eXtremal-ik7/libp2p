@@ -15,8 +15,6 @@ typedef struct ConcurrentQueueElement {
 
 typedef struct ConcurrentQueuePartition {
   ConcurrentQueueElement *queue;
-  size_t queueSize;
-  size_t queueSizeMask;
   volatile size_t enqueuePos;
   volatile size_t dequeuePos;
 } ConcurrentQueuePartition;

@@ -131,9 +131,9 @@ uintptr_t objectIncrementReference(aioObjectRoot *object, uintptr_t count)
 uintptr_t objectDecrementReference(aioObjectRoot *object, uintptr_t count)
 {
   uintptr_t result = __uintptr_atomic_fetch_and_add(&object->refs, (uintptr_t)0-count);
+  assert((intptr_t)result > 0 && "Double object release detected");
   if (result == count)
     combinerPushCounter(object, COMBINER_TAG_DELETE);
-
   return result;
 }
 
@@ -482,7 +482,7 @@ void addToGlobalQueue(asyncOpRoot *op)
 }
 
 int executeGlobalQueue(asyncBase *base)
-{ 
+{
   asyncOpRoot *op;
   while (concurrentQueuePop(&base->globalQueue, (void**)&op)) {
     if (!op)
@@ -533,7 +533,7 @@ int copyFromBuffer(void *dst, size_t *offset, struct ioBuffer *src, size_t size)
 }
 
 
-static inline void combinerTaskHandlerCommon(aioObjectRoot *object, uint32_t tag)
+static inline int combinerTaskHandlerCommon(aioObjectRoot *object, uint32_t tag)
 {
   if (object->CancelIoFlag) {
     object->CancelIoFlag = 0;
@@ -544,11 +544,13 @@ static inline void combinerTaskHandlerCommon(aioObjectRoot *object, uint32_t tag
   if (tag & COMBINER_TAG_DELETE) {
     cancelOperationList(&object->readQueue, aosCanceled);
     cancelOperationList(&object->writeQueue, aosCanceled);
-    object->destructor(object);
     if (object->destructorCb)
       object->destructorCb(object, object->destructorCbArg);
-    return;
+    object->destructor(object);
+    return 1;
   }
+
+  return 0;
 }
 
 void combiner(aioObjectRoot *object, AsyncOpTaggedPtr stackTop, AsyncOpTaggedPtr forRun)
@@ -561,7 +563,8 @@ void combiner(aioObjectRoot *object, AsyncOpTaggedPtr stackTop, AsyncOpTaggedPtr
     AsyncOpActionTy opMethod;
     uint32_t tag;
     taggedAsyncOpDecode(forRun, &op, &opMethod, &tag);
-    combinerTaskHandlerCommon(object, tag);
+    if (combinerTaskHandlerCommon(object, tag))
+      return;
     combinerTaskHandler(object, op, opMethod);
   }
 
