@@ -152,8 +152,11 @@ static void sendFinish(asyncOpRoot *opptr)
 static void releaseProc(asyncOpRoot *opptr)
 {
   btcOp *op = (btcOp*)opptr;
-  if (op->internalBuffer)
+  if (op->internalBuffer) {
     free(op->internalBuffer);
+    op->internalBuffer = 0;
+    op->internalBufferSize = 0;
+  }
 }
 
 

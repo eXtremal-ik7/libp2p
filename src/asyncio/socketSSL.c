@@ -82,8 +82,11 @@ static void rwFinish(asyncOpRoot *opptr)
 static void releaseOp(asyncOpRoot *opptr)
 {
   SSLOp *op = (SSLOp*)opptr;
-  if (op->internalBuffer)
+  if (op->internalBuffer) {
     free(op->internalBuffer);
+    op->internalBuffer = 0;
+    op->internalBufferSize = 0;
+  }
 }
 
 static asyncOpRoot *newReadAsyncOp(aioObjectRoot *object,

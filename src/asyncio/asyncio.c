@@ -79,8 +79,11 @@ static void eventFinish(asyncOpRoot *root)
 static void releaseOp(asyncOpRoot *opptr)
 {
   asyncOp *op = (asyncOp*)opptr;
-  if (op->internalBuffer)
+  if (op->internalBuffer) {
     free(op->internalBuffer);
+    op->internalBuffer = 0;
+    op->internalBufferSize = 0;
+  }
 }
 
 static asyncOpRoot *newAsyncOp(aioObjectRoot *object,

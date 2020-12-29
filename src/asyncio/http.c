@@ -172,8 +172,11 @@ static AsyncOpStatus httpParseStart(asyncOpRoot *opptr)
 static void releaseProc(asyncOpRoot *opptr)
 {
   HTTPOp *op = (HTTPOp*)opptr;
-  if (op->internalBuffer)
+  if (op->internalBuffer) {
     free(op->internalBuffer);
+    op->internalBuffer = 0;
+    op->internalBufferSize = 0;
+  }
 }
 
 static HTTPOp *allocHttpOp(aioExecuteProc executeProc,

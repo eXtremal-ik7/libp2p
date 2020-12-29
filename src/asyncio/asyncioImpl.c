@@ -413,6 +413,8 @@ void opRelease(asyncOpRoot *op, AsyncOpStatus status, List *executeList)
 
   if (executeList)
     eqRemove(executeList, op);
+  if (op->releaseMethod)
+    op->releaseMethod(op);
   addToGlobalQueue(op);
 }
 
