@@ -25,6 +25,8 @@ typedef struct coroutineTy {
   void *stack;
   coroutineProcTy *entryPoint;
   void *arg;
+  coroutineCbTy *finishCb;
+  void *finishArg;
   int finished;
   int counter;
 } coroutineTy;
@@ -102,13 +104,13 @@ coroutineTy *coroutineNew(coroutineProcTy entry, void *arg, unsigned stackSize)
   sigset_t old;
   sigset_t all;
   sigfillset(&all);
-  sigprocmask(SIG_SETMASK, &all, &old);  
+  sigprocmask(SIG_SETMASK, &all, &old);
   coroutineTy *result = 0;
-  
+
   // Create main fiber if it not exists
   if (currentCoroutine == 0)
     mainCoroutine = currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
-  
+
   coroutineTy *coroutine;
   if (posix_memalign((void**)&coroutine, 8, sizeof(coroutineTy)) == 0) {
     if (fiberInit(coroutine, stackSize)) {
@@ -117,6 +119,8 @@ coroutineTy *coroutineNew(coroutineProcTy entry, void *arg, unsigned stackSize)
       coroutine->prev = currentCoroutine;
       coroutine->finished = 0;
       coroutine->counter = 0;
+      coroutine->finishCb = 0;
+      coroutine->finishArg = 0;
       sigprocmask(SIG_SETMASK, &old, 0);
       return coroutine;
     }
@@ -126,6 +130,14 @@ coroutineTy *coroutineNew(coroutineProcTy entry, void *arg, unsigned stackSize)
 
   sigprocmask(SIG_SETMASK, &old, 0);
   return result;
+}
+
+coroutineTy *coroutineNewWithCb(coroutineProcTy entry, void *arg, unsigned stackSize, coroutineCbTy finishCb, void *finishArg)
+{
+  coroutineTy *coroutine = coroutineNew(entry, arg, stackSize);
+  coroutine->finishCb = finishCb;
+  coroutine->finishArg = finishArg;
+  return coroutine;
 }
 
 void coroutineDelete(coroutineTy *coroutine)
@@ -154,8 +166,12 @@ int coroutineCall(coroutineTy *coroutine)
 
     int finished = coroutine->finished;
     if (finished) {
+      coroutineCbTy *finishCb = coroutine->finishCb;
+      void *finishArg = coroutine->finishArg;
       free(coroutine->stack);
       free(coroutine);
+      if (finishCb)
+        finishCb(finishArg);
     }
 
     return finished;

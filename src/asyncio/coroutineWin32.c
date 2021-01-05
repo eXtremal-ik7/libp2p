@@ -13,6 +13,8 @@ typedef struct coroutineTy {
   LPVOID fiber;
   coroutineProcTy *entryPoint;
   void *arg;
+  coroutineCbTy *finishCb;
+  void *finishArg;
   int finished;
   unsigned counter;
 } coroutineTy;
@@ -48,8 +50,18 @@ coroutineTy *coroutineNew(coroutineProcTy entry, void *arg, unsigned stackSize)
   coroutine->fiber = CreateFiber(stackSize, fiberEntryPoint, coroutine);
   coroutine->entryPoint = entry;
   coroutine->arg = arg;
+  coroutine->finishCb = 0;
+  coroutine->finishArg = 0;
   coroutine->finished = 0;
   coroutine->counter = 0;
+  return coroutine;
+}
+
+coroutineTy *coroutineNewWithCb(coroutineProcTy entry, void *arg, unsigned stackSize, coroutineCbTy finishCb, void *finishArg)
+{
+  coroutineTy *coroutine = coroutineNew(entry, arg, stackSize);
+  coroutine->finishCb = finishCb;
+  coroutine->finishArg = finishArg;
   return coroutine;
 }
 
@@ -80,8 +92,12 @@ int coroutineCall(coroutineTy *coroutine)
 
     int finished = coroutine->finished;
     if (finished) {
+      coroutineCbTy *finishCb = coroutine->finishCb;
+      void *finishArg = coroutine->finishArg;
       DeleteFiber(coroutine->fiber);
       free(coroutine);
+      if (finishCb)
+        finishCb(finishArg);
     }
 
     return finished;
@@ -101,7 +117,7 @@ void coroutineYield()
       __uint_atomic_fetch_and_add(&old->counter, -1);
       return;
     }
-    
+
     currentCoroutine = currentCoroutine->prev;
     SwitchToFiber(currentCoroutine->fiber);
   }
