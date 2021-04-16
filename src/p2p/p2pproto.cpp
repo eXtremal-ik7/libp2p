@@ -592,7 +592,7 @@ int iop2pAccept(p2pConnection *connection, uint64_t timeout, p2pAcceptCb *callba
   combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
-  releaseAsyncOp(connection->root.base, &op->root);
+  releaseAsyncOp(&op->root);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -606,7 +606,7 @@ int iop2pConnect(p2pConnection *connection, const HostAddress *address, uint64_t
   combinerPushOperation(&op->root, aaStart);
   coroutineYield();
   AsyncOpStatus status = opGetStatus(&op->root);
-  releaseAsyncOp(connection->root.base, &op->root);
+  releaseAsyncOp(&op->root);
   return status == aosSuccess ? 0 : -status;
 }
 
@@ -618,7 +618,7 @@ ssize_t iop2pSend(p2pConnection *connection, const void *data, uint32_t id, uint
 
   if (op) {
     AsyncOpStatus status = opGetStatus(op);
-    releaseAsyncOp(connection->root.base, op);
+    releaseAsyncOp(op);
     return status == aosSuccess ? static_cast<ssize_t>(size) : -status;
   } else {
     return static_cast<ssize_t>(size);
@@ -635,7 +635,7 @@ ssize_t iop2pRecvStream(p2pConnection *connection, p2pStream &stream, uint32_t m
   if (op) {
     AsyncOpStatus status = opGetStatus(&op->root);
     *header = op->header;
-    releaseAsyncOp(connection->root.base, &op->root);
+    releaseAsyncOp(&op->root);
     return status == aosSuccess ? static_cast<ssize_t>(header->size) : -status;
   } else {
     return static_cast<ssize_t>(header->size);
@@ -652,7 +652,7 @@ ssize_t iop2pRecv(p2pConnection *connection, void *buffer, uint32_t bufferSize, 
   if (op) {
     AsyncOpStatus status = opGetStatus(&op->root);
     *header = op->header;
-    releaseAsyncOp(connection->root.base, &op->root);
+    releaseAsyncOp(&op->root);
     return status == aosSuccess ? static_cast<ssize_t>(header->size) : -status;
   } else {
     return static_cast<ssize_t>(header->size);
