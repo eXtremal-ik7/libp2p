@@ -407,10 +407,14 @@ static inline void runAioOperation(aioObjectRoot *object,
         asyncOpRoot *op = createAsyncOp(object, flags, usTimeout, callback, arg, opCode, contextPtr);
         initOp(op, contextPtr);
         opForceStatus(op, aosSuccess);
+        if (op->releaseMethod)
+          op->releaseMethod(op);
         addToGlobalQueue(op);
       }
     } else if (opGetStatus(op) != aosPending) {
       // Operation finished already
+      if (op->releaseMethod)
+        op->releaseMethod(op);
       addToGlobalQueue(op);
     } else {
       forRun = taggedAsyncOpMake(op, aaStart, 0);
@@ -440,10 +444,14 @@ static inline asyncOpRoot *runIoOperation(aioObjectRoot *object,
         op = createAsyncOp(object, afCoroutine, usTimeout, 0, 0, opCode, contextPtr);
         initOp(op, contextPtr);
         opForceStatus(op, aosSuccess);
+        if (op->releaseMethod)
+          op->releaseMethod(op);
         addToGlobalQueue(op);
       }
     } else if (opGetStatus(op) != aosPending) {
       // Operation finished already
+      if (op->releaseMethod)
+        op->releaseMethod(op);
       addToGlobalQueue(op);
     } else {
       forRun = taggedAsyncOpMake(op, aaStart, 0);
