@@ -6,56 +6,10 @@
 .text
 .globl switchContext
 .globl _switchContext
-#if defined(__APPLE__)
-#else
-.type  switchContext, @function
-#endif
+
 .intel_syntax noprefix
 switchContext:
 _switchContext:
-
-/*
-  context+0x00 = EIP
-  context+0x04 = ESP
-  context+0x08 = EBP
-  context+0x0C = EDI
-  context+0x10 = ESI
-  context+0x14 = EBX
-  context+0x18 = fpucw16
-  context+0x1C = mxcsr32
-*/
-
-#ifdef __i386__
-    // EDX = return address (EIP)
-    mov     edx, DWORD PTR [esp]
-    // ECX = stack address after return (ESP)
-    lea     ecx, [esp+0x4]
-    // EAX = source context
-    mov     eax, DWORD PTR [esp+0x4]
-    mov     DWORD PTR [eax+0x00], edx /* EIP */
-    mov     DWORD PTR [eax+0x04], ecx /* ESP */
-    mov     DWORD PTR [eax+0x08], ebp
-    mov     DWORD PTR [eax+0x0C], edi
-    mov     DWORD PTR [eax+0x10], esi
-    mov     DWORD PTR [eax+0x14], ebx
-    fnstcw  WORD  PTR [eax+0x18]
-    stmxcsr DWORD PTR [eax+0x1C]
-
-    // ECX = destination context
-    mov     ecx, DWORD PTR [esp+0x08]
-
-    mov     eax, DWORD PTR [ecx+0x00] /* EIP */
-    mov     edx, DWORD PTR [ecx+0x04] /* ESP */
-    mov     ebp, DWORD PTR [ecx+0x08]
-    mov     edi, DWORD PTR [ecx+0x0C]
-    mov     esi, DWORD PTR [ecx+0x10]
-    mov     ebx, DWORD PTR [ecx+0x14]
-    fldcw   WORD  PTR      [ecx+0x18]
-    ldmxcsr DWORD PTR      [ecx+0x1C]
-    mov     esp,edx
-    jmp     eax
-
-#elif __x86_64__
 /*
   context+0x00 = R12
   context+0x08 = R13
@@ -102,28 +56,11 @@ _switchContext:
     mov     rdi, rsi
     jmp     rax
 
-#else
-    #error "platform not supported"
-#endif
-
-.globl x86InitFPU
-.globl _x86InitFPU
-#if defined(__APPLE__)
-#else
-.type  x86InitFPU, @function
-#endif
+.globl initFPU
+.globl _initFPU
 .intel_syntax noprefix
-x86InitFPU:
-_x86InitFPU:
-#ifdef __i386__
-    mov     eax, DWORD PTR [esp+0x4]
-    fnstcw  WORD  PTR [eax+0x18]
-    stmxcsr DWORD PTR [eax+0x1C]
-    ret 4
-#elif __x86_64__
+initFPU:
+_initFPU:
     fnstcw  WORD PTR  [rdi+0x40]
     stmxcsr DWORD PTR [rdi+0x44]
     ret
-#else
-    #error "platform not supported"
-#endif

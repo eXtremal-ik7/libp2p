@@ -19,4 +19,8 @@ inline bool is_bigendian() {
 #cmakedefine OS_QNX
 #cmakedefine OS_COMMONUNIX
 
+#cmakedefine ARCH_X86
+#cmakedefine ARCH_X86_64
+#cmakedefine ARCH_AARCH64
+
 #endif //__CONFIG_H_

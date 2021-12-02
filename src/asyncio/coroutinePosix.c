@@ -6,14 +6,41 @@
 #include "libp2pconfig.h"
 
 typedef struct contextTy {
-#ifdef __i386__
+#if defined(ARCH_X86)
 #define CTX_EIP_INDEX 0
 #define CTX_ESP_INDEX 1
   uint32_t registers[8];
-#elif __x86_64__
+#elif defined(ARCH_X86_64)
 #define CTX_RIP_INDEX 4
 #define CTX_RSP_INDEX 5
   uint64_t registers[9];
+#elif defined(ARCH_AARCH64)
+#pragma pack(push, 1)
+  uint64_t X18;         // 0
+  uint64_t X19;         // 8
+  uint64_t X20;         // 16
+  uint64_t X21;         // 24
+  uint64_t X22;         // 32
+  uint64_t X23;         // 40
+  uint64_t X24;         // 48
+  uint64_t X25;         // 56
+  uint64_t X26;         // 64
+  uint64_t X27;         // 72
+  uint64_t X28;         // 80
+  uint64_t X29;         // 88
+  uint64_t D8;          // 96
+  uint64_t D9;          // 104
+  uint64_t D10;         // 112
+  uint64_t D11;         // 120
+  uint64_t D12;         // 128
+  uint64_t D13;         // 136
+  uint64_t D14;         // 144
+  uint64_t D15;         // 152
+  uint64_t SP;          // 160
+  uint64_t FPCR;        // 176
+  uint64_t PC;          // 184
+  uint64_t X0;          // 192
+#pragma pack(pop)
 #else
 #error "Platform not supported"
 #endif
@@ -35,7 +62,7 @@ static __thread coroutineTy *mainCoroutine;
 static __thread coroutineTy *currentCoroutine;
 
 void switchContext(contextTy *from, contextTy *to);
-void x86InitFPU(contextTy *context);
+void initFPU(contextTy *context);
 
 static void fiberEntryPoint(coroutineTy *coroutine)
 {
@@ -49,7 +76,7 @@ static void fiberEntryPoint(coroutineTy *coroutine)
 
 static int fiberInit(coroutineTy *coroutine, size_t stackSize)
 {
-#ifdef __i386__
+#if defined(ARCH_X86)
   // x86 arch
   // EIP = fiberEntryPoint
   // ESP = stack + stackSize - 4
@@ -59,12 +86,12 @@ static int fiberInit(coroutineTy *coroutine, size_t stackSize)
     *esp = (uintptr_t)coroutine;
     coroutine->context.registers[CTX_EIP_INDEX] = (uintptr_t)fiberEntryPoint;
     coroutine->context.registers[CTX_ESP_INDEX] = (uintptr_t)esp;
-    x86InitFPU(&coroutine->context);
+    initFPU(&coroutine->context);
     return 1;
   } else {
     return 0;
   }
-#elif __x86_64__
+#elif defined(ARCH_X86_64)
   // x86_64 arch
   // RIP = fiberEntryPoint
   // RSP = stack + stackSize - 128 - 16
@@ -73,11 +100,25 @@ static int fiberInit(coroutineTy *coroutine, size_t stackSize)
     uintptr_t *rsp = ((uintptr_t*)coroutine->stack) + (stackSize - 128 - 8)/sizeof(uintptr_t);
     coroutine->context.registers[CTX_RIP_INDEX] = (uintptr_t)fiberEntryPoint;
     coroutine->context.registers[CTX_RSP_INDEX] = (uintptr_t)rsp;
-    x86InitFPU(&coroutine->context);
+    initFPU(&coroutine->context);
     return 1;
   } else {
     return 0;
   }
+#elif defined(ARCH_AARCH64)
+    // ARM 64-bit arch
+    // PC = fiberEntryPoint
+    // SP = stack + stackSize - 16
+    // X0 = coroutine
+    if (posix_memalign(&coroutine->stack, 32, stackSize) == 0) {
+      coroutine->context.PC = (uintptr_t)fiberEntryPoint;
+      coroutine->context.SP = (uintptr_t)coroutine->stack + stackSize - 16;
+      coroutine->context.X0 = (uintptr_t)coroutine;
+      initFPU(&coroutine->context);
+      return 1;
+    } else {
+      return 0;
+    }
 #else
 #error "Platform not supported"
 #endif

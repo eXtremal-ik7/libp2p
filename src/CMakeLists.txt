@@ -1,7 +1,7 @@
 include("cmake/HunterGate.cmake")
 HunterGate(
-    URL "https://github.com/cpp-pm/hunter/archive/v0.23.253.tar.gz"
-    SHA1 "88ea6d37c897a81a080eb9ae0f69d7807bbb3c73"
+    URL "https://github.com/cpp-pm/hunter/archive/v0.23.318.tar.gz"
+    SHA1 "0475be76dbf51385790bbe96be57279e2ff0861d"
 )
 
 project(libp2p)
@@ -61,6 +61,25 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "QNX")
   set(OS_QNX 1) 
   set(OS_COMMONUNIX 1)
+endif()
+
+if (CMAKE_OSX_ARCHITECTURES)
+  set(ARCH ${CMAKE_OSX_ARCHITECTURES})
+else()
+  set(ARCH ${CMAKE_SYSTEM_PROCESSOR})
+endif()
+
+if (ARCH STREQUAL "i386" OR ARCH STREQUAL "i686")
+  set(ARCH_X86 1)
+  set(ARCH_NAME "x86")
+elseif (ARCH STREQUAL "x86_64" OR ARCH STREQUAL "AMD64")
+  set(ARCH_X86_64 1)
+  set(ARCH_NAME "x86_64")
+elseif (ARCH STREQUAL "aarch64" OR ARCH STREQUAL "arm64")
+  set(ARCH_AARCH64 1)
+  set(ARCH_NAME "aarch64")
+else()
+  message(FATAL_ERROR "Unsupported processor architecture")
 endif()
 
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
