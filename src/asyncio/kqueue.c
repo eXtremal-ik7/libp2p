@@ -23,6 +23,12 @@ typedef struct kqueueBase {
   intptr_t timerIdCounter;
 } kqueueBase;
 
+typedef struct KQueueObject {
+  aioObject Object;
+  uint32_t ReadEvents;
+  uint32_t WriteEvents;
+} KQueueObject;
+
 typedef struct aioTimer {
   aioObjectRoot root;
   intptr_t fd;
@@ -123,13 +129,14 @@ void kqueuePostEmptyOperation(asyncBase *base)
 void combinerTaskHandler(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy opMethod)
 {
   kqueueBase *base = (kqueueBase*)object->base;
-  aioObject *fdObject = (object->type == ioObjectDevice || object->type == ioObjectSocket) ? (aioObject*)object : 0;
-  uint32_t ioEvents = fdObject ? fdObject->IoEvents : 0;
-  
+  KQueueObject *fdObject = (object->type == ioObjectDevice || object->type == ioObjectSocket) ? (KQueueObject*)object : 0;
+  uint32_t readEvents = fdObject ? fdObject->ReadEvents : 0;
+  uint32_t writeEvents = fdObject ? fdObject->WriteEvents : 0;
+
   int hasReadOp = object->readQueue.head != 0;
   int hasWriteOp = object->writeQueue.head != 0;
  
-  if (ioEvents & IO_EVENT_ERROR) {
+  if ((readEvents | writeEvents) & IO_EVENT_ERROR) {
     // EV_EOF mapped to TAG_ERROR, cancel all operations with aosDisconnected status
     int available;
     int fd = getFd((aioObject*)object);
@@ -139,7 +146,7 @@ void combinerTaskHandler(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy
     cancelOperationList(&object->writeQueue, aosDisconnected);
   }
   
-  uint32_t needStart = ioEvents;
+  uint32_t needStart = readEvents | writeEvents;
   if (op)
     processAction(op, opMethod, &needStart);
   if (needStart & IO_EVENT_READ)
@@ -149,24 +156,23 @@ void combinerTaskHandler(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy
 
   if (fdObject) {
     int fd = getFd((aioObject*)object);
-    if (object->readQueue.head) {
-      if (!hasReadOp || (ioEvents & IO_EVENT_READ))
-        kqueueControl(base->kqueueFd, EV_ADD | EV_ONESHOT | EV_EOF, EVFILT_READ, fd, object);
-    } else {
-      if (hasReadOp && !(ioEvents & IO_EVENT_READ))
-        kqueueControl(base->kqueueFd, EV_DELETE| EV_ONESHOT | EV_EOF, EVFILT_READ, fd, object);
-    }
 
-    if (object->writeQueue.head) {
-      if (!hasWriteOp || (ioEvents & IO_EVENT_WRITE))
+    if (readEvents)
+      fdObject->ReadEvents = 0;
+    if (writeEvents)
+      fdObject->WriteEvents = 0;
+
+    unsigned readEventActivated = hasReadOp && !(readEvents & IO_EVENT_READ);
+    unsigned writeEventActivated = hasWriteOp && !(writeEvents & IO_EVENT_WRITE);
+
+    if (object->readQueue.head && !readEventActivated)
+        kqueueControl(base->kqueueFd, EV_ADD | EV_ONESHOT | EV_EOF, EVFILT_READ, fd, object);
+    if (!object->readQueue.head && readEventActivated)
+        kqueueControl(base->kqueueFd, EV_DELETE| EV_ONESHOT | EV_EOF, EVFILT_READ, fd, object);
+    if (object->writeQueue.head && !writeEventActivated)
         kqueueControl(base->kqueueFd, EV_ADD | EV_ONESHOT | EV_EOF, EVFILT_WRITE, fd, object);
-    } else {
-      if (hasWriteOp && !(ioEvents & IO_EVENT_WRITE))
+    if (!object->writeQueue.head && writeEventActivated)
         kqueueControl(base->kqueueFd, EV_DELETE | EV_ONESHOT | EV_EOF, EVFILT_WRITE, fd, object);
-    }
-    
-    if (ioEvents)
-      fdObject->IoEvents = 0;
   }
 }
 
@@ -221,16 +227,12 @@ void kqueueNextFinishedOperation(asyncBase *base)
           opCancel(op, opEncodeTag(op, timerId), aosTimeout);
         }
       } else {
-        uint32_t eventMask = 0;
-        if (events[n].filter == EVFILT_READ)
-          eventMask = IO_EVENT_READ;
-        else if (events[n].filter == EVFILT_WRITE)
-          eventMask = IO_EVENT_WRITE;
-        if (events[n].flags & EV_EOF)
-          eventMask |= IO_EVENT_ERROR;
-        
-        if (eventMask) {
-          ((aioObject*)object)->IoEvents = eventMask;
+        uint32_t eventMask = (events[n].flags & EV_EOF) ? IO_EVENT_ERROR : 0;
+        if (events[n].filter == EVFILT_READ) {
+          ((KQueueObject*)object)->ReadEvents = eventMask | IO_EVENT_READ;
+          combinerPushCounter(object, COMBINER_TAG_ACCESS);
+        } else if (events[n].filter == EVFILT_WRITE) {
+          ((KQueueObject*)object)->WriteEvents = eventMask | IO_EVENT_WRITE;
           combinerPushCounter(object, COMBINER_TAG_ACCESS);
         }
       }
@@ -241,29 +243,30 @@ void kqueueNextFinishedOperation(asyncBase *base)
 
 aioObject *kqueueNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
-  aioObject *object = 0;
+  KQueueObject *object = 0;
   if (!concurrentQueuePop(&objectPool, (void**)&object)) {
-    object = alignedMalloc(sizeof(aioObject), TAGGED_POINTER_ALIGNMENT);
-    object->buffer.ptr = 0;
-    object->buffer.totalSize = 0;
+    object = alignedMalloc(sizeof(KQueueObject), TAGGED_POINTER_ALIGNMENT);
+    object->Object.buffer.ptr = 0;
+    object->Object.buffer.totalSize = 0;
   }
 
-  initObjectRoot(&object->root, base, type, (aioObjectDestructor*)kqueueDeleteObject);
+  initObjectRoot(&object->Object.root, base, type, (aioObjectDestructor*)kqueueDeleteObject);
   switch (type) {
     case ioObjectDevice :
-      object->hDevice = *(iodevTy *)data;
+      object->Object.hDevice = *(iodevTy *)data;
       break;
     case ioObjectSocket :
-      object->hSocket = *(socketTy *)data;
+      object->Object.hSocket = *(socketTy *)data;
       break;
     default :
       break;
   }
 
-  object->IoEvents = 0;
-  object->buffer.offset = 0;
-  object->buffer.dataSize = 0;
-  return object;
+  object->ReadEvents = 0;
+  object->WriteEvents = 0;
+  object->Object.buffer.offset = 0;
+  object->Object.buffer.dataSize = 0;
+  return &object->Object;
 }
 
 asyncOpRoot *kqueueNewAsyncOp(asyncBase *base, int isRealTime, ConcurrentQueue *objectPool, ConcurrentQueue *objectTimerPool)

@@ -81,7 +81,6 @@ struct aioObject {
     socketTy hSocket;
   };
 
-  volatile uint32_t IoEvents;
   struct ioBuffer buffer;
 };
 

@@ -29,6 +29,11 @@ typedef struct epollBase {
   aioObject *eventObject;
 } epollBase;
 
+typedef struct EPollObject {
+  aioObject Object;
+  uint32_t IoEvents;
+} EPollObject;
+
 typedef struct aioTimer {
   aioObjectRoot root;
   int fd;
@@ -90,13 +95,13 @@ static void epollControl(int epollFd, int action, uint32_t events, int fd, void 
     fprintf(stderr, "epoll_ctl error, errno: %s\n", strerror(errno));
 }
 
-static int getFd(aioObject *object)
+static int getFd(EPollObject *object)
 {
-  switch (object->root.type) {
+  switch (object->Object.root.type) {
     case ioObjectDevice :
-      return object->hDevice;
+      return object->Object.hDevice;
     case ioObjectSocket :
-      return object->hSocket;
+      return object->Object.hSocket;
     default :
       return -1;
   }
@@ -135,7 +140,7 @@ void epollPostEmptyOperation(asyncBase *base)
 
 void combinerTaskHandler(aioObjectRoot *object, asyncOpRoot *op, AsyncOpActionTy opMethod)
 {
-  aioObject *fdObject = (object->type == ioObjectDevice || object->type == ioObjectSocket) ? (aioObject*)object : 0;
+  EPollObject *fdObject = (object->type == ioObjectDevice || object->type == ioObjectSocket) ? (EPollObject*)object : 0;
   uint32_t ioEvents = fdObject ? fdObject->IoEvents : 0;
 
   int hasReadOp = object->readQueue.head != 0;
@@ -257,7 +262,7 @@ void epollNextFinishedOperation(asyncBase *base)
           eventMask |= IO_EVENT_ERROR;
 
         if (eventMask) {
-          ((aioObject*)object)->IoEvents = eventMask;
+          ((EPollObject*)object)->IoEvents = eventMask;
           combinerPushCounter(object, COMBINER_TAG_ACCESS);
         }
       }
@@ -269,30 +274,30 @@ void epollNextFinishedOperation(asyncBase *base)
 aioObject *epollNewAioObject(asyncBase *base, IoObjectTy type, void *data)
 {
   epollBase *localBase = (epollBase*)base;
-  aioObject *object = 0;
+  EPollObject *object = 0;
   if (!concurrentQueuePop(&objectPool, (void**)&object)) {
-    object = alignedMalloc(sizeof(aioObject), TAGGED_POINTER_ALIGNMENT);
-    object->buffer.ptr = 0;
-    object->buffer.totalSize = 0;
+    object = alignedMalloc(sizeof(EPollObject), TAGGED_POINTER_ALIGNMENT);
+    object->Object.buffer.ptr = 0;
+    object->Object.buffer.totalSize = 0;
   }
 
-  initObjectRoot(&object->root, base, type, (aioObjectDestructor*)epollDeleteObject);
+  initObjectRoot(&object->Object.root, base, type, (aioObjectDestructor*)epollDeleteObject);
   switch (type) {
     case ioObjectDevice :
-      object->hDevice = *(iodevTy *)data;
+      object->Object.hDevice = *(iodevTy *)data;
       break;
     case ioObjectSocket :
-      object->hSocket = *(socketTy *)data;
+      object->Object.hSocket = *(socketTy *)data;
       break;
     default :
       break;
   }
 
   object->IoEvents = 0;
-  object->buffer.offset = 0;
-  object->buffer.dataSize = 0;
+  object->Object.buffer.offset = 0;
+  object->Object.buffer.dataSize = 0;
   epollControl(localBase->epollFd, EPOLL_CTL_ADD, 0, getFd(object), object);
-  return object;
+  return &object->Object;
 }
 
 asyncOpRoot *epollNewAsyncOp(asyncBase *base, int isRealTime, ConcurrentQueue *objectPool, ConcurrentQueue *objectTimerPool)
@@ -392,7 +397,7 @@ void epollActivate(aioUserEvent *op)
 AsyncOpStatus epollAsyncConnect(asyncOpRoot *opptr)
 {
   asyncOp *op = (asyncOp*)opptr;
-  int fd = getFd((aioObject*)op->root.object);
+  int fd = getFd((EPollObject*)op->root.object);
   if (op->state == 0) {
     op->state = 1;
     struct sockaddr_in localAddress;
@@ -417,7 +422,7 @@ AsyncOpStatus epollAsyncAccept(asyncOpRoot *opptr)
 {
   struct sockaddr_in clientAddr;
   asyncOp *op = (asyncOp*)opptr;
-  int fd = getFd((aioObject*)op->root.object);
+  int fd = getFd((EPollObject*)op->root.object);
   socklen_t clientAddrSize = sizeof(clientAddr);
   op->acceptSocket =
     accept(fd, (struct sockaddr *)&clientAddr, &clientAddrSize);
@@ -438,14 +443,14 @@ AsyncOpStatus epollAsyncAccept(asyncOpRoot *opptr)
 AsyncOpStatus epollAsyncRead(asyncOpRoot *opptr)
 {
   asyncOp *op = (asyncOp*)opptr;
-  aioObject *object = (aioObject*)op->root.object;
-  struct ioBuffer *sb = &object->buffer;
+  EPollObject *object = (EPollObject*)op->root.object;
+  struct ioBuffer *sb = &object->Object.buffer;
   int fd = getFd(object);
 
   if (copyFromBuffer(op->buffer, &op->bytesTransferred, sb, op->transactionSize))
     return aosSuccess;
 
-  if (op->transactionSize <= object->buffer.totalSize) {
+  if (op->transactionSize <= object->Object.buffer.totalSize) {
     while (op->bytesTransferred < op->transactionSize) {
       ssize_t bytesRead = read(fd, sb->ptr, sb->totalSize);
       if (bytesRead == 0)
@@ -482,10 +487,10 @@ AsyncOpStatus epollAsyncRead(asyncOpRoot *opptr)
 AsyncOpStatus epollAsyncWrite(asyncOpRoot *opptr)
 {
   asyncOp *op = (asyncOp*)opptr;
-  aioObject *object = (aioObject*)op->root.object;
+  EPollObject *object = (EPollObject*)op->root.object;
   int fd = getFd(object);
 
-  ssize_t bytesWritten = object->root.type == ioObjectSocket ?
+  ssize_t bytesWritten = object->Object.root.type == ioObjectSocket ?
     send(fd, (uint8_t *)op->buffer + op->bytesTransferred, op->transactionSize - op->bytesTransferred, MSG_NOSIGNAL) :
     write(fd, (uint8_t *)op->buffer + op->bytesTransferred, op->transactionSize - op->bytesTransferred);
   if (bytesWritten > 0) {
@@ -505,7 +510,7 @@ AsyncOpStatus epollAsyncWrite(asyncOpRoot *opptr)
 AsyncOpStatus epollAsyncReadMsg(asyncOpRoot *opptr)
 {
   asyncOp *op = (asyncOp*)opptr;
-  int fd = getFd((aioObject*)op->root.object);
+  int fd = getFd((EPollObject*)op->root.object);
 
   struct sockaddr_in source;
   socklen_t addrlen = sizeof(source);
@@ -530,7 +535,7 @@ AsyncOpStatus epollAsyncReadMsg(asyncOpRoot *opptr)
 AsyncOpStatus epollAsyncWriteMsg(asyncOpRoot *opptr)
 {
   asyncOp *op = (asyncOp*)opptr;
-  int fd = getFd((aioObject*)op->root.object);
+  int fd = getFd((EPollObject*)op->root.object);
 
   struct sockaddr_in remoteAddress;
   remoteAddress.sin_family = op->host.family;
