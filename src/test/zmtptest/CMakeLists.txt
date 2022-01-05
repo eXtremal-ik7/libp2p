@@ -1,7 +1,7 @@
 include_directories(${ZMQ_INCLUDE_DIRECTORY})
 
 if (WIN32)
-  set(LIBRARIES asyncio-0.5 asyncioextras-0.5 p2p ws2_32 mswsock ZeroMQ::libzmq-static)
+  set(LIBRARIES asyncio-0.5 asyncioextras-0.5 p2p ws2_32 mswsock ZeroMQ::libzmq-static iphlpapi)
 else()
   set(LIBRARIES asyncio-0.5 asyncioextras-0.5 p2p ZeroMQ::libzmq-static)
 endif()

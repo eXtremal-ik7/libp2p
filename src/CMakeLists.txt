@@ -1,7 +1,7 @@
-include("cmake/HunterGate.cmake")
-HunterGate(
-    URL "https://github.com/cpp-pm/hunter/archive/v0.23.318.tar.gz"
-    SHA1 "0475be76dbf51385790bbe96be57279e2ff0861d"
+include("cmake/cxx-pm.cmake")
+cxxpm_initialize(
+  https://github.com/eXtremal-ik7/cxx-pm/archive/refs/tags/0.0.1.tar.gz
+  f87ec7f53ca4982c7400a19a894d9c606504cc22edc41ae83e8a7b2f9a506e1e
 )
 
 project(libp2p)
@@ -27,13 +27,11 @@ if (PROFILE_ENABLED)
 endif()
 
 if (SSL_ENABLED OR BTC_ENABLED)
-  hunter_add_package(OpenSSL)
-  find_package(OpenSSL REQUIRED)
+  cxxpm_add_package(openssl)
 endif()
 
 if (ZMTP_ENABLED)
-  hunter_add_package(ZeroMQ)
-  find_package(ZeroMQ CONFIG REQUIRED)
+  cxxpm_add_package(zeromq)
   set(Sources ${Sources} zmtp.cpp)
 endif()
 

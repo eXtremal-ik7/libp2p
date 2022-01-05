@@ -1,7 +1,7 @@
 # libp2p
 Libraries and utilities for distributed (peer-to-peer) applications
 
-## Linux build
+## Linux & MacOS X build
 ```
 mkdir x86_64-Linux && cd x86_64-Linux
 cmake ../src
@@ -16,24 +16,9 @@ make -j
 - Select source ("src" subdirectory in git repo) and your build directory, run 'Configure' (can take a long time!) and 'Generate'.
 - Open Visual Studio solution and build all targets
 
-## Mac OS X build
-### Intel CPU
+## Force x86_64 architecture on MacOS X with Apple Silicon
 ```
 mkdir x86_64-Darwin && cd x86_64-Darwin
-cmake ../src
-make -j
-```
-
-### M1 CPU x86_64
-```
-mkdir x86_64-Darwin && cd x86_64-Darwin
-cmake ../src -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_TOOLCHAIN_FILE=`pwd`/../src/cmake/toolchain-x86_64-Darwin.cmake
-make -j
-```
-
-### M1 CPU native
-```
-mkdir x86_64-Darwin && cd x86_64-Darwin
-cmake ../src -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_TOOLCHAIN_FILE=`pwd`/../src/cmake/toolchain-arm64-Darwin.cmake
+cmake ../src -DCMAKE_OSX_ARCHITECTURES=x86_64
 make -j
 ```

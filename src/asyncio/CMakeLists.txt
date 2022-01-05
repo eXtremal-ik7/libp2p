@@ -14,7 +14,7 @@ set(Sources
 )
 
 if (SSL_ENABLED)
-  include_directories(${OPENSSL_INCLUDE_DIR})
+  include_directories(${OPENSSL_INCLUDE_DIRECTORY})
   set(Sources ${Sources} socketSSL.c)
 endif()
 

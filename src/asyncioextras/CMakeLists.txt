@@ -10,7 +10,7 @@ endif()
 
 
 if (BTC_ENABLED)
-  include_directories(${OPENSSL_INCLUDE_DIR})
+  include_directories(${OPENSSL_INCLUDE_DIRECTORY})
   set(Sources ${Sources} btc.cpp)
 endif()
 

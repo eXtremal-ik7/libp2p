@@ -1,5 +1,4 @@
-hunter_add_package(GTest)
-find_package(GTest REQUIRED)
+cxxpm_add_package(gtest)
 
 if(MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /D_SILENCE_TR1_NAMESPACE_DEPRECATION_WARNING")
@@ -12,7 +11,9 @@ include_directories(${GTEST_INCLUDE_DIRS})
 if (ZMTP_ENABLED)
   set(SOURCES ${SOURCES} zmtptest.cpp)
   set(LIBRARIES ${LIBRARIES} ZeroMQ::libzmq-static)
-  include_directories(${ZMQ_INCLUDE_DIRECTORY})
+  if (WIN32)
+    set(LIBRARIES ${LIBRARIES} iphlpapi)
+  endif()
 endif()
 
 if (WIN32)
