@@ -262,6 +262,8 @@ static AsyncOpStatus readProc(asyncOpRoot *opptr)
 void sslSocketDestructor(aioObjectRoot *root)
 {
   SSLSocket *socket = (SSLSocket*)root;
+  SSL_free(socket->ssl);
+  SSL_CTX_free(socket->sslContext);
   deleteAioObject(socket->object);
   concurrentQueuePush(&objectPool, socket);
 }
@@ -281,22 +283,21 @@ SSLSocket *sslSocketNew(asyncBase *base, aioObject *existingSocket)
   SSLSocket *S = 0;
   if (!concurrentQueuePop(&objectPool, (void**)&S)) {
     S = (SSLSocket*)malloc(sizeof(SSLSocket));
-#ifdef DEPRECATEDIN_1_1_0
-    S->sslContext = SSL_CTX_new (TLS_client_method());
-#else
-    S->sslContext = SSL_CTX_new (TLS_method());
-#endif
-    S->ssl = SSL_new(S->sslContext);
-    S->bioIn = BIO_new(BIO_s_mem());
-    S->bioOut = BIO_new(BIO_s_mem());
-    SSL_set_bio(S->ssl, S->bioIn, S->bioOut);
     S->sslReadBufferSize = DEFAULT_SSL_READ_BUFFER_SIZE;
     S->sslReadBuffer = (uint8_t*)malloc(S->sslReadBufferSize);
     S->sslWriteBufferSize = DEFAULT_SSL_READ_BUFFER_SIZE;
     S->sslWriteBuffer = (uint8_t*)malloc(S->sslReadBufferSize);
-  } else {
-    SSL_clear(S->ssl);
   }
+
+#ifdef DEPRECATEDIN_1_1_0
+  S->sslContext = SSL_CTX_new (TLS_client_method());
+#else
+  S->sslContext = SSL_CTX_new (TLS_method());
+#endif
+  S->ssl = SSL_new(S->sslContext);
+  S->bioIn = BIO_new(BIO_s_mem());
+  S->bioOut = BIO_new(BIO_s_mem());
+  SSL_set_bio(S->ssl, S->bioIn, S->bioOut);
 
   initObjectRoot(&S->root, base, ioObjectUserDefined, sslSocketDestructor);
   S->object = socket;
