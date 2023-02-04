@@ -62,6 +62,9 @@ static ParserResultTy readUntilCRLF(const char **ptr, const char *end)
     (*ptr)++;
   }
   
+  if (*ptr >= end-2)
+    return ParserResultNeedMoreData;
+
   (*ptr) += 2;
   return ParserResultOk;
 }
