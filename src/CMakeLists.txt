@@ -1,7 +1,7 @@
 include("cmake/cxx-pm.cmake")
 cxxpm_initialize(
-  https://github.com/eXtremal-ik7/cxx-pm/archive/refs/tags/0.0.1.tar.gz
-  f87ec7f53ca4982c7400a19a894d9c606504cc22edc41ae83e8a7b2f9a506e1e
+  https://github.com/eXtremal-ik7/cxx-pm/archive/refs/tags/0.0.4.tar.gz
+  409fdb16b267926d0cae526041f6b6174fe17b7170519e3d35ae2486e9139f1a
 )
 
 project(libp2p)
@@ -27,11 +27,11 @@ if (PROFILE_ENABLED)
 endif()
 
 if (SSL_ENABLED OR BTC_ENABLED)
-  cxxpm_add_package(openssl)
+  cxxpm_add_package(openssl default)
 endif()
 
 if (ZMTP_ENABLED)
-  cxxpm_add_package(zeromq)
+  cxxpm_add_package(zeromq default)
   set(Sources ${Sources} zmtp.cpp)
 endif()
 
