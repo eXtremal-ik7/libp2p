@@ -1,9 +1,8 @@
 #include "asyncioextras/btc.h"
 #include "p2putils/xmstream.h"
+#include <openssl/evp.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include "openssl/sha.h"
 
 static ConcurrentQueue opPool;
 static ConcurrentQueue opTimerPool;
@@ -84,15 +83,17 @@ struct btcOp {
 
 static uint32_t calculateCheckSum(void *data, size_t size)
 {
-  unsigned char hash[SHA256_DIGEST_LENGTH];
-  unsigned char hash2[SHA256_DIGEST_LENGTH];
-  SHA256_CTX sha256;
-  SHA256_Init(&sha256);
-  SHA256_Update(&sha256, data, size);
-  SHA256_Final(hash, &sha256);
-  SHA256_Init(&sha256);
-  SHA256_Update(&sha256, hash, SHA256_DIGEST_LENGTH);
-  SHA256_Final(hash2, &sha256);
+  unsigned char hash[32];
+  unsigned char hash2[32];
+
+  EVP_MD_CTX *ctx = EVP_MD_CTX_create();
+  EVP_DigestInit(ctx, EVP_sha256());
+  EVP_DigestUpdate(ctx, data, size);
+  EVP_DigestFinal(ctx, hash, 0);
+  EVP_DigestInit(ctx, EVP_sha256());
+  EVP_DigestUpdate(ctx, hash, 32);
+  EVP_DigestFinal(ctx, hash2, 0);
+  EVP_MD_CTX_destroy(ctx);
   return *reinterpret_cast<uint32_t*>(hash2);
 }
 

@@ -3,6 +3,8 @@
   https://github.com/hnes/libaco
 */
 
+.section .note.GNU-stack,"",@progbits
+
 .text
 .globl switchContext
 .globl _switchContext
