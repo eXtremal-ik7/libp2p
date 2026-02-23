@@ -103,6 +103,7 @@ struct aioUserEvent {
   asyncBase *base;
   int counter;
   int isSemaphore;
+  int pendingActivations;
   userEventDestructorCb *destructorCb;
   void *destructorCbArg;
 };

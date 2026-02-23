@@ -74,6 +74,8 @@ static void eventFinish(asyncOpRoot *root)
 {
   if (root->callback)
     ((aioEventCb*)root->callback)((aioUserEvent*)root, root->arg);
+  else
+    ((aioUserEvent*)root)->pendingActivations++;
 }
 
 static void releaseOp(asyncOpRoot *opptr)
@@ -230,6 +232,7 @@ aioUserEvent *newUserEvent(asyncBase *base, int isSemaphore, aioEventCb callback
   event->isSemaphore = isSemaphore;
   event->counter = 0;
   event->tag = 1;
+  event->pendingActivations = 0;
   event->destructorCb = 0;
   event->destructorCbArg = 0;
   return event;
@@ -666,16 +669,26 @@ ssize_t ioWriteMsg(aioObject *object, const HostAddress *address, const void *bu
 
 void ioSleep(aioUserEvent *event, uint64_t usTimeout)
 {
+  if (event->pendingActivations > 0) {
+    event->pendingActivations--;
+    return;
+  }
   event->root.callback = (void*)coroutineEventCb;
   event->root.arg = coroutineCurrent();
   event->root.timeout = usTimeout;
   event->counter = 1;
   event->base->methodImpl.startTimer(&event->root);
   coroutineYield();
+  event->root.callback = 0;
+  event->root.arg = 0;
 }
 
 void ioWaitUserEvent(aioUserEvent *event)
 {
+  if (event->pendingActivations > 0) {
+    event->pendingActivations--;
+    return;
+  }
   event->root.callback = (void*)coroutineEventCb;
   event->root.arg = coroutineCurrent();
   coroutineYield();
