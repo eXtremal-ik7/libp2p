@@ -1,5 +1,4 @@
 #include <assert.h>
-#include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include "asyncio/coroutine.h"
@@ -142,12 +141,6 @@ int coroutineFinished(coroutineTy *coroutine)
 /// coroutineNew - create coroutine
 coroutineTy *coroutineNew(coroutineProcTy entry, void *arg, unsigned stackSize)
 {
-  sigset_t old;
-  sigset_t all;
-  sigfillset(&all);
-  sigprocmask(SIG_SETMASK, &all, &old);
-  coroutineTy *result = 0;
-
   // Create main fiber if it not exists
   if (currentCoroutine == 0)
     mainCoroutine = currentCoroutine = (coroutineTy*)calloc(sizeof(coroutineTy), 1);
@@ -162,15 +155,13 @@ coroutineTy *coroutineNew(coroutineProcTy entry, void *arg, unsigned stackSize)
       coroutine->counter = 0;
       coroutine->finishCb = 0;
       coroutine->finishArg = 0;
-      sigprocmask(SIG_SETMASK, &old, 0);
       return coroutine;
     }
   } else {
     return 0;
   }
 
-  sigprocmask(SIG_SETMASK, &old, 0);
-  return result;
+  return 0;
 }
 
 coroutineTy *coroutineNewWithCb(coroutineProcTy entry, void *arg, unsigned stackSize, coroutineCbTy finishCb, void *finishArg)
