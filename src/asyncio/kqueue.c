@@ -108,7 +108,7 @@ asyncBase *kqueueNewAsyncBase()
     }
 
     base->timerIdCounter = 1;
-    kqueueControl(base->kqueueFd, EV_ADD | EV_ONESHOT, EVFILT_USER, 1, 0);
+    kqueueControl(base->kqueueFd, EV_ADD | EV_CLEAR, EVFILT_USER, 1, 0);
   }
 
   return (asyncBase *)base;
@@ -117,8 +117,10 @@ asyncBase *kqueueNewAsyncBase()
 void kqueueEnqueue(asyncBase *base, asyncOpRoot *op)
 {
   kqueueBase *localBase = (kqueueBase*)base;
+  struct kevent ev;
   concurrentQueuePush(&base->globalQueue, op);
-  kqueueControl(localBase->kqueueFd, EV_ENABLE, EVFILT_USER, 1, 0);
+  EV_SET(&ev, 1, EVFILT_USER, 0, NOTE_TRIGGER, 0, 0);
+  kevent(localBase->kqueueFd, &ev, 1, 0, 0, 0);
 }
 
 void kqueuePostEmptyOperation(asyncBase *base)
@@ -208,7 +210,7 @@ void kqueueNextFinishedOperation(asyncBase *base)
       aioObjectRoot *object;
       __tagged_pointer_decode(events[n].udata, (void**)&object, &timerId);
       if (object == 0) {
-        kqueueControl(localBase->kqueueFd, EV_ADD | EV_ONESHOT, EVFILT_USER, 1, 0);
+        // EVFILT_USER with EV_CLEAR stays registered, no re-add needed
       } else if (object->type == ioObjectTimer) {
         aioTimer *timer = (aioTimer*)object;
         asyncOpRoot *op = timer->op;
