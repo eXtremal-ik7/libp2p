@@ -237,6 +237,7 @@ static void smtpParse(AsyncOpStatus status, SMTPClient *client, size_t bytesRead
     }
 
     *out = 0;
+    client->ptr = (char*)p;
     client->Response = client->buffer;
     resumeParent(&op->Root, (client->ResultCode >= 200 && client->ResultCode <= 399) ? aosSuccess : (AsyncOpStatus)smtpError);
   } else {
@@ -270,17 +271,18 @@ static void smtpSslReadCb(AsyncOpStatus status, SSLSocket *object, size_t bytesR
 
 static void smtpRead(SMTPClient *client, SMTPOp *op)
 {
-  size_t offset = client->end - client->end;
-  if (offset) {
-    memmove(client->buffer, client->ptr, client->end - client->ptr);
-    client->ptr = client->buffer + offset;
+  size_t remaining = client->end - client->ptr;
+  if (remaining) {
+    memmove(client->buffer, client->ptr, remaining);
   }
+  client->ptr = client->buffer;
+  client->end = client->buffer + remaining;
 
   client->Response = 0;
   if (client->TlsSocket)
-    aioSslRead(client->TlsSocket, client->buffer + offset, sizeof(client->buffer) - offset, afNone, 0, smtpSslReadCb, op);
+    aioSslRead(client->TlsSocket, client->end, sizeof(client->buffer) - remaining, afNone, 0, smtpSslReadCb, op);
   else
-    aioRead(client->PlainSocket, client->buffer + offset, sizeof(client->buffer) - offset, afNone, 0, smtpReadCb, op);
+    aioRead(client->PlainSocket, client->end, sizeof(client->buffer) - remaining, afNone, 0, smtpReadCb, op);
 }
 
 static void smtpWrite(SMTPClient *client, const void *data, size_t size)

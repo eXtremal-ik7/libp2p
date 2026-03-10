@@ -294,6 +294,7 @@ SSLSocket *sslSocketNew(asyncBase *base, aioObject *existingSocket)
 #else
   S->sslContext = SSL_CTX_new (TLS_method());
 #endif
+  SSL_CTX_set_verify(S->sslContext, SSL_VERIFY_NONE, NULL);
   S->ssl = SSL_new(S->sslContext);
   S->bioIn = BIO_new(BIO_s_mem());
   S->bioOut = BIO_new(BIO_s_mem());
@@ -397,7 +398,7 @@ static void makeResult(void *contextPtr)
 static void initOp(asyncOpRoot *op, void *contextPtr)
 {
   struct Context *context = (struct Context*)contextPtr;
-  ((asyncOp*)op)->bytesTransferred = context->BytesTransferred;
+  ((SSLOp*)op)->bytesTransferred = context->BytesTransferred;
 }
 
 ssize_t aioSslRead(SSLSocket *socket,
