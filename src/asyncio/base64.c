@@ -137,7 +137,11 @@ size_t base64Encode(char *out, const uint8_t *in, size_t size)
 {
   size_t i;
   char *p = out;
-  for (i = 0; i < size - 2; i += 3) {
+  if (size == 0) {
+    *out = '\0';
+    return 0;
+  }
+  for (i = 0; i + 2 < size; i += 3) {
     *p++ = base64EncodeTable[(in[i] >> 2) & 0x3F];
     *p++ = base64EncodeTable[((in[i] & 0x3) << 4) | (int)((in[i + 1] & 0xF0) >> 4)];
     *p++ = base64EncodeTable[((in[i + 1] & 0xF) << 2) | (int)((in[i + 2] & 0xC0) >> 6)];
