@@ -36,14 +36,16 @@ static void requestFinish(asyncOpRoot *opptr)
 static void httpResumeProc(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 {
   __UNUSED(object);
-  __UNUSED(transferred);
+  HTTPClient *client = (HTTPClient*)((HTTPOp*)arg)->root.object;
+  client->requestBytesSent += transferred;
   resumeParent((asyncOpRoot*)arg, status);
 }
 
 static void httpsResumeProc(AsyncOpStatus status, SSLSocket *object, size_t transferred, void *arg)
 {
   __UNUSED(object);
-  __UNUSED(transferred);
+  HTTPClient *client = (HTTPClient*)((HTTPOp*)arg)->root.object;
+  client->requestBytesSent += transferred;
   resumeParent((asyncOpRoot*)arg, status);
 }
 
@@ -100,6 +102,7 @@ static AsyncOpStatus httpParseStart(asyncOpRoot *opptr)
   HTTPClient *client = (HTTPClient*)op->root.object;
 
   if (op->state == 0) {
+    client->requestBytesSent = 0;
     httpInit(&client->state);
 
     HttpComponent component;
@@ -115,6 +118,8 @@ static AsyncOpStatus httpParseStart(asyncOpRoot *opptr)
       combinerPushOperation(childOp, aaStart);
       return aosPending;
     }
+    // sync completion — callback not invoked, all bytes sent (afWaitAll)
+    client->requestBytesSent = op->dataSize;
   }
 
   for (;;) {
@@ -287,6 +292,7 @@ HTTPClient *httpClientNew(asyncBase *base, aioObject *socket)
   initObjectRoot(&client->root, base, ioObjectUserDefined, httpClientDestructor);
   client->isHttps = 0;
   client->inBufferOffset = 0;
+  client->requestBytesSent = 0;
   httpSetBuffer(&client->state, client->inBuffer, 0);
   client->plainSocket = socket;
   return client;
@@ -304,6 +310,7 @@ HTTPClient *httpsClientNew(asyncBase *base, SSLSocket *socket)
   initObjectRoot(&client->root, base, ioObjectUserDefined, httpClientDestructor);
   client->isHttps = 1;
   client->inBufferOffset = 0;
+  client->requestBytesSent = 0;
   httpSetBuffer(&client->state, client->inBuffer, 0);
   client->sslSocket = socket;
   return client;

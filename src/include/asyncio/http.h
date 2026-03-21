@@ -31,6 +31,7 @@ typedef struct HTTPClient {
   uint8_t *inBuffer;
   size_t inBufferSize;
   size_t inBufferOffset;
+  size_t requestBytesSent;
   HttpParserState state;
 } HTTPClient;
 

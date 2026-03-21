@@ -418,8 +418,10 @@ ssize_t aioSslRead(SSLSocket *socket,
 void sslWriteWriteCb(AsyncOpStatus status, aioObject *object, size_t transferred, void *arg)
 {
   __UNUSED(object);
-  __UNUSED(transferred);
-  resumeParent((asyncOpRoot*)arg, status);
+  SSLOp *op = (SSLOp*)arg;
+  if (transferred > 0)
+    op->bytesTransferred = op->transactionSize;
+  resumeParent(&op->root, status);
 }
 
 static AsyncOpStatus writeProc(asyncOpRoot *opptr)
@@ -433,10 +435,14 @@ static AsyncOpStatus writeProc(asyncOpRoot *opptr)
     SSL_write(socket->ssl, op->buffer, (int)op->transactionSize);
     size_t writeSize = copyFromOut(socket);
     asyncOpRoot *writeOp = implWrite(socket->object, socket->sslWriteBuffer, writeSize, afWaitAll, 0, sslWriteWriteCb, op, &bytes);
-    if (writeOp)
+    if (writeOp) {
       combinerPushOperation(writeOp, aaStart);
-    return writeOp ? aosPending : aosSuccess;
+      return aosPending;
+    }
+    op->bytesTransferred = op->transactionSize;
+    return aosSuccess;
   } else {
+    op->bytesTransferred = op->transactionSize;
     return aosSuccess;
   }
 }
