@@ -12,7 +12,7 @@ static ConcurrentQueue objectPool;
 typedef struct iocpOp iocpOp;
 
 typedef struct recvFromData {
-  struct sockaddr_in addr;
+  struct sockaddr_storage addr;
   INT size;
 } recvFromData;
 
@@ -270,21 +270,20 @@ void iocpNextFinishedOperation(asyncBase *base)
           else
             object->buffer.dataSize = entry->dwNumberOfBytesTransferred;
           if (op->info.root.opCode == actAccept) {
-            struct sockaddr_in *localAddr = 0;
-            struct sockaddr_in *remoteAddr = 0;
+            const size_t addrSize = sizeof(struct sockaddr_storage) + 16;
+            struct sockaddr *localAddr = 0;
+            struct sockaddr *remoteAddr = 0;
             INT localAddrLength;
             INT remoteAddrLength;
             GetAcceptExSockaddrs(op->info.internalBuffer,
               entry->dwNumberOfBytesTransferred,
-              sizeof(struct sockaddr_in) + 16,
-              sizeof(struct sockaddr_in) + 16,
-              (struct sockaddr**)&localAddr, &localAddrLength,
-              (struct sockaddr**)&remoteAddr, &remoteAddrLength);
+              addrSize,
+              addrSize,
+              &localAddr, &localAddrLength,
+              &remoteAddr, &remoteAddrLength);
             if (localAddr && remoteAddr) {
-              op->info.host.family = remoteAddr->sin_family;
-              op->info.host.ipv4 = remoteAddr->sin_addr.s_addr;
-              op->info.host.port = remoteAddr->sin_port;
-            } else { 
+              sockaddrToHostAddress((struct sockaddr_storage*)remoteAddr, &op->info.host);
+            } else {
               result = aosUnknownError;
             }
           } else if (op->info.root.opCode == actRead || op->info.root.opCode == actWrite) {
@@ -294,9 +293,7 @@ void iocpNextFinishedOperation(asyncBase *base)
             }
           } else if (op->info.root.opCode == actReadMsg) {
             struct recvFromData *rf = op->info.internalBuffer;
-            op->info.host.family = rf->addr.sin_family;
-            op->info.host.ipv4 = rf->addr.sin_addr.s_addr;
-            op->info.host.port = rf->addr.sin_port;
+            sockaddrToHostAddress(&rf->addr, &op->info.host);
           }
         }
 
@@ -446,12 +443,10 @@ AsyncOpStatus iocpAsyncConnect(asyncOpRoot *opptr)
   aioObject *object = getObject(op);
   iocpBase *localBase = (iocpBase*)object->root.base;
 
-  struct sockaddr_in localAddress;
-  localAddress.sin_family = op->info.host.family;
-  localAddress.sin_addr.s_addr = op->info.host.ipv4;
-  localAddress.sin_port = op->info.host.port;
+  struct sockaddr_storage sa;
+  socklen_t saLen = hostAddressToSockaddr(&op->info.host, &sa);
   memset(&op->overlapped, 0, sizeof(op->overlapped));
-  int result = localBase->ConnectExPtr(object->hSocket, (const struct sockaddr*)&localAddress, sizeof(struct sockaddr_in), NULL, 0, NULL, &op->overlapped);
+  int result = localBase->ConnectExPtr(object->hSocket, (const struct sockaddr*)&sa, saLen, NULL, 0, NULL, &op->overlapped);
   return (result == 0 || WSAGetLastError() == WSA_IO_PENDING) ?
     aosPending :
     aosUnknownError;
@@ -463,7 +458,8 @@ AsyncOpStatus iocpAsyncAccept(asyncOpRoot *opptr)
   iocpOp *op = (iocpOp*)opptr;
   aioObject *object = getObject(op);
 
-  const size_t acceptResultSize = 2 * (sizeof(struct sockaddr_in) + 16);
+  const size_t addrSize = sizeof(struct sockaddr_storage) + 16;
+  const size_t acceptResultSize = 2 * addrSize;
   if (op->info.internalBuffer == 0) {
     op->info.internalBuffer = malloc(acceptResultSize);
     op->info.internalBufferSize = acceptResultSize;
@@ -472,8 +468,12 @@ AsyncOpStatus iocpAsyncAccept(asyncOpRoot *opptr)
     op->info.internalBufferSize = acceptResultSize;
   }
 
+  struct sockaddr_storage listenAddr;
+  int listenAddrLen = sizeof(listenAddr);
+  getsockname(object->hSocket, (struct sockaddr*)&listenAddr, &listenAddrLen);
+
   u_long arg = 1;
-  op->info.acceptSocket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+  op->info.acceptSocket = WSASocket(listenAddr.ss_family, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
   ioctlsocket(op->info.acceptSocket, FIONBIO, &arg);
 
   memset(&op->overlapped, 0, sizeof(op->overlapped));
@@ -481,8 +481,8 @@ AsyncOpStatus iocpAsyncAccept(asyncOpRoot *opptr)
                         op->info.acceptSocket,
                         op->info.internalBuffer,
                         0,
-                        sizeof(struct sockaddr_in) + 16,
-                        sizeof(struct sockaddr_in) + 16,
+                        addrSize,
+                        addrSize,
                         NULL,
                         &op->overlapped);
 
@@ -609,17 +609,15 @@ AsyncOpStatus iocpAsyncWriteMsg(asyncOpRoot *opptr)
 {
   WSABUF wsabuf;
   iocpOp *op = (iocpOp*)opptr;
-  struct sockaddr_in remoteAddress;
   aioObject *object = getObject(op);
 
+  struct sockaddr_storage remoteAddress;
+  socklen_t addrLen = hostAddressToSockaddr(&op->info.host, &remoteAddress);
   // TODO: correct processing >4Gb data blocks
   wsabuf.buf = op->info.buffer;
   wsabuf.len = (ULONG)op->info.transactionSize;
-  remoteAddress.sin_family = op->info.host.family;
-  remoteAddress.sin_addr.s_addr = op->info.host.ipv4;
-  remoteAddress.sin_port = op->info.host.port;
   memset(&op->overlapped, 0, sizeof(op->overlapped));
-  int result = WSASendTo(object->hSocket, &wsabuf, 1, NULL, 0, (struct sockaddr*)&remoteAddress, sizeof(remoteAddress), &op->overlapped, NULL);
+  int result = WSASendTo(object->hSocket, &wsabuf, 1, NULL, 0, (struct sockaddr*)&remoteAddress, addrLen, &op->overlapped, NULL);
   if (result == 0 || WSAGetLastError() == WSA_IO_PENDING) {
     return aosPending;
   } else {

@@ -400,11 +400,9 @@ AsyncOpStatus epollAsyncConnect(asyncOpRoot *opptr)
   int fd = getFd((EPollObject*)op->root.object);
   if (op->state == 0) {
     op->state = 1;
-    struct sockaddr_in localAddress;
-    localAddress.sin_family = op->host.family;
-    localAddress.sin_addr.s_addr = op->host.ipv4;
-    localAddress.sin_port = op->host.port;
-    int result = connect(fd, (struct sockaddr *)&localAddress, sizeof(localAddress));
+    struct sockaddr_storage sa;
+    socklen_t saLen = hostAddressToSockaddr(&op->host, &sa);
+    int result = connect(fd, (struct sockaddr *)&sa, saLen);
     if (result == -1 && errno != EINPROGRESS)
       return aosUnknownError;
     else
@@ -420,7 +418,7 @@ AsyncOpStatus epollAsyncConnect(asyncOpRoot *opptr)
 
 AsyncOpStatus epollAsyncAccept(asyncOpRoot *opptr)
 {
-  struct sockaddr_in clientAddr;
+  struct sockaddr_storage clientAddr;
   asyncOp *op = (asyncOp*)opptr;
   int fd = getFd((EPollObject*)op->root.object);
   socklen_t clientAddrSize = sizeof(clientAddr);
@@ -430,9 +428,7 @@ AsyncOpStatus epollAsyncAccept(asyncOpRoot *opptr)
   if (op->acceptSocket != -1) {
     int current = fcntl(op->acceptSocket, F_GETFL);
     fcntl(op->acceptSocket, F_SETFL, O_NONBLOCK | current);
-    op->host.family = clientAddr.sin_family;
-    op->host.ipv4 = clientAddr.sin_addr.s_addr;
-    op->host.port = clientAddr.sin_port;
+    sockaddrToHostAddress(&clientAddr, &op->host);
     return aosSuccess;
   } else {
     return aosUnknownError;
@@ -512,13 +508,11 @@ AsyncOpStatus epollAsyncReadMsg(asyncOpRoot *opptr)
   asyncOp *op = (asyncOp*)opptr;
   int fd = getFd((EPollObject*)op->root.object);
 
-  struct sockaddr_in source;
+  struct sockaddr_storage source;
   socklen_t addrlen = sizeof(source);
   ssize_t result = recvfrom(fd, op->buffer, op->transactionSize, 0, (struct sockaddr*)&source, &addrlen);
   if (result != -1) {
-    op->host.family = 0;
-    op->host.ipv4 = source.sin_addr.s_addr;
-    op->host.port = source.sin_port;
+    sockaddrToHostAddress(&source, &op->host);
     op->bytesTransferred = (size_t)result;
     return aosSuccess;
   } else {
@@ -537,11 +531,9 @@ AsyncOpStatus epollAsyncWriteMsg(asyncOpRoot *opptr)
   asyncOp *op = (asyncOp*)opptr;
   int fd = getFd((EPollObject*)op->root.object);
 
-  struct sockaddr_in remoteAddress;
-  remoteAddress.sin_family = op->host.family;
-  remoteAddress.sin_addr.s_addr = op->host.ipv4;
-  remoteAddress.sin_port = op->host.port;
-  ssize_t result = sendto(fd, op->buffer, op->transactionSize, 0, (struct sockaddr *)&remoteAddress, sizeof(remoteAddress));
+  struct sockaddr_storage remoteAddress;
+  socklen_t addrLen = hostAddressToSockaddr(&op->host, &remoteAddress);
+  ssize_t result = sendto(fd, op->buffer, op->transactionSize, 0, (struct sockaddr *)&remoteAddress, addrLen);
   if (result != -1) {
     return aosSuccess;
   }

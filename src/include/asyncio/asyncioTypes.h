@@ -3,6 +3,7 @@
 
 #include "libp2pconfig.h"
 #include <stdint.h>
+#include <string.h>
 
 #if defined(OS_WINDOWS)
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
@@ -42,5 +43,39 @@ typedef struct HostAddress {
   uint16_t port;
   uint16_t family;
 } HostAddress;
+
+/* Convert HostAddress to sockaddr. Returns the sockaddr size. */
+static inline socklen_t hostAddressToSockaddr(const HostAddress *host, struct sockaddr_storage *sa)
+{
+  memset(sa, 0, sizeof(*sa));
+  if (host->family == AF_INET) {
+    struct sockaddr_in *sin = (struct sockaddr_in*)sa;
+    sin->sin_family = AF_INET;
+    sin->sin_addr.s_addr = host->ipv4;
+    sin->sin_port = host->port;
+    return sizeof(struct sockaddr_in);
+  } else {
+    struct sockaddr_in6 *sin6 = (struct sockaddr_in6*)sa;
+    sin6->sin6_family = AF_INET6;
+    memcpy(&sin6->sin6_addr, host->ipv6, sizeof(sin6->sin6_addr));
+    sin6->sin6_port = host->port;
+    return sizeof(struct sockaddr_in6);
+  }
+}
+
+/* Extract HostAddress from sockaddr. */
+static inline void sockaddrToHostAddress(const struct sockaddr_storage *sa, HostAddress *host)
+{
+  host->family = sa->ss_family;
+  if (sa->ss_family == AF_INET) {
+    const struct sockaddr_in *sin = (const struct sockaddr_in*)sa;
+    host->ipv4 = sin->sin_addr.s_addr;
+    host->port = sin->sin_port;
+  } else {
+    const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6*)sa;
+    memcpy(host->ipv6, &sin6->sin6_addr, sizeof(host->ipv6));
+    host->port = sin6->sin6_port;
+  }
+}
 
 #endif //__ASYNCTYPES_H_
