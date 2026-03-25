@@ -219,8 +219,8 @@ void httpParseDefault(HttpComponent *component, void *arg)
   HTTPParseDefaultContext *context = (HTTPParseDefaultContext*)arg;
   switch (component->type) {
     case httpDtInitialize : {
+      context->contentTypeOffset = 0;
       context->bodyOffset = 0;
-      context->bodySize = 0;
       context->contentType.data = 0;
       context->contentType.size = 0;
       context->body.data = 0;
@@ -238,11 +238,10 @@ void httpParseDefault(HttpComponent *component, void *arg)
     case httpDtHeaderEntry : {
       switch (component->header.entryType) {
         case hhContentType : {
+          context->contentTypeOffset = context->buffer.offset;
           char *out = (char*)dynamicBufferAlloc(&context->buffer, component->header.stringValue.size+1);
           memcpy(out, component->header.stringValue.data, component->header.stringValue.size);
           out[component->header.stringValue.size] = 0;
-
-          context->contentType.data = out;
           context->contentType.size = component->header.stringValue.size;
           break;
         }
@@ -263,6 +262,8 @@ void httpParseDefault(HttpComponent *component, void *arg)
 
     case httpDtFinalize : {
       *(char*)dynamicBufferAlloc(&context->buffer, 1) = 0;
+      if (context->contentTypeOffset)
+        context->contentType.data = (char*)context->buffer.data + context->contentTypeOffset;
       context->body.data = (char*)context->buffer.data + context->bodyOffset;
       context->body.size = context->buffer.size - context->bodyOffset - 1;
       break;

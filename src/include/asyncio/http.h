@@ -52,8 +52,8 @@ typedef struct HTTPParseDefaultContext {
   Raw contentType;
   Raw body;
   dynamicBuffer buffer;
+  size_t contentTypeOffset;
   size_t bodyOffset;
-  size_t bodySize;
 } HTTPParseDefaultContext;
 
 
