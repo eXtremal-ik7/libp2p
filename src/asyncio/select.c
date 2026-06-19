@@ -161,7 +161,13 @@ __NO_EXPAND_RECURSIVE_MACRO_BEGIN
       return 0;
     }
 
+    // bionic (Android) has no getdtablesize(); sysconf(_SC_OPEN_MAX) is the
+    // portable equivalent (same value: the fd table size).
+#if defined(__ANDROID__)
+    base->fdMap = (fdStruct*)calloc((size_t)sysconf(_SC_OPEN_MAX), sizeof(fdStruct));
+#else
     base->fdMap = (fdStruct*)calloc((size_t)getdtablesize(), sizeof(fdStruct));
+#endif
     base->B.methodImpl = selectImpl;
 
 #ifdef OS_QNX    
