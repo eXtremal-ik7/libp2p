@@ -44,7 +44,9 @@ switchContext:
 _switchContext:
   // Save source context to memory
   // general purpose registers
-  STR       X18, [X0, #0]
+  // X18 (offset 0) is the platform register: reserved on Apple ARM64 and the
+  // shadow-call-stack pointer on Android. It is thread-owned, so it must pass
+  // through the context switch untouched rather than be saved/restored here.
   STR       X19, [X0, #8]
   STR       X20, [X0, #16]
   STR       X21, [X0, #24]
@@ -76,7 +78,7 @@ _switchContext:
 
   // Load destination context
   // general purpose registers
-  LDR       X18, [X1, #0]
+  // X18 (offset 0) is intentionally not restored; see the note in the save block.
   LDR       X19, [X1, #8]
   LDR       X20, [X1, #16]
   LDR       X21, [X1, #24]

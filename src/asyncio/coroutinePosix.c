@@ -14,6 +14,15 @@ typedef struct contextTy {
 #define CTX_RSP_INDEX 5
   uint64_t registers[9];
 #elif defined(ARCH_AARCH64)
+// Stackful coroutines under Shadow Call Stack require a per-coroutine shadow
+// stack with X18 swapped on every context switch. switchContext leaves X18
+// untouched, which is correct for Apple ARM64 and non-SCS Android but unsafe
+// under SCS; refuse to build that configuration rather than crash silently.
+#if defined(__has_feature)
+#  if __has_feature(shadow_call_stack)
+#    error "Stackful coroutines are unsupported under -fsanitize=shadow-call-stack (need per-coroutine shadow stacks)"
+#  endif
+#endif
 #pragma pack(push, 1)
   uint64_t X18;         // 0
   uint64_t X19;         // 8
